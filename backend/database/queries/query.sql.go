@@ -7,6 +7,9 @@ package database
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 const checkIfFirstUser = `-- name: CheckIfFirstUser :one
@@ -20,6 +23,30 @@ func (q *Queries) CheckIfFirstUser(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const claimDocument = `-- name: ClaimDocument :one
+update documents
+set status = 'processing'
+where id = $1 and status = 'uploaded'
+returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved
+`
+
+func (q *Queries) ClaimDocument(ctx context.Context, id int64) (Document, error) {
+	row := q.db.QueryRow(ctx, claimDocument, id)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.FilePath,
+		&i.Status,
+		&i.UploadedBy,
+		&i.TotalChunks,
+		&i.ChunksDone,
+		&i.CreatedAt,
+		&i.Approved,
+	)
+	return i, err
+}
+
 const createSession = `-- name: CreateSession :one
 insert into sessions (user_id, token, expires_at)
 values ($1, $2, now() + interval '24 hours')
@@ -27,8 +54,8 @@ returning id, user_id, token, expires_at, created_at
 `
 
 type CreateSessionParams struct {
-	UserID int64
-	Token  string
+	UserID int64  `json:"user_id"`
+	Token  string `json:"token"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
@@ -51,10 +78,10 @@ returning id, email, password_hash, name, role, created_at, updated_at
 `
 
 type CreateUserParams struct {
-	Email        string
-	PasswordHash string
-	Name         string
-	Role         string
+	Email        string `json:"email"`
+	PasswordHash string `json:"password_hash"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -77,6 +104,15 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteDocument = `-- name: DeleteDocument :exec
+delete from documents where id = $1
+`
+
+func (q *Queries) DeleteDocument(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteDocument, id)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 delete from sessions where token = $1
 `
@@ -84,6 +120,95 @@ delete from sessions where token = $1
 func (q *Queries) DeleteSession(ctx context.Context, token string) error {
 	_, err := q.db.Exec(ctx, deleteSession, token)
 	return err
+}
+
+const getDocumentByID = `-- name: GetDocumentByID :one
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved from documents where id = $1
+`
+
+func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, error) {
+	row := q.db.QueryRow(ctx, getDocumentByID, id)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.FilePath,
+		&i.Status,
+		&i.UploadedBy,
+		&i.TotalChunks,
+		&i.ChunksDone,
+		&i.CreatedAt,
+		&i.Approved,
+	)
+	return i, err
+}
+
+const getDocuments = `-- name: GetDocuments :many
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved from documents order by created_at desc
+`
+
+func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
+	rows, err := q.db.Query(ctx, getDocuments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.FilePath,
+			&i.Status,
+			&i.UploadedBy,
+			&i.TotalChunks,
+			&i.ChunksDone,
+			&i.CreatedAt,
+			&i.Approved,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPendingDocuments = `-- name: GetPendingDocuments :many
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved from documents where status = 'uploaded' order by created_at asc
+`
+
+func (q *Queries) GetPendingDocuments(ctx context.Context) ([]Document, error) {
+	rows, err := q.db.Query(ctx, getPendingDocuments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.FilePath,
+			&i.Status,
+			&i.UploadedBy,
+			&i.TotalChunks,
+			&i.ChunksDone,
+			&i.CreatedAt,
+			&i.Approved,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getSessionByToken = `-- name: GetSessionByToken :one
@@ -137,6 +262,107 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.Role,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertDocument = `-- name: InsertDocument :one
+insert into documents (title, file_path, status, uploaded_by)
+values ($1, $2, 'uploaded', $3)
+returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved
+`
+
+type InsertDocumentParams struct {
+	Title      string      `json:"title"`
+	FilePath   string      `json:"file_path"`
+	UploadedBy pgtype.Int8 `json:"uploaded_by"`
+}
+
+func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) (Document, error) {
+	row := q.db.QueryRow(ctx, insertDocument, arg.Title, arg.FilePath, arg.UploadedBy)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.FilePath,
+		&i.Status,
+		&i.UploadedBy,
+		&i.TotalChunks,
+		&i.ChunksDone,
+		&i.CreatedAt,
+		&i.Approved,
+	)
+	return i, err
+}
+
+const insertDocumentChunk = `-- name: InsertDocumentChunk :one
+insert into document_chunks (document_id, chunk_index, content, embedding)
+values ($1, $2, $3, $4)
+returning id, document_id, chunk_index, content, page_number, source_label, embedding, created_at
+`
+
+type InsertDocumentChunkParams struct {
+	DocumentID int64           `json:"document_id"`
+	ChunkIndex int32           `json:"chunk_index"`
+	Content    string          `json:"content"`
+	Embedding  pgvector.Vector `json:"embedding"`
+}
+
+func (q *Queries) InsertDocumentChunk(ctx context.Context, arg InsertDocumentChunkParams) (DocumentChunk, error) {
+	row := q.db.QueryRow(ctx, insertDocumentChunk,
+		arg.DocumentID,
+		arg.ChunkIndex,
+		arg.Content,
+		arg.Embedding,
+	)
+	var i DocumentChunk
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.ChunkIndex,
+		&i.Content,
+		&i.PageNumber,
+		&i.SourceLabel,
+		&i.Embedding,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateDocumentStatus = `-- name: UpdateDocumentStatus :one
+update documents
+set status = $2,
+    total_chunks = coalesce($3, total_chunks),
+    chunks_done = coalesce($4, chunks_done)
+where id = $1
+returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved
+`
+
+type UpdateDocumentStatusParams struct {
+	ID          int64       `json:"id"`
+	Status      string      `json:"status"`
+	TotalChunks pgtype.Int4 `json:"total_chunks"`
+	ChunksDone  pgtype.Int4 `json:"chunks_done"`
+}
+
+func (q *Queries) UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) (Document, error) {
+	row := q.db.QueryRow(ctx, updateDocumentStatus,
+		arg.ID,
+		arg.Status,
+		arg.TotalChunks,
+		arg.ChunksDone,
+	)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.FilePath,
+		&i.Status,
+		&i.UploadedBy,
+		&i.TotalChunks,
+		&i.ChunksDone,
+		&i.CreatedAt,
+		&i.Approved,
 	)
 	return i, err
 }

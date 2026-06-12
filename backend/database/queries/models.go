@@ -10,93 +10,95 @@ import (
 )
 
 type Course struct {
-	ID           int64
-	Title        string
-	Description  string
-	CreatedBy    int64
-	SourceDocIds []int64
-	Status       string
-	Settings     []byte
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
-	Department   pgtype.Text
-	Approved     pgtype.Bool
+	ID           int64              `json:"id"`
+	Title        string             `json:"title"`
+	Description  string             `json:"description"`
+	CreatedBy    int64              `json:"created_by"`
+	SourceDocIds []int64            `json:"source_doc_ids"`
+	Status       string             `json:"status"`
+	Settings     []byte             `json:"settings"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Department   pgtype.Text        `json:"department"`
+	Approved     pgtype.Bool        `json:"approved"`
 }
 
 type CourseItem struct {
-	ID        int64
-	CourseID  int64
-	ItemType  string
-	SortOrder int32
-	Data      []byte
-	CreatedAt pgtype.Timestamptz
+	ID        int64              `json:"id"`
+	CourseID  int64              `json:"course_id"`
+	ItemType  string             `json:"item_type"`
+	SortOrder int32              `json:"sort_order"`
+	Data      []byte             `json:"data"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Document struct {
-	ID         int64
-	Title      string
-	FilePath   string
-	Status     string
-	UploadedBy pgtype.Int8
-	CreatedAt  pgtype.Timestamptz
-	Approved   pgtype.Bool
+	ID          int64              `json:"id"`
+	Title       string             `json:"title"`
+	FilePath    string             `json:"file_path"`
+	Status      string             `json:"status"`
+	UploadedBy  pgtype.Int8        `json:"uploaded_by"`
+	TotalChunks int32              `json:"total_chunks"`
+	ChunksDone  int32              `json:"chunks_done"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	Approved    pgtype.Bool        `json:"approved"`
 }
 
 type DocumentChunk struct {
-	ID          int64
-	DocumentID  int64
-	ChunkIndex  int32
-	Content     string
-	PageNumber  pgtype.Int4
-	SourceLabel pgtype.Text
-	Embedding   pgvector.Vector
-	CreatedAt   pgtype.Timestamptz
+	ID          int64              `json:"id"`
+	DocumentID  int64              `json:"document_id"`
+	ChunkIndex  int32              `json:"chunk_index"`
+	Content     string             `json:"content"`
+	PageNumber  pgtype.Int4        `json:"page_number"`
+	SourceLabel pgtype.Text        `json:"source_label"`
+	Embedding   pgvector.Vector    `json:"embedding"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type LearningPreference struct {
-	UserID          int64
-	LearningStyle   string
-	DifficultyLevel string
-	PreferredTopics []string
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
+	UserID          int64              `json:"user_id"`
+	LearningStyle   string             `json:"learning_style"`
+	DifficultyLevel string             `json:"difficulty_level"`
+	PreferredTopics []string           `json:"preferred_topics"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Permission struct {
-	ID   int64
-	Name string
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 type PracticeSession struct {
-	ID            int64
-	UserID        int64
-	Topic         string
-	QuestionCount int32
-	CorrectCount  int32
-	ScorePct      pgtype.Numeric
-	StartedAt     pgtype.Timestamptz
-	CompletedAt   pgtype.Timestamptz
+	ID            int64              `json:"id"`
+	UserID        int64              `json:"user_id"`
+	Topic         string             `json:"topic"`
+	QuestionCount int32              `json:"question_count"`
+	CorrectCount  int32              `json:"correct_count"`
+	ScorePct      pgtype.Numeric     `json:"score_pct"`
+	StartedAt     pgtype.Timestamptz `json:"started_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
 }
 
 type RolePermission struct {
-	Role         string
-	PermissionID int64
+	Role         string `json:"role"`
+	PermissionID int64  `json:"permission_id"`
 }
 
 type Session struct {
-	ID        int64
-	UserID    int64
-	Token     string
-	ExpiresAt pgtype.Timestamptz
-	CreatedAt pgtype.Timestamptz
+	ID        int64              `json:"id"`
+	UserID    int64              `json:"user_id"`
+	Token     string             `json:"token"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type User struct {
-	ID           int64
-	Email        string
-	PasswordHash string
-	Name         string
-	Role         string
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID           int64              `json:"id"`
+	Email        string             `json:"email"`
+	PasswordHash string             `json:"password_hash"`
+	Name         string             `json:"name"`
+	Role         string             `json:"role"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }

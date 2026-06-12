@@ -61,6 +61,8 @@ create table documents (
   status text not null default 'uploaded'
     check (status in ('uploaded', 'processing', 'ready', 'failed')),
   uploaded_by bigint references users(id),
+  total_chunks int not null default 0,
+  chunks_done int not null default 0,
   created_at timestamptz not null default now()
 );
 
