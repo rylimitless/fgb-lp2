@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fgb-lp/adaptive"
 	"fgb-lp/ai"
 	"fgb-lp/app"
 	"fgb-lp/coach"
@@ -147,6 +148,9 @@ func main() {
 
 	coachHandler := coach.NewHandler(queries)
 	coachHandler.RegisterRoutes(protected)
+
+	adaptiveHandler := adaptive.NewHandler(queries)
+	adaptiveHandler.RegisterRoutes(protected)
 
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())

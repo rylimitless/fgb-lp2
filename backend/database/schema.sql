@@ -159,9 +159,13 @@ create table learning_preferences (
   difficulty_level text not null default 'intermediate'
     check (difficulty_level in ('beginner', 'intermediate', 'advanced', 'adaptive')),
   preferred_topics text[] default '{}',
+  theta double precision not null default 0.0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+ALTER TABLE learning_preferences ADD COLUMN IF NOT EXISTS theta double precision NOT NULL DEFAULT 0.0;
+
 
 -- Adaptive Practice Room: tracks practice sessions
 create table practice_sessions (

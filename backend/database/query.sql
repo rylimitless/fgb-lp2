@@ -133,6 +133,14 @@ select count(*) from courses where review_status = 'pending';
 -- name: GetPublishedCourses :many
 select * from courses where status = 'published' and approved = true order by updated_at desc;
 
+-- name: SearchPublishedCourses :many
+select *, ts_rank(to_tsvector('english', title || ' ' || description), plainto_tsquery('english', $1)) as rank
+from courses
+where status = 'published' and approved = true
+  and to_tsvector('english', title || ' ' || description) @@ plainto_tsquery('english', $1)
+order by rank desc
+limit $2;
+
 -- name: GetAllLessonProgress :many
 select * from lesson_progress where user_id = $1;
 
@@ -145,6 +153,16 @@ returning *;
 
 -- name: GetLessonProgress :one
 select * from lesson_progress where user_id = $1 and course_id = $2;
+
+-- name: GetLearningPreference :one
+select * from learning_preferences where user_id = $1;
+
+-- name: UpsertLearningPreference :one
+insert into learning_preferences (user_id, learning_style, difficulty_level, theta)
+values ($1, 'mixed', 'adaptive', $2)
+on conflict (user_id)
+do update set theta = $2, difficulty_level = 'adaptive', updated_at = now()
+returning *;
 
 -- name: UpdateDocumentReview :one
 update documents

@@ -66,6 +66,7 @@ type LearningPreference struct {
 	LearningStyle   string             `json:"learning_style"`
 	DifficultyLevel string             `json:"difficulty_level"`
 	PreferredTopics []string           `json:"preferred_topics"`
+	Theta           float64            `json:"theta"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }

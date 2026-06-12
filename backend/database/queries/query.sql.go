@@ -540,6 +540,25 @@ func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
 	return items, nil
 }
 
+const getLearningPreference = `-- name: GetLearningPreference :one
+select user_id, learning_style, difficulty_level, preferred_topics, theta, created_at, updated_at from learning_preferences where user_id = $1
+`
+
+func (q *Queries) GetLearningPreference(ctx context.Context, userID int64) (LearningPreference, error) {
+	row := q.db.QueryRow(ctx, getLearningPreference, userID)
+	var i LearningPreference
+	err := row.Scan(
+		&i.UserID,
+		&i.LearningStyle,
+		&i.DifficultyLevel,
+		&i.PreferredTopics,
+		&i.Theta,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getLessonProgress = `-- name: GetLessonProgress :one
 select id, user_id, course_id, current_module, completed, score_pct, started_at, completed_at from lesson_progress where user_id = $1 and course_id = $2
 `
@@ -1191,6 +1210,34 @@ func (q *Queries) UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentSt
 		&i.ErrorMessage,
 		&i.ReviewStatus,
 		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const upsertLearningPreference = `-- name: UpsertLearningPreference :one
+insert into learning_preferences (user_id, learning_style, difficulty_level, theta)
+values ($1, 'mixed', 'adaptive', $2)
+on conflict (user_id)
+do update set theta = $2, difficulty_level = 'adaptive', updated_at = now()
+returning user_id, learning_style, difficulty_level, preferred_topics, theta, created_at, updated_at
+`
+
+type UpsertLearningPreferenceParams struct {
+	UserID int64   `json:"user_id"`
+	Theta  float64 `json:"theta"`
+}
+
+func (q *Queries) UpsertLearningPreference(ctx context.Context, arg UpsertLearningPreferenceParams) (LearningPreference, error) {
+	row := q.db.QueryRow(ctx, upsertLearningPreference, arg.UserID, arg.Theta)
+	var i LearningPreference
+	err := row.Scan(
+		&i.UserID,
+		&i.LearningStyle,
+		&i.DifficultyLevel,
+		&i.PreferredTopics,
+		&i.Theta,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

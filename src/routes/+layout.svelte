@@ -7,6 +7,7 @@
         LogOut,
         LayoutDashboard,
         Bot,
+        Brain,
         GraduationCap,
         PenTool,
         Sparkles,
@@ -28,9 +29,15 @@
         },
         {
             value: "gia-coach",
-            label: "Gia AI Coach",
+            label: "Gia Coach",
             icon: Bot,
             href: "/gia-coach",
+        },
+        {
+            value: "adaptive-room",
+            label: "Adaptive Room",
+            icon: Brain,
+            href: "/adaptive-room",
         },
         {
             value: "lesson-player",
@@ -69,7 +76,9 @@
                   ? "lesson-player"
                   : $page.url.pathname.startsWith("/gia-coach")
                     ? "gia-coach"
-                    : "dashboard",
+                    : $page.url.pathname.startsWith("/adaptive-room")
+                      ? "adaptive-room"
+                      : "dashboard",
     );
 
     async function handleLogout() {
