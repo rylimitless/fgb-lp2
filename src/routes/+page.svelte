@@ -30,14 +30,14 @@
     const features = [
         {
             icon: Bot,
-            label: "Gia Coach",
+            label: "Gia  AI Coach",
             desc: "Ask AI about your documents",
             href: "/gia-coach",
             color: "bg-emerald-500/10 text-emerald-500",
         },
         {
             icon: Brain,
-            label: "Adaptive Room",
+            label: "Adaptive Learning Room",
             desc: "Personalized practice sessions",
             href: "/adaptive-room",
             color: "bg-violet-500/10 text-violet-500",

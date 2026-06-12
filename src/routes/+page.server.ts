@@ -3,10 +3,10 @@ import type { PageServerLoad } from "./$types";
 export const load: PageServerLoad = async ({ fetch }) => {
   const [docsRes, coursesRes, reviewDocsRes, reviewCoursesRes] =
     await Promise.all([
-      fetch("http://localhost:5555/api/documents"),
-      fetch("http://localhost:5555/api/courses"),
-      fetch("http://localhost:5555/api/review/documents?limit=100"),
-      fetch("http://localhost:5555/api/review/courses?limit=100"),
+      fetch("/api/documents"),
+      fetch("/api/courses"),
+      fetch("/api/review/documents?limit=100"),
+      fetch("/api/review/courses?limit=100"),
     ]);
 
   const docs = docsRes.ok ? await docsRes.json() : [];
@@ -21,7 +21,7 @@ export const load: PageServerLoad = async ({ fetch }) => {
   let theta = 0;
   try {
     const pref = await fetch(
-      "http://localhost:5555/api/adaptive/start?course_id=1",
+      "/api/adaptive/start?course_id=1",
     );
     if (pref.ok) {
       const data = await pref.json();

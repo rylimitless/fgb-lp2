@@ -22,7 +22,7 @@
     async function loadCourses() {
         loadingCourses = true;
         try {
-            const res = await fetch("http://localhost:5555/api/courses", { credentials: "include" });
+            const res = await fetch("/api/courses", { credentials: "include" });
             if (res.ok) courses = (await res.json()).filter((c: any) => c.status === "published" && c.approved);
         } catch { /* ignore */ }
         loadingCourses = false;
@@ -36,7 +36,7 @@
         lastResult = null;
         answer = undefined;
         try {
-            const res = await fetch(`http://localhost:5555/api/adaptive/start?course_id=${courseId}`, { credentials: "include" });
+            const res = await fetch(`/api/adaptive/start?course_id=${courseId}`, { credentials: "include" });
             if (res.ok) {
                 const data = await res.json();
                 theta = data.theta;
@@ -72,7 +72,7 @@
         const correct = isAnswerCorrect(currentItem, answer);
 
         try {
-            const res = await fetch("http://localhost:5555/api/adaptive/submit", {
+            const res = await fetch("/api/adaptive/submit", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",

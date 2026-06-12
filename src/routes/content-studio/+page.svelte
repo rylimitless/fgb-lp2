@@ -43,7 +43,7 @@
     // ---- Data fetching (client-side polling only) ----
     async function refreshDocuments() {
         try {
-            const res = await fetch("http://localhost:5555/api/documents", {
+            const res = await fetch("/api/documents", {
                 credentials: "include",
             });
             if (res.ok) {
@@ -91,7 +91,7 @@
 
         try {
             const res = await fetch(
-                "http://localhost:5555/api/documents/upload",
+                "/api/documents/upload",
                 {
                     method: "POST",
                     credentials: "include",
@@ -128,7 +128,7 @@
     async function handleDelete(id: number) {
         try {
             const res = await fetch(
-                `http://localhost:5555/api/documents/${id}`,
+                `/api/documents/${id}`,
                 {
                     method: "DELETE",
                     credentials: "include",

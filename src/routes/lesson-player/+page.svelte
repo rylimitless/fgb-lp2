@@ -35,7 +35,7 @@
         loading = true;
         try {
             const res = await fetch(
-                "http://localhost:5555/api/courses/published",
+                "/api/courses/published",
                 { credentials: "include" },
             );
             if (res.ok) courses = await res.json();
@@ -53,7 +53,7 @@
         showResults = false;
         try {
             const res = await fetch(
-                `http://localhost:5555/api/courses/${courseId}/play`,
+                `/api/courses/${courseId}/play`,
                 { credentials: "include" },
             );
             if (res.ok) enrolledCourse = await res.json();

@@ -36,7 +36,7 @@
         docsPage = page;
         try {
             const res = await fetch(
-                `http://localhost:5555/api/review/documents?limit=${pageSize}&offset=${page * pageSize}`,
+                `/api/review/documents?limit=${pageSize}&offset=${page * pageSize}`,
                 { credentials: "include" },
             );
             if (res.ok) {
@@ -55,7 +55,7 @@
         coursesPage = page;
         try {
             const res = await fetch(
-                `http://localhost:5555/api/review/courses?limit=${pageSize}&offset=${page * pageSize}`,
+                `/api/review/courses?limit=${pageSize}&offset=${page * pageSize}`,
                 { credentials: "include" },
             );
             if (res.ok) {
@@ -86,8 +86,8 @@
     ) {
         const endpoint =
             type === "document"
-                ? `http://localhost:5555/api/review/documents/${id}`
-                : `http://localhost:5555/api/review/courses/${id}`;
+                ? `/api/review/documents/${id}`
+                : `/api/review/courses/${id}`;
         try {
             await fetch(endpoint, {
                 method: "PUT",
@@ -109,8 +109,8 @@
         if (!reviewItem) return;
         const endpoint =
             reviewType === "document"
-                ? `http://localhost:5555/api/review/documents/${reviewItem.id}`
-                : `http://localhost:5555/api/review/courses/${reviewItem.id}`;
+                ? `/api/review/documents/${reviewItem.id}`
+                : `/api/review/courses/${reviewItem.id}`;
 
         try {
             await fetch(endpoint, {

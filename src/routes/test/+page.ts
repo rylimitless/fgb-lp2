@@ -3,7 +3,7 @@ import { redirect } from "@sveltejs/kit";
 
 export const load = async ({ fetch, params }) => {
   
-  const res = await fetch("http://localhost:5555/check");
+  const res = await fetch("/api/check");
   
   if (res.status === 401) {
     throw redirect(307, "/login");

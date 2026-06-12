@@ -2,8 +2,8 @@ import type { PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async ({ fetch }) => {
     const [coursesRes, docsRes] = await Promise.all([
-        fetch("http://localhost:5555/api/courses"),
-        fetch("http://localhost:5555/api/documents"),
+        fetch("/api/courses"),
+        fetch("/api/documents"),
     ]);
 
     const courses = coursesRes.ok ? await coursesRes.json() : [];

@@ -73,7 +73,7 @@
 
         try {
             const res = await fetch(
-                "http://localhost:5555/api/courses/generate",
+                "/api/courses/generate",
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -142,7 +142,7 @@
         editing = true;
         try {
             const res = await fetch(
-                `http://localhost:5555/api/courses/${courseId}/edit`,
+                `/api/courses/${courseId}/edit`,
                 {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
@@ -174,7 +174,7 @@
 
         try {
             const res = await fetch(
-                `http://localhost:5555/api/courses/${course.id}`,
+                `/api/courses/${course.id}`,
                 { credentials: "include" },
             );
             if (res.ok) {

@@ -84,7 +84,7 @@
     async function handleLogout() {
         loggingOut = true;
         try {
-            await fetch("http://localhost:5555/api/logout", {
+            await fetch("/api/logout", {
                 method: "POST",
                 credentials: "include",
             });

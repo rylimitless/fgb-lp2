@@ -22,7 +22,7 @@
         }
 
         try {
-            const res = await fetch("http://localhost:5555/api/setup", {
+            const res = await fetch("/api/setup", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",

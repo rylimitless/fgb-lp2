@@ -29,7 +29,7 @@
 
     async function loadDocs() {
         try {
-            const res = await fetch("http://localhost:5555/api/documents", {
+            const res = await fetch("/api/documents", {
                 credentials: "include",
             });
             if (res.ok) {
@@ -62,7 +62,7 @@
         loading = true;
 
         try {
-            const res = await fetch("http://localhost:5555/api/coach/chat", {
+            const res = await fetch("/api/coach/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",

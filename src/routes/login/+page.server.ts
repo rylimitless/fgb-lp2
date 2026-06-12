@@ -3,7 +3,7 @@ import type { PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async ({ fetch }) => {
   try {
-    const res = await fetch("http://localhost:5555/api/check-first-user");
+    const res = await fetch("/api/check-first-user");
     if (!res.ok) return;
     const data = await res.json();
     if (data.first_user) {

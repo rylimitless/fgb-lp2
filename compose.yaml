@@ -1,7 +1,7 @@
 services:
   db:
     image: pgvector/pgvector:pg17
-    container_name: pgvectorv2-db
+    container_name: fgb-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -11,6 +11,42 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fgb-backend
+    environment:
+      DATABASE_URL: postgres://postgres:password@db:5432/example_db
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend:/app
+      - /app/tmp
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: fgb-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./src:/app/src
+      - ./static:/app/static
+      - ./vite.config.ts:/app/vite.config.ts
+      - /app/node_modules
+    depends_on:
+      - backend
 
 volumes:
   pgdata:
