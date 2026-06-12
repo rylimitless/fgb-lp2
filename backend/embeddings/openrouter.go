@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -30,8 +31,12 @@ type Client struct {
 }
 
 func NewClient() *Client {
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	if apiKey == "" {
+		log.Println("[embeddings] WARNING: OPENROUTER_API_KEY not set — embedding calls will fail")
+	}
 	return &Client{
-		apiKey: os.Getenv("OPENROUTER_API_KEY"),
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},

@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Handler struct {
@@ -18,7 +19,6 @@ type Handler struct {
 	UploadDir string
 }
 
-// NewHandler creates a documents handler.
 func NewHandler(queries *database.Queries, uploadDir string) *Handler {
 	return &Handler{
 		Queries:   queries,
@@ -26,7 +26,6 @@ func NewHandler(queries *database.Queries, uploadDir string) *Handler {
 	}
 }
 
-// ListDocuments returns all documents ordered by created_at desc.
 func (h *Handler) ListDocuments(c *gin.Context) {
 	docs, err := h.Queries.GetDocuments(c.Request.Context())
 	if err != nil {
@@ -39,7 +38,6 @@ func (h *Handler) ListDocuments(c *gin.Context) {
 	c.JSON(http.StatusOK, docs)
 }
 
-// UploadDocument accepts a multipart form with "file" (PDF) and optional "title".
 func (h *Handler) UploadDocument(c *gin.Context) {
 	title := c.PostForm("title")
 	if title == "" {
@@ -53,18 +51,15 @@ func (h *Handler) UploadDocument(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Validate extension
 	ext := filepath.Ext(header.Filename)
 	if ext != ".pdf" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Only PDF files are supported"})
 		return
 	}
 
-	// Generate unique filename
 	filename := worker.GenerateFilePath(header.Filename)
 	destPath := filepath.Join(h.UploadDir, filename)
 
-	// Save file to disk
 	out, err := os.Create(destPath)
 	if err != nil {
 		log.Printf("[documents] failed to create file %s: %v", destPath, err)
@@ -79,7 +74,6 @@ func (h *Handler) UploadDocument(c *gin.Context) {
 		return
 	}
 
-	// Insert into database
 	doc, err := h.Queries.InsertDocument(c.Request.Context(), database.InsertDocumentParams{
 		Title:    title,
 		FilePath: filename,
@@ -93,7 +87,6 @@ func (h *Handler) UploadDocument(c *gin.Context) {
 	c.JSON(http.StatusCreated, doc)
 }
 
-// DeleteDocument deletes a document, its chunks (cascaded), and the file on disk.
 func (h *Handler) DeleteDocument(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -102,20 +95,17 @@ func (h *Handler) DeleteDocument(c *gin.Context) {
 		return
 	}
 
-	// Look up the document to get the file path
 	doc, err := h.Queries.GetDocumentByID(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
 		return
 	}
 
-	// Delete file from disk (best-effort)
 	filePath := filepath.Join(h.UploadDir, doc.FilePath)
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		log.Printf("[documents] failed to remove file %s: %v", filePath, err)
 	}
 
-	// Delete from DB (cascades to document_chunks)
 	if err := h.Queries.DeleteDocument(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete document"})
 		return
@@ -124,9 +114,38 @@ func (h *Handler) DeleteDocument(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Document deleted"})
 }
 
-// RegisterRoutes adds document routes to a gin.RouterGroup.
+func (h *Handler) ApproveDocument(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+		return
+	}
+
+	var body struct {
+		Approved bool `json:"approved"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	doc, err := h.Queries.UpdateDocumentStatus(c.Request.Context(), database.UpdateDocumentStatusParams{
+		ID:       id,
+		Status:   "ready",
+		Approved: pgtype.Bool{Bool: body.Approved, Valid: true},
+	})
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, doc)
+}
+
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/documents", h.ListDocuments)
 	r.POST("/documents/upload", h.UploadDocument)
 	r.DELETE("/documents/:id", h.DeleteDocument)
+	r.PUT("/documents/:id/approve", h.ApproveDocument)
 }

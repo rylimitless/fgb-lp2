@@ -1,0 +1,455 @@
+<script lang="ts">
+    import {
+        ClipboardCheck,
+        FileText,
+        BookOpen,
+        CheckCircle,
+        XCircle,
+        RotateCcw,
+        ChevronLeft,
+        ChevronRight,
+        LoaderCircle,
+    } from "@lucide/svelte";
+    import * as Button from "$lib/components/ui/button";
+
+    type TabType = "documents" | "courses";
+
+    let activeTab = $state<TabType>("documents");
+
+    let docs = $state<any[]>([]);
+    let docsTotal = $state(0);
+    let docsPage = $state(0);
+    let docsLoading = $state(true);
+    const pageSize = 15;
+
+    let courses = $state<any[]>([]);
+    let coursesTotal = $state(0);
+    let coursesPage = $state(0);
+    let coursesLoading = $state(true);
+
+    let reviewItem = $state<any>(null);
+    let reviewType = $state<"document" | "course">("document");
+    let reviewNotes = $state("");
+
+    async function loadDocuments(page: number) {
+        docsLoading = true;
+        docsPage = page;
+        try {
+            const res = await fetch(
+                `http://localhost:5555/api/review/documents?limit=${pageSize}&offset=${page * pageSize}`,
+                { credentials: "include" },
+            );
+            if (res.ok) {
+                const data = await res.json();
+                docs = data.items ?? [];
+                docsTotal = data.total ?? 0;
+            }
+        } catch {
+            /* ignore */
+        }
+        docsLoading = false;
+    }
+
+    async function loadCourses(page: number) {
+        coursesLoading = true;
+        coursesPage = page;
+        try {
+            const res = await fetch(
+                `http://localhost:5555/api/review/courses?limit=${pageSize}&offset=${page * pageSize}`,
+                { credentials: "include" },
+            );
+            if (res.ok) {
+                const data = await res.json();
+                courses = data.items ?? [];
+                coursesTotal = data.total ?? 0;
+            }
+        } catch {
+            /* ignore */
+        }
+        coursesLoading = false;
+    }
+
+    function openReview(item: any, type: "document" | "course") {
+        reviewItem = item;
+        reviewType = type;
+        reviewNotes = "";
+    }
+
+    function closeReview() {
+        reviewItem = null;
+    }
+
+    async function submitReviewDirect(
+        id: number,
+        type: "document" | "course",
+        status: string,
+    ) {
+        const endpoint =
+            type === "document"
+                ? `http://localhost:5555/api/review/documents/${id}`
+                : `http://localhost:5555/api/review/courses/${id}`;
+        try {
+            await fetch(endpoint, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    review_status: status,
+                    review_notes: "",
+                }),
+            });
+            if (type === "document") loadDocuments(docsPage);
+            else loadCourses(coursesPage);
+        } catch {
+            /* ignore */
+        }
+    }
+
+    async function submitReview(status: string) {
+        if (!reviewItem) return;
+        const endpoint =
+            reviewType === "document"
+                ? `http://localhost:5555/api/review/documents/${reviewItem.id}`
+                : `http://localhost:5555/api/review/courses/${reviewItem.id}`;
+
+        try {
+            await fetch(endpoint, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    review_status: status,
+                    review_notes: reviewNotes,
+                }),
+            });
+            closeReview();
+            if (reviewType === "document") loadDocuments(docsPage);
+            else loadCourses(coursesPage);
+        } catch {
+            /* ignore */
+        }
+    }
+
+    function formatDate(d: string) {
+        if (!d) return "";
+        return new Date(d).toLocaleDateString("en-US", {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+        });
+    }
+
+    let totalPages = $derived(
+        activeTab === "documents"
+            ? Math.max(1, Math.ceil(docsTotal / pageSize))
+            : Math.max(1, Math.ceil(coursesTotal / pageSize)),
+    );
+    let currentPage = $derived(
+        activeTab === "documents" ? docsPage : coursesPage,
+    );
+
+    $effect(() => {
+        if (activeTab === "documents") loadDocuments(0);
+        else loadCourses(0);
+    });
+</script>
+
+<div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
+    <div class="flex items-center gap-3">
+        <ClipboardCheck class="size-6 text-primary" />
+        <h1 class="text-2xl font-semibold tracking-tight text-foreground">
+            Review & Approval Queue
+        </h1>
+    </div>
+
+    <div class="flex gap-1 rounded-lg bg-muted p-1 w-fit">
+        <button
+            class="rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab ===
+            'documents'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => (activeTab = "documents")}
+        >
+            <FileText class="size-4 inline mr-1.5" />
+            Documents ({docsTotal})
+        </button>
+        <button
+            class="rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab ===
+            'courses'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => (activeTab = "courses")}
+        >
+            <BookOpen class="size-4 inline mr-1.5" />
+            Courses ({coursesTotal})
+        </button>
+    </div>
+
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+        {#if (activeTab === "documents" && docsLoading) || (activeTab === "courses" && coursesLoading)}
+            <div class="flex items-center justify-center py-16">
+                <LoaderCircle
+                    class="size-6 text-muted-foreground animate-spin"
+                />
+            </div>
+        {:else}
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-border bg-muted/50">
+                        <th
+                            class="px-5 py-3.5 text-left text-sm font-medium text-muted-foreground"
+                            >Title</th
+                        >
+                        <th
+                            class="px-5 py-3.5 text-left text-sm font-medium text-muted-foreground hidden sm:table-cell"
+                            >Status</th
+                        >
+                        <th
+                            class="px-5 py-3.5 text-left text-sm font-medium text-muted-foreground hidden md:table-cell"
+                            >Created</th
+                        >
+                        <th
+                            class="px-5 py-3.5 text-left text-sm font-medium text-muted-foreground w-[320px]"
+                            >Actions</th
+                        >
+                    </tr>
+                </thead>
+                <tbody>
+                    {#if activeTab === "documents"}
+                        {#each docs as doc (doc.id)}
+                            <tr
+                                class="border-b border-border last:border-0 hover:bg-muted/20"
+                            >
+                                <td class="px-5 py-3.5">
+                                    <div
+                                        class="flex items-center gap-2.5 min-w-0"
+                                    >
+                                        <FileText
+                                            class="size-4 text-muted-foreground shrink-0"
+                                        />
+                                        <span
+                                            class="text-sm font-medium truncate block"
+                                            >{doc.title}</span
+                                        >
+                                    </div>
+                                </td>
+                                <td class="px-5 py-3.5 hidden sm:table-cell">
+                                    <span class="text-sm text-muted-foreground"
+                                        >{doc.status}</span
+                                    >
+                                </td>
+                                <td
+                                    class="px-5 py-3.5 hidden md:table-cell text-sm text-muted-foreground"
+                                    >{formatDate(doc.created_at)}</td
+                                >
+                                <td class="px-5 py-3.5">
+                                    <div class="flex items-center gap-2">
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
+                                            onclick={() =>
+                                                submitReviewDirect(
+                                                    doc.id,
+                                                    "document",
+                                                    "approved",
+                                                )}
+                                            class="text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/10"
+                                        >
+                                            <CheckCircle
+                                                class="size-3.5 mr-1.5"
+                                            />
+                                            Approve
+                                        </Button.Root>
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
+                                            onclick={() =>
+                                                openReview(doc, "document")}
+                                            class="text-blue-600 border-blue-500/20 hover:bg-blue-500/10"
+                                        >
+                                            <RotateCcw
+                                                class="size-3.5 mr-1.5"
+                                            />
+                                            Changes
+                                        </Button.Root>
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
+                                            onclick={() =>
+                                                openReview(doc, "document")}
+                                            class="text-red-600 border-red-500/20 hover:bg-red-500/10"
+                                        >
+                                            <XCircle class="size-3.5 mr-1.5" />
+                                            Reject
+                                        </Button.Root>
+                                    </div>
+                                </td>
+                            </tr>
+                        {/each}
+                    {:else}
+                        {#each courses as course (course.id)}
+                            <tr
+                                class="border-b border-border last:border-0 hover:bg-muted/20"
+                            >
+                                <td class="px-5 py-3.5">
+                                    <div
+                                        class="flex items-center gap-2.5 min-w-0"
+                                    >
+                                        <BookOpen
+                                            class="size-4 text-muted-foreground shrink-0"
+                                        />
+                                        <span
+                                            class="text-sm font-medium truncate block"
+                                            >{course.title}</span
+                                        >
+                                    </div>
+                                </td>
+                                <td class="px-5 py-3.5 hidden sm:table-cell">
+                                    <span class="text-sm text-muted-foreground"
+                                        >{course.status}</span
+                                    >
+                                </td>
+                                <td
+                                    class="px-5 py-3.5 hidden md:table-cell text-sm text-muted-foreground"
+                                    >{formatDate(course.created_at)}</td
+                                >
+                                <td class="px-5 py-3.5">
+                                    <div class="flex items-center gap-2">
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
+                                            onclick={() =>
+                                                submitReviewDirect(
+                                                    course.id,
+                                                    "course",
+                                                    "approved",
+                                                )}
+                                            class="text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/10"
+                                        >
+                                            <CheckCircle
+                                                class="size-3.5 mr-1.5"
+                                            />
+                                            Approve
+                                        </Button.Root>
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
+                                            onclick={() =>
+                                                openReview(course, "course")}
+                                            class="text-blue-600 border-blue-500/20 hover:bg-blue-500/10"
+                                        >
+                                            <RotateCcw
+                                                class="size-3.5 mr-1.5"
+                                            />
+                                            Changes
+                                        </Button.Root>
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
+                                            onclick={() =>
+                                                openReview(course, "course")}
+                                            class="text-red-600 border-red-500/20 hover:bg-red-500/10"
+                                        >
+                                            <XCircle class="size-3.5 mr-1.5" />
+                                            Reject
+                                        </Button.Root>
+                                    </div>
+                                </td>
+                            </tr>
+                        {/each}
+                    {/if}
+                </tbody>
+            </table>
+
+            <div
+                class="flex items-center justify-between px-5 py-3 border-t border-border bg-muted/20"
+            >
+                <span class="text-sm text-muted-foreground">
+                    Page {currentPage + 1} of {totalPages}
+                </span>
+                <div class="flex gap-1">
+                    <Button.Root
+                        variant="ghost"
+                        size="sm"
+                        disabled={currentPage === 0}
+                        onclick={() => {
+                            if (activeTab === "documents")
+                                loadDocuments(docsPage - 1);
+                            else loadCourses(coursesPage - 1);
+                        }}
+                    >
+                        <ChevronLeft class="size-4" />
+                        Prev
+                    </Button.Root>
+                    <Button.Root
+                        variant="ghost"
+                        size="sm"
+                        disabled={currentPage >= totalPages - 1}
+                        onclick={() => {
+                            if (activeTab === "documents")
+                                loadDocuments(docsPage + 1);
+                            else loadCourses(coursesPage + 1);
+                        }}
+                    >
+                        Next
+                        <ChevronRight class="size-4" />
+                    </Button.Root>
+                </div>
+            </div>
+        {/if}
+    </div>
+</div>
+
+{#if reviewItem}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onclick={closeReview}
+    >
+        <div
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-md p-6"
+            onclick={(e: MouseEvent) => e.stopPropagation()}
+        >
+            <h3 class="text-base font-semibold text-foreground mb-1">
+                Review {reviewType === "document" ? "Document" : "Course"}
+            </h3>
+            <p class="text-sm text-muted-foreground mb-4 truncate">
+                {reviewItem.title}
+            </p>
+
+            <textarea
+                bind:value={reviewNotes}
+                rows={3}
+                placeholder="Add review notes (optional)..."
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none mb-4"
+            ></textarea>
+
+            <div class="flex gap-2 justify-end">
+                <Button.Root variant="ghost" size="sm" onclick={closeReview}
+                    >Cancel</Button.Root
+                >
+                <Button.Root
+                    variant="ghost"
+                    size="sm"
+                    onclick={() => submitReview("changes_requested")}
+                    class="text-blue-600"
+                >
+                    <RotateCcw class="size-4 mr-1.5" />
+                    Request Changes
+                </Button.Root>
+                <Button.Root
+                    variant="ghost"
+                    size="sm"
+                    onclick={() => submitReview("rejected")}
+                    class="text-red-600"
+                >
+                    <XCircle class="size-4 mr-1.5" />
+                    Reject
+                </Button.Root>
+                <Button.Root size="sm" onclick={() => submitReview("approved")}>
+                    <CheckCircle class="size-4 mr-1.5" />
+                    Approve
+                </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}

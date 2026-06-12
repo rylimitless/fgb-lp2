@@ -3,7 +3,15 @@
     import favicon from "$lib/assets/favicon.svg";
     import { page } from "$app/stores";
     import { goto } from "$app/navigation";
-    import { LogOut, LayoutDashboard, PenTool } from "@lucide/svelte";
+    import {
+        LogOut,
+        LayoutDashboard,
+        Bot,
+        GraduationCap,
+        PenTool,
+        Sparkles,
+        ClipboardCheck,
+    } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Tabs from "$lib/components/ui/tabs";
 
@@ -19,17 +27,49 @@
             href: "/",
         },
         {
+            value: "gia-coach",
+            label: "Gia AI Coach",
+            icon: Bot,
+            href: "/gia-coach",
+        },
+        {
+            value: "lesson-player",
+            label: "Guided Lesson Player",
+            icon: GraduationCap,
+            href: "/lesson-player",
+        },
+        {
             value: "content-studio",
             label: "Content Studio",
             icon: PenTool,
             href: "/content-studio",
         },
+        {
+            value: "ai-content-generator",
+            label: "AI Generator",
+            icon: Sparkles,
+            href: "/ai-content-generator",
+        },
+        {
+            value: "review-queue",
+            label: "Review Queue",
+            icon: ClipboardCheck,
+            href: "/review-queue",
+        },
     ];
 
     let currentTab = $state(
-        $page.url.pathname === "/content-studio"
+        $page.url.pathname.startsWith("/content-studio")
             ? "content-studio"
-            : "dashboard",
+            : $page.url.pathname.startsWith("/ai-content-generator")
+              ? "ai-content-generator"
+              : $page.url.pathname.startsWith("/review-queue")
+                ? "review-queue"
+                : $page.url.pathname.startsWith("/lesson-player")
+                  ? "lesson-player"
+                  : $page.url.pathname.startsWith("/gia-coach")
+                    ? "gia-coach"
+                    : "dashboard",
     );
 
     async function handleLogout() {

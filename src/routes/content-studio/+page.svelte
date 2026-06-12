@@ -523,10 +523,20 @@
                                                     doc.status,
                                                 )}"
                                             />
-                                            <span
-                                                class="font-medium text-foreground truncate max-w-[240px]"
-                                                >{doc.title}</span
-                                            >
+                                            <div class="min-w-0">
+                                                <span
+                                                    class="font-medium text-foreground truncate max-w-[200px] block"
+                                                    >{doc.title}</span
+                                                >
+                                                {#if doc.status === "failed" && doc.error_message}
+                                                    <p
+                                                        class="text-[10px] text-red-600/80 dark:text-red-400/80 mt-0.5 line-clamp-2"
+                                                        title={doc.error_message}
+                                                    >
+                                                        {doc.error_message}
+                                                    </p>
+                                                {/if}
+                                            </div>
                                         </div>
                                     </td>
                                     <td

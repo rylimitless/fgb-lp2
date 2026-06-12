@@ -21,11 +21,14 @@ type Course struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	Department   pgtype.Text        `json:"department"`
 	Approved     pgtype.Bool        `json:"approved"`
+	ReviewStatus pgtype.Text        `json:"review_status"`
+	ReviewNotes  pgtype.Text        `json:"review_notes"`
 }
 
 type CourseItem struct {
 	ID        int64              `json:"id"`
 	CourseID  int64              `json:"course_id"`
+	ModuleID  pgtype.Int8        `json:"module_id"`
 	ItemType  string             `json:"item_type"`
 	SortOrder int32              `json:"sort_order"`
 	Data      []byte             `json:"data"`
@@ -33,15 +36,18 @@ type CourseItem struct {
 }
 
 type Document struct {
-	ID          int64              `json:"id"`
-	Title       string             `json:"title"`
-	FilePath    string             `json:"file_path"`
-	Status      string             `json:"status"`
-	UploadedBy  pgtype.Int8        `json:"uploaded_by"`
-	TotalChunks int32              `json:"total_chunks"`
-	ChunksDone  int32              `json:"chunks_done"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	Approved    pgtype.Bool        `json:"approved"`
+	ID           int64              `json:"id"`
+	Title        string             `json:"title"`
+	FilePath     string             `json:"file_path"`
+	Status       string             `json:"status"`
+	UploadedBy   pgtype.Int8        `json:"uploaded_by"`
+	TotalChunks  int32              `json:"total_chunks"`
+	ChunksDone   int32              `json:"chunks_done"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Approved     pgtype.Bool        `json:"approved"`
+	ErrorMessage pgtype.Text        `json:"error_message"`
+	ReviewStatus pgtype.Text        `json:"review_status"`
+	ReviewNotes  pgtype.Text        `json:"review_notes"`
 }
 
 type DocumentChunk struct {
@@ -62,6 +68,26 @@ type LearningPreference struct {
 	PreferredTopics []string           `json:"preferred_topics"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type LessonProgress struct {
+	ID            int64              `json:"id"`
+	UserID        int64              `json:"user_id"`
+	CourseID      int64              `json:"course_id"`
+	CurrentModule int32              `json:"current_module"`
+	Completed     bool               `json:"completed"`
+	ScorePct      pgtype.Numeric     `json:"score_pct"`
+	StartedAt     pgtype.Timestamptz `json:"started_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+}
+
+type Module struct {
+	ID          int64              `json:"id"`
+	CourseID    int64              `json:"course_id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	SortOrder   int32              `json:"sort_order"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type Permission struct {

@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"fgb-lp/ai"
 	"fgb-lp/app"
+	"fgb-lp/coach"
 	database "fgb-lp/database/queries"
 	"fgb-lp/documents"
+	"fgb-lp/lessons"
+	"fgb-lp/review"
 	"fgb-lp/worker"
 	"fmt"
 	"net/http"
@@ -49,7 +53,6 @@ func main() {
 	}))
 	r.Use(gin.Logger())
 
-	// ----- public routes (no auth required) -----
 	r.GET("/api/check-first-user", func(c *gin.Context) {
 		isFirst := app.CheckIfFirstUser()
 		c.JSON(http.StatusOK, gin.H{"first_user": isFirst})
@@ -96,26 +99,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"message": "logged in"})
 	})
 
-	// ----- protected routes -----
 	protected := r.Group("/api")
-	// protected.Use(func(c *gin.Context) {
-	// 	token, err := c.Cookie("session_token")
-	// 	if err != nil {
-	// 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-	// 		c.Abort()
-	// 		return
-	// 	}
-
-	// 	session, err := queries.GetSessionByToken(c.Request.Context(), token)
-	// 	if err != nil {
-	// 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-	// 		c.Abort()
-	// 		return
-	// 	}
-
-	// 	c.Set("user_id", session.UserID)
-	// 	c.Next()
-	// })
 
 	protected.POST("/logout", func(c *gin.Context) {
 		token, _ := c.Cookie("session_token")
@@ -143,7 +127,6 @@ func main() {
 		})
 	})
 
-	// ----- document routes -----
 	uploadDir := "uploads"
 	if err := worker.CreateUploadDir(uploadDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to create upload directory: %v\n", err)
@@ -153,7 +136,18 @@ func main() {
 	docHandler := documents.NewHandler(queries, uploadDir)
 	docHandler.RegisterRoutes(protected)
 
-	// ----- start background worker -----
+	aiHandler := ai.NewHandler(queries)
+	aiHandler.RegisterRoutes(protected)
+
+	reviewHandler := review.NewHandler(queries)
+	reviewHandler.RegisterRoutes(protected)
+
+	lessonHandler := lessons.NewHandler(queries)
+	lessonHandler.RegisterRoutes(protected)
+
+	coachHandler := coach.NewHandler(queries)
+	coachHandler.RegisterRoutes(protected)
+
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())
 

@@ -67,6 +67,9 @@ create table documents (
 );
 
 alter table documents add column approved boolean default false;
+alter table documents add column error_message text default '';
+alter table documents add column review_status text default 'pending';
+alter table documents add column review_notes text default '';
 
 
 create table document_chunks (
@@ -103,18 +106,50 @@ create table courses (
 
 alter table courses add column department varchar(255);
 alter table courses add column approved boolean default false;
+alter table courses add column review_status text default 'pending';
+alter table courses add column review_notes text default '';
 
-
-
-create table course_items (
+-- Migrations: add module support
+create table if not exists modules (
   id bigserial primary key,
   course_id bigint not null references courses(id) on delete cascade,
+  title text not null,
+  description text not null default '',
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists course_items (
+  id bigserial primary key,
+  course_id bigint not null references courses(id) on delete cascade,
+  module_id bigint references modules(id) on delete set null,
   item_type text not null
     check (item_type in ('mc', 'sa', 'tf', 'fb', 'dd', 'essay')),
   sort_order int not null default 0,
   data jsonb not null default '{}',
   created_at timestamptz not null default now()
 );
+
+alter table course_items add column if not exists module_id bigint references modules(id) on delete set null;
+
+-- Drop old item_type check constraint and add new one with all interaction types
+do $$
+declare
+  constraint_name text;
+begin
+  select con.conname into constraint_name
+  from pg_constraint con
+  join pg_class rel on rel.oid = con.conrelid
+  where rel.relname = 'course_items'
+    and con.contype = 'c'
+    and pg_get_constraintdef(con.oid) like '%item_type%';
+  if constraint_name is not null then
+    execute 'alter table course_items drop constraint ' || constraint_name;
+  end if;
+end $$;
+
+alter table course_items add constraint course_items_item_type_check
+  check (item_type in ('content','mc','ma','tf','fb','sa','matching','drag_sort','hotspot','sequence','scale'));
 
 -- Adaptive Practice Room: stores per-user learning preferences
 create table learning_preferences (
@@ -138,4 +173,17 @@ create table practice_sessions (
   score_pct numeric(5,2) not null default 0,
   started_at timestamptz not null default now(),
   completed_at timestamptz
+);
+
+-- Guided Lesson Player: tracks per-user progress through a course
+create table lesson_progress (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  course_id bigint not null references courses(id) on delete cascade,
+  current_module int not null default 0,
+  completed boolean not null default false,
+  score_pct numeric(5,2) not null default 0,
+  started_at timestamptz not null default now(),
+  completed_at timestamptz,
+  unique(user_id, course_id)
 );

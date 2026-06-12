@@ -72,10 +72,12 @@ func (w *Worker) poll(ctx context.Context) {
 		log.Printf("[worker] processing document %d: %s", claimed.ID, claimed.Title)
 
 		if err := w.processDocument(ctx, claimed); err != nil {
+			errMsg := err.Error()
 			log.Printf("[worker] failed to process doc %d: %v", claimed.ID, err)
 			w.queries.UpdateDocumentStatus(ctx, database.UpdateDocumentStatusParams{
-				ID:     claimed.ID,
-				Status: "failed",
+				ID:           claimed.ID,
+				Status:       "failed",
+				ErrorMessage: pgtype.Text{String: truncateStr(errMsg, 500), Valid: true},
 			})
 		}
 	}
@@ -143,10 +145,12 @@ func (w *Worker) processDocument(ctx context.Context, doc database.Document) err
 		log.Printf("[worker] doc %d: embedded chunks %d-%d/%d", doc.ID, i, end-1, totalChunks)
 	}
 
-	// Mark as ready
+	// Mark as ready (auto-approve)
 	_, err = w.queries.UpdateDocumentStatus(ctx, database.UpdateDocumentStatusParams{
-		ID:     doc.ID,
-		Status: "ready",
+		ID:           doc.ID,
+		Status:       "ready",
+		Approved:     pgtype.Bool{Bool: true, Valid: true},
+		ReviewStatus: pgtype.Text{String: "approved", Valid: true},
 	})
 	if err != nil {
 		return fmt.Errorf("mark ready: %w", err)
@@ -230,4 +234,11 @@ func GenerateFilePath(originalName string) string {
 		return r
 	}, clean)
 	return fmt.Sprintf("%d_%s.pdf", time.Now().UnixNano(), clean)
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

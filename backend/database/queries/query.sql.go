@@ -27,7 +27,7 @@ const claimDocument = `-- name: ClaimDocument :one
 update documents
 set status = 'processing'
 where id = $1 and status = 'uploaded'
-returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved
+returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes
 `
 
 func (q *Queries) ClaimDocument(ctx context.Context, id int64) (Document, error) {
@@ -43,6 +43,139 @@ func (q *Queries) ClaimDocument(ctx context.Context, id int64) (Document, error)
 		&i.ChunksDone,
 		&i.CreatedAt,
 		&i.Approved,
+		&i.ErrorMessage,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const countPendingReviewCourses = `-- name: CountPendingReviewCourses :one
+select count(*) from courses where review_status = 'pending'
+`
+
+func (q *Queries) CountPendingReviewCourses(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingReviewCourses)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPendingReviewDocuments = `-- name: CountPendingReviewDocuments :one
+select count(*) from documents where review_status = 'pending'
+`
+
+func (q *Queries) CountPendingReviewDocuments(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingReviewDocuments)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createCourse = `-- name: CreateCourse :one
+insert into courses (title, description, created_by, source_doc_ids, settings)
+values ($1, $2, $3, $4, $5)
+returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+`
+
+type CreateCourseParams struct {
+	Title        string  `json:"title"`
+	Description  string  `json:"description"`
+	CreatedBy    int64   `json:"created_by"`
+	SourceDocIds []int64 `json:"source_doc_ids"`
+	Settings     []byte  `json:"settings"`
+}
+
+func (q *Queries) CreateCourse(ctx context.Context, arg CreateCourseParams) (Course, error) {
+	row := q.db.QueryRow(ctx, createCourse,
+		arg.Title,
+		arg.Description,
+		arg.CreatedBy,
+		arg.SourceDocIds,
+		arg.Settings,
+	)
+	var i Course
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.SourceDocIds,
+		&i.Status,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Department,
+		&i.Approved,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const createCourseItem = `-- name: CreateCourseItem :one
+insert into course_items (course_id, module_id, item_type, sort_order, data)
+values ($1, $2, $3, $4, $5)
+returning id, course_id, module_id, item_type, sort_order, data, created_at
+`
+
+type CreateCourseItemParams struct {
+	CourseID  int64       `json:"course_id"`
+	ModuleID  pgtype.Int8 `json:"module_id"`
+	ItemType  string      `json:"item_type"`
+	SortOrder int32       `json:"sort_order"`
+	Data      []byte      `json:"data"`
+}
+
+func (q *Queries) CreateCourseItem(ctx context.Context, arg CreateCourseItemParams) (CourseItem, error) {
+	row := q.db.QueryRow(ctx, createCourseItem,
+		arg.CourseID,
+		arg.ModuleID,
+		arg.ItemType,
+		arg.SortOrder,
+		arg.Data,
+	)
+	var i CourseItem
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.ModuleID,
+		&i.ItemType,
+		&i.SortOrder,
+		&i.Data,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createModule = `-- name: CreateModule :one
+insert into modules (course_id, title, description, sort_order)
+values ($1, $2, $3, $4)
+returning id, course_id, title, description, sort_order, created_at
+`
+
+type CreateModuleParams struct {
+	CourseID    int64  `json:"course_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	SortOrder   int32  `json:"sort_order"`
+}
+
+func (q *Queries) CreateModule(ctx context.Context, arg CreateModuleParams) (Module, error) {
+	row := q.db.QueryRow(ctx, createModule,
+		arg.CourseID,
+		arg.Title,
+		arg.Description,
+		arg.SortOrder,
+	)
+	var i Module
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.Title,
+		&i.Description,
+		&i.SortOrder,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -104,6 +237,33 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteCourse = `-- name: DeleteCourse :exec
+delete from courses where id = $1
+`
+
+func (q *Queries) DeleteCourse(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteCourse, id)
+	return err
+}
+
+const deleteCourseItems = `-- name: DeleteCourseItems :exec
+delete from course_items where course_id = $1
+`
+
+func (q *Queries) DeleteCourseItems(ctx context.Context, courseID int64) error {
+	_, err := q.db.Exec(ctx, deleteCourseItems, courseID)
+	return err
+}
+
+const deleteCourseModules = `-- name: DeleteCourseModules :exec
+delete from modules where course_id = $1
+`
+
+func (q *Queries) DeleteCourseModules(ctx context.Context, courseID int64) error {
+	_, err := q.db.Exec(ctx, deleteCourseModules, courseID)
+	return err
+}
+
 const deleteDocument = `-- name: DeleteDocument :exec
 delete from documents where id = $1
 `
@@ -122,8 +282,205 @@ func (q *Queries) DeleteSession(ctx context.Context, token string) error {
 	return err
 }
 
+const getAllLessonProgress = `-- name: GetAllLessonProgress :many
+select id, user_id, course_id, current_module, completed, score_pct, started_at, completed_at from lesson_progress where user_id = $1
+`
+
+func (q *Queries) GetAllLessonProgress(ctx context.Context, userID int64) ([]LessonProgress, error) {
+	rows, err := q.db.Query(ctx, getAllLessonProgress, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LessonProgress
+	for rows.Next() {
+		var i LessonProgress
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CourseID,
+			&i.CurrentModule,
+			&i.Completed,
+			&i.ScorePct,
+			&i.StartedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getApprovedDocuments = `-- name: GetApprovedDocuments :many
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes from documents where approved = true order by created_at desc
+`
+
+func (q *Queries) GetApprovedDocuments(ctx context.Context) ([]Document, error) {
+	rows, err := q.db.Query(ctx, getApprovedDocuments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.FilePath,
+			&i.Status,
+			&i.UploadedBy,
+			&i.TotalChunks,
+			&i.ChunksDone,
+			&i.CreatedAt,
+			&i.Approved,
+			&i.ErrorMessage,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCourseByID = `-- name: GetCourseByID :one
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses where id = $1
+`
+
+func (q *Queries) GetCourseByID(ctx context.Context, id int64) (Course, error) {
+	row := q.db.QueryRow(ctx, getCourseByID, id)
+	var i Course
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.SourceDocIds,
+		&i.Status,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Department,
+		&i.Approved,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const getCourseItemsByCourse = `-- name: GetCourseItemsByCourse :many
+select id, course_id, module_id, item_type, sort_order, data, created_at from course_items where course_id = $1 order by sort_order asc
+`
+
+func (q *Queries) GetCourseItemsByCourse(ctx context.Context, courseID int64) ([]CourseItem, error) {
+	rows, err := q.db.Query(ctx, getCourseItemsByCourse, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CourseItem
+	for rows.Next() {
+		var i CourseItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.CourseID,
+			&i.ModuleID,
+			&i.ItemType,
+			&i.SortOrder,
+			&i.Data,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCourseItemsByModule = `-- name: GetCourseItemsByModule :many
+select id, course_id, module_id, item_type, sort_order, data, created_at from course_items where module_id = $1 order by sort_order asc
+`
+
+func (q *Queries) GetCourseItemsByModule(ctx context.Context, moduleID pgtype.Int8) ([]CourseItem, error) {
+	rows, err := q.db.Query(ctx, getCourseItemsByModule, moduleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CourseItem
+	for rows.Next() {
+		var i CourseItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.CourseID,
+			&i.ModuleID,
+			&i.ItemType,
+			&i.SortOrder,
+			&i.Data,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCourses = `-- name: GetCourses :many
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses order by updated_at desc
+`
+
+func (q *Queries) GetCourses(ctx context.Context) ([]Course, error) {
+	rows, err := q.db.Query(ctx, getCourses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Course
+	for rows.Next() {
+		var i Course
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.SourceDocIds,
+			&i.Status,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Department,
+			&i.Approved,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getDocumentByID = `-- name: GetDocumentByID :one
-select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved from documents where id = $1
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes from documents where id = $1
 `
 
 func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, error) {
@@ -139,12 +496,15 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, erro
 		&i.ChunksDone,
 		&i.CreatedAt,
 		&i.Approved,
+		&i.ErrorMessage,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
 	)
 	return i, err
 }
 
 const getDocuments = `-- name: GetDocuments :many
-select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved from documents order by created_at desc
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes from documents order by created_at desc
 `
 
 func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
@@ -166,6 +526,65 @@ func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
 			&i.ChunksDone,
 			&i.CreatedAt,
 			&i.Approved,
+			&i.ErrorMessage,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getLessonProgress = `-- name: GetLessonProgress :one
+select id, user_id, course_id, current_module, completed, score_pct, started_at, completed_at from lesson_progress where user_id = $1 and course_id = $2
+`
+
+type GetLessonProgressParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) GetLessonProgress(ctx context.Context, arg GetLessonProgressParams) (LessonProgress, error) {
+	row := q.db.QueryRow(ctx, getLessonProgress, arg.UserID, arg.CourseID)
+	var i LessonProgress
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.CurrentModule,
+		&i.Completed,
+		&i.ScorePct,
+		&i.StartedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getModulesByCourse = `-- name: GetModulesByCourse :many
+select id, course_id, title, description, sort_order, created_at from modules where course_id = $1 order by sort_order asc
+`
+
+func (q *Queries) GetModulesByCourse(ctx context.Context, courseID int64) ([]Module, error) {
+	rows, err := q.db.Query(ctx, getModulesByCourse, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Module
+	for rows.Next() {
+		var i Module
+		if err := rows.Scan(
+			&i.ID,
+			&i.CourseID,
+			&i.Title,
+			&i.Description,
+			&i.SortOrder,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -178,7 +597,7 @@ func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
 }
 
 const getPendingDocuments = `-- name: GetPendingDocuments :many
-select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved from documents where status = 'uploaded' order by created_at asc
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes from documents where status = 'uploaded' order by created_at asc
 `
 
 func (q *Queries) GetPendingDocuments(ctx context.Context) ([]Document, error) {
@@ -200,6 +619,132 @@ func (q *Queries) GetPendingDocuments(ctx context.Context) ([]Document, error) {
 			&i.ChunksDone,
 			&i.CreatedAt,
 			&i.Approved,
+			&i.ErrorMessage,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPendingReviewCourses = `-- name: GetPendingReviewCourses :many
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses where review_status = 'pending' order by updated_at desc limit $1 offset $2
+`
+
+type GetPendingReviewCoursesParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetPendingReviewCourses(ctx context.Context, arg GetPendingReviewCoursesParams) ([]Course, error) {
+	rows, err := q.db.Query(ctx, getPendingReviewCourses, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Course
+	for rows.Next() {
+		var i Course
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.SourceDocIds,
+			&i.Status,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Department,
+			&i.Approved,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPendingReviewDocuments = `-- name: GetPendingReviewDocuments :many
+select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes from documents where review_status = 'pending' order by created_at desc limit $1 offset $2
+`
+
+type GetPendingReviewDocumentsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetPendingReviewDocuments(ctx context.Context, arg GetPendingReviewDocumentsParams) ([]Document, error) {
+	rows, err := q.db.Query(ctx, getPendingReviewDocuments, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.FilePath,
+			&i.Status,
+			&i.UploadedBy,
+			&i.TotalChunks,
+			&i.ChunksDone,
+			&i.CreatedAt,
+			&i.Approved,
+			&i.ErrorMessage,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPublishedCourses = `-- name: GetPublishedCourses :many
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses where status = 'published' and approved = true order by updated_at desc
+`
+
+func (q *Queries) GetPublishedCourses(ctx context.Context) ([]Course, error) {
+	rows, err := q.db.Query(ctx, getPublishedCourses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Course
+	for rows.Next() {
+		var i Course
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.SourceDocIds,
+			&i.Status,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Department,
+			&i.Approved,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
 		); err != nil {
 			return nil, err
 		}
@@ -269,7 +814,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 const insertDocument = `-- name: InsertDocument :one
 insert into documents (title, file_path, status, uploaded_by)
 values ($1, $2, 'uploaded', $3)
-returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved
+returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes
 `
 
 type InsertDocumentParams struct {
@@ -291,6 +836,9 @@ func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) 
 		&i.ChunksDone,
 		&i.CreatedAt,
 		&i.Approved,
+		&i.ErrorMessage,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
 	)
 	return i, err
 }
@@ -329,28 +877,255 @@ func (q *Queries) InsertDocumentChunk(ctx context.Context, arg InsertDocumentChu
 	return i, err
 }
 
-const updateDocumentStatus = `-- name: UpdateDocumentStatus :one
-update documents
-set status = $2,
-    total_chunks = coalesce($3, total_chunks),
-    chunks_done = coalesce($4, chunks_done)
-where id = $1
-returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved
+const searchDocumentChunks = `-- name: SearchDocumentChunks :many
+select dc.id, dc.document_id, dc.chunk_index, dc.content, dc.page_number, dc.source_label, dc.embedding, dc.created_at, d.title as document_title
+from document_chunks dc
+join documents d on d.id = dc.document_id
+where d.approved = true and dc.embedding is not null
+order by dc.embedding <=> $1
+limit $2
 `
 
-type UpdateDocumentStatusParams struct {
-	ID          int64       `json:"id"`
-	Status      string      `json:"status"`
-	TotalChunks pgtype.Int4 `json:"total_chunks"`
-	ChunksDone  pgtype.Int4 `json:"chunks_done"`
+type SearchDocumentChunksParams struct {
+	Embedding pgvector.Vector `json:"embedding"`
+	Limit     int32           `json:"limit"`
 }
 
-func (q *Queries) UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) (Document, error) {
-	row := q.db.QueryRow(ctx, updateDocumentStatus,
+type SearchDocumentChunksRow struct {
+	ID            int64              `json:"id"`
+	DocumentID    int64              `json:"document_id"`
+	ChunkIndex    int32              `json:"chunk_index"`
+	Content       string             `json:"content"`
+	PageNumber    pgtype.Int4        `json:"page_number"`
+	SourceLabel   pgtype.Text        `json:"source_label"`
+	Embedding     pgvector.Vector    `json:"embedding"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	DocumentTitle string             `json:"document_title"`
+}
+
+func (q *Queries) SearchDocumentChunks(ctx context.Context, arg SearchDocumentChunksParams) ([]SearchDocumentChunksRow, error) {
+	rows, err := q.db.Query(ctx, searchDocumentChunks, arg.Embedding, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchDocumentChunksRow
+	for rows.Next() {
+		var i SearchDocumentChunksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.ChunkIndex,
+			&i.Content,
+			&i.PageNumber,
+			&i.SourceLabel,
+			&i.Embedding,
+			&i.CreatedAt,
+			&i.DocumentTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchPublishedCourses = `-- name: SearchPublishedCourses :many
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, ts_rank(to_tsvector('english', title || ' ' || description), plainto_tsquery('english', $1)) as rank
+from courses
+where status = 'published' and approved = true
+  and to_tsvector('english', title || ' ' || description) @@ plainto_tsquery('english', $1)
+order by rank desc
+limit $2
+`
+
+type SearchPublishedCoursesParams struct {
+	PlaintoTsquery string `json:"plainto_tsquery"`
+	Limit          int32  `json:"limit"`
+}
+
+type SearchPublishedCoursesRow struct {
+	ID           int64              `json:"id"`
+	Title        string             `json:"title"`
+	Description  string             `json:"description"`
+	CreatedBy    int64              `json:"created_by"`
+	SourceDocIds []int64            `json:"source_doc_ids"`
+	Status       string             `json:"status"`
+	Settings     []byte             `json:"settings"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Department   pgtype.Text        `json:"department"`
+	Approved     pgtype.Bool        `json:"approved"`
+	ReviewStatus pgtype.Text        `json:"review_status"`
+	ReviewNotes  pgtype.Text        `json:"review_notes"`
+	Rank         float32            `json:"rank"`
+}
+
+func (q *Queries) SearchPublishedCourses(ctx context.Context, arg SearchPublishedCoursesParams) ([]SearchPublishedCoursesRow, error) {
+	rows, err := q.db.Query(ctx, searchPublishedCourses, arg.PlaintoTsquery, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchPublishedCoursesRow
+	for rows.Next() {
+		var i SearchPublishedCoursesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.SourceDocIds,
+			&i.Status,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Department,
+			&i.Approved,
+			&i.ReviewStatus,
+			&i.ReviewNotes,
+			&i.Rank,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateCourseMeta = `-- name: UpdateCourseMeta :one
+update courses set title = $2, description = $3, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+`
+
+type UpdateCourseMetaParams struct {
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+func (q *Queries) UpdateCourseMeta(ctx context.Context, arg UpdateCourseMetaParams) (Course, error) {
+	row := q.db.QueryRow(ctx, updateCourseMeta, arg.ID, arg.Title, arg.Description)
+	var i Course
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.SourceDocIds,
+		&i.Status,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Department,
+		&i.Approved,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const updateCourseReview = `-- name: UpdateCourseReview :one
+update courses
+set review_status = $2,
+    review_notes = $3,
+    approved = $4,
+    status = case when $4 then 'published' else status end,
+    updated_at = now()
+where id = $1
+returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+`
+
+type UpdateCourseReviewParams struct {
+	ID           int64       `json:"id"`
+	ReviewStatus pgtype.Text `json:"review_status"`
+	ReviewNotes  pgtype.Text `json:"review_notes"`
+	Approved     pgtype.Bool `json:"approved"`
+}
+
+func (q *Queries) UpdateCourseReview(ctx context.Context, arg UpdateCourseReviewParams) (Course, error) {
+	row := q.db.QueryRow(ctx, updateCourseReview,
 		arg.ID,
-		arg.Status,
-		arg.TotalChunks,
-		arg.ChunksDone,
+		arg.ReviewStatus,
+		arg.ReviewNotes,
+		arg.Approved,
+	)
+	var i Course
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.SourceDocIds,
+		&i.Status,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Department,
+		&i.Approved,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const updateCourseStatus = `-- name: UpdateCourseStatus :one
+update courses set status = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+`
+
+type UpdateCourseStatusParams struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+}
+
+func (q *Queries) UpdateCourseStatus(ctx context.Context, arg UpdateCourseStatusParams) (Course, error) {
+	row := q.db.QueryRow(ctx, updateCourseStatus, arg.ID, arg.Status)
+	var i Course
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.SourceDocIds,
+		&i.Status,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Department,
+		&i.Approved,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const updateDocumentReview = `-- name: UpdateDocumentReview :one
+update documents
+set review_status = $2,
+    review_notes = $3,
+    approved = $4
+where id = $1
+returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes
+`
+
+type UpdateDocumentReviewParams struct {
+	ID           int64       `json:"id"`
+	ReviewStatus pgtype.Text `json:"review_status"`
+	ReviewNotes  pgtype.Text `json:"review_notes"`
+	Approved     pgtype.Bool `json:"approved"`
+}
+
+func (q *Queries) UpdateDocumentReview(ctx context.Context, arg UpdateDocumentReviewParams) (Document, error) {
+	row := q.db.QueryRow(ctx, updateDocumentReview,
+		arg.ID,
+		arg.ReviewStatus,
+		arg.ReviewNotes,
+		arg.Approved,
 	)
 	var i Document
 	err := row.Scan(
@@ -363,6 +1138,97 @@ func (q *Queries) UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentSt
 		&i.ChunksDone,
 		&i.CreatedAt,
 		&i.Approved,
+		&i.ErrorMessage,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const updateDocumentStatus = `-- name: UpdateDocumentStatus :one
+update documents
+set status = $2,
+    total_chunks = coalesce($3, total_chunks),
+    chunks_done = coalesce($4, chunks_done),
+    error_message = coalesce($5, error_message),
+    approved = coalesce($6, approved),
+    review_status = coalesce($7, review_status)
+where id = $1
+returning id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes
+`
+
+type UpdateDocumentStatusParams struct {
+	ID           int64       `json:"id"`
+	Status       string      `json:"status"`
+	TotalChunks  pgtype.Int4 `json:"total_chunks"`
+	ChunksDone   pgtype.Int4 `json:"chunks_done"`
+	ErrorMessage pgtype.Text `json:"error_message"`
+	Approved     pgtype.Bool `json:"approved"`
+	ReviewStatus pgtype.Text `json:"review_status"`
+}
+
+func (q *Queries) UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) (Document, error) {
+	row := q.db.QueryRow(ctx, updateDocumentStatus,
+		arg.ID,
+		arg.Status,
+		arg.TotalChunks,
+		arg.ChunksDone,
+		arg.ErrorMessage,
+		arg.Approved,
+		arg.ReviewStatus,
+	)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.FilePath,
+		&i.Status,
+		&i.UploadedBy,
+		&i.TotalChunks,
+		&i.ChunksDone,
+		&i.CreatedAt,
+		&i.Approved,
+		&i.ErrorMessage,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const upsertLessonProgress = `-- name: UpsertLessonProgress :one
+insert into lesson_progress (user_id, course_id, current_module, completed, score_pct)
+values ($1, $2, $3, $4, $5)
+on conflict (user_id, course_id)
+do update set current_module = $3, completed = $4, score_pct = $5, completed_at = case when $4 then now() else lesson_progress.completed_at end
+returning id, user_id, course_id, current_module, completed, score_pct, started_at, completed_at
+`
+
+type UpsertLessonProgressParams struct {
+	UserID        int64          `json:"user_id"`
+	CourseID      int64          `json:"course_id"`
+	CurrentModule int32          `json:"current_module"`
+	Completed     bool           `json:"completed"`
+	ScorePct      pgtype.Numeric `json:"score_pct"`
+}
+
+func (q *Queries) UpsertLessonProgress(ctx context.Context, arg UpsertLessonProgressParams) (LessonProgress, error) {
+	row := q.db.QueryRow(ctx, upsertLessonProgress,
+		arg.UserID,
+		arg.CourseID,
+		arg.CurrentModule,
+		arg.Completed,
+		arg.ScorePct,
+	)
+	var i LessonProgress
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.CurrentModule,
+		&i.Completed,
+		&i.ScorePct,
+		&i.StartedAt,
+		&i.CompletedAt,
 	)
 	return i, err
 }
