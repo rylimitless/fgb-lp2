@@ -12,12 +12,16 @@
         Trophy,
         RotateCcw,
         ArrowRight,
+        Eye,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
 
     let courses = $state<any[]>([]);
     let loading = $state(true);
 
+    // Preview mode
+    let previewMode = $state(false);
+    let previewId = $state<number | null>(null);
     // Player state
     let enrolledCourse = $state<any>(null);
     let playerLoading = $state(false);
@@ -28,16 +32,41 @@
     let answers = $state<Record<number, any>>({});
 
     $effect(() => {
-        loadCourses();
+        const params = new URLSearchParams(window.location.search);
+        const previewParam = params.get("preview");
+        if (previewParam) {
+            previewMode = true;
+            previewId = parseInt(previewParam, 10);
+            if (!isNaN(previewId)) {
+                loadPreview(previewId);
+            }
+        } else {
+            loadCourses();
+        }
     });
+
+    async function loadPreview(courseId: number) {
+        playerLoading = true;
+        loading = false;
+        try {
+            const res = await fetch(`/api/courses/${courseId}/preview`, {
+                credentials: "include",
+            });
+            if (res.ok) {
+                enrolledCourse = await res.json();
+            }
+        } catch {
+            /* ignore */
+        }
+        playerLoading = false;
+    }
 
     async function loadCourses() {
         loading = true;
         try {
-            const res = await fetch(
-                "/api/courses/published",
-                { credentials: "include" },
-            );
+            const res = await fetch("/api/courses/published", {
+                credentials: "include",
+            });
             if (res.ok) courses = await res.json();
         } catch {
             /* ignore */
@@ -52,10 +81,9 @@
         answers = {};
         showResults = false;
         try {
-            const res = await fetch(
-                `/api/courses/${courseId}/play`,
-                { credentials: "include" },
-            );
+            const res = await fetch(`/api/courses/${courseId}/play`, {
+                credentials: "include",
+            });
             if (res.ok) enrolledCourse = await res.json();
         } catch {
             /* ignore */
@@ -65,6 +93,8 @@
 
     function goHome() {
         enrolledCourse = null;
+        previewMode = false;
+        previewId = null;
         loadCourses();
     }
 
@@ -111,6 +141,7 @@
             total = 0;
         if (!enrolledCourse) return { correct: 0, total: 0 };
         for (const mod of enrolledCourse.modules) {
+            if (!mod?.items) continue;
             for (const item of mod.items) {
                 if (item.item_type === "content") continue;
                 total++;
@@ -123,6 +154,7 @@
     function moduleProgress(mod: any): number {
         let done = 0,
             total = 0;
+        if (!mod?.items) return 100;
         for (const item of mod.items) {
             if (item.item_type === "content") continue;
             total++;
@@ -300,6 +332,25 @@
         </div>
     </div>
 {:else}
+    {#if previewMode}
+        <div
+            class="w-full rounded-lg border border-blue-500/30 bg-blue-500/5 px-4 py-2.5 mb-4 flex items-center justify-between"
+        >
+            <div class="flex items-center gap-2">
+                <Eye class="size-4 text-blue-500" />
+                <span
+                    class="text-sm font-medium text-blue-600 dark:text-blue-400"
+                    >Preview Mode</span
+                >
+                <span class="text-xs text-blue-500/70"
+                    >— this is a course preview, answers are not saved</span
+                >
+            </div>
+            <Button.Root variant="outline" size="sm" onclick={goHome}>
+                <ChevronLeft class="size-3.5 mr-1" /> Back to Editor
+            </Button.Root>
+        </div>
+    {/if}
     <div class="flex w-full max-w-6xl mx-auto gap-6">
         <!-- Module Sidebar -->
         <aside class="w-[240px] shrink-0 flex flex-col gap-2">

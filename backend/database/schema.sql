@@ -168,7 +168,7 @@ ALTER TABLE learning_preferences ADD COLUMN IF NOT EXISTS theta double precision
 
 
 -- Adaptive Practice Room: tracks practice sessions
-create table practice_sessions (
+create table if not exists practice_sessions (
   id bigserial primary key,
   user_id bigint not null references users(id) on delete cascade,
   topic text not null default '',
@@ -180,7 +180,7 @@ create table practice_sessions (
 );
 
 -- Guided Lesson Player: tracks per-user progress through a course
-create table lesson_progress (
+create table if not exists lesson_progress (
   id bigserial primary key,
   user_id bigint not null references users(id) on delete cascade,
   course_id bigint not null references courses(id) on delete cascade,
@@ -190,4 +190,19 @@ create table lesson_progress (
   started_at timestamptz not null default now(),
   completed_at timestamptz,
   unique(user_id, course_id)
+);
+
+-- Course Generation Jobs: persists generation state across restarts
+create table if not exists course_generation_jobs (
+  id text primary key,
+  status text not null default 'pending'
+    check (status in ('pending', 'running', 'completed', 'failed')),
+  request jsonb not null,
+  steps jsonb not null default '[]',
+  modules jsonb not null default '[]',
+  result jsonb,
+  error text,
+  course_id bigint references courses(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );

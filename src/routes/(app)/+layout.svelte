@@ -1,5 +1,5 @@
 <script lang="ts">
-    import "./layout.css";
+    import "../layout.css";
     import favicon from "$lib/assets/favicon.svg";
     import { page } from "$app/stores";
     import { goto } from "$app/navigation";
@@ -12,6 +12,7 @@
         PenTool,
         Sparkles,
         ClipboardCheck,
+        Library,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Tabs from "$lib/components/ui/tabs";
@@ -63,22 +64,30 @@
             icon: ClipboardCheck,
             href: "/review-queue",
         },
+        {
+            value: "content-repository",
+            label: "Repository",
+            icon: Library,
+            href: "/content-repository",
+        },
     ];
 
     let currentTab = $state(
         $page.url.pathname.startsWith("/content-studio")
             ? "content-studio"
-            : $page.url.pathname.startsWith("/ai-content-generator")
-              ? "ai-content-generator"
-              : $page.url.pathname.startsWith("/review-queue")
-                ? "review-queue"
-                : $page.url.pathname.startsWith("/lesson-player")
-                  ? "lesson-player"
-                  : $page.url.pathname.startsWith("/gia-coach")
-                    ? "gia-coach"
-                    : $page.url.pathname.startsWith("/adaptive-room")
-                      ? "adaptive-room"
-                      : "dashboard",
+            : $page.url.pathname.startsWith("/content-repository")
+              ? "content-repository"
+              : $page.url.pathname.startsWith("/ai-content-generator")
+                ? "ai-content-generator"
+                : $page.url.pathname.startsWith("/review-queue")
+                  ? "review-queue"
+                  : $page.url.pathname.startsWith("/lesson-player")
+                    ? "lesson-player"
+                    : $page.url.pathname.startsWith("/gia-coach")
+                      ? "gia-coach"
+                      : $page.url.pathname.startsWith("/adaptive-room")
+                        ? "adaptive-room"
+                        : "dashboard",
     );
 
     async function handleLogout() {

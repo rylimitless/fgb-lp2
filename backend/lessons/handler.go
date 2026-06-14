@@ -111,13 +111,21 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 
 	mods := make([]gin.H, 0)
 	for _, m := range modules {
+		modItems := itemMap[m.ID]
+		if modItems == nil {
+			modItems = []gin.H{}
+		}
+		modAnswered := answeredMap[m.ID]
+		if modAnswered == nil {
+			modAnswered = []interface{}{}
+		}
 		mods = append(mods, gin.H{
 			"id":          m.ID,
 			"title":       m.Title,
 			"description": m.Description,
 			"sort_order":  m.SortOrder,
-			"items":       itemMap[m.ID],
-			"answered":    answeredMap[m.ID],
+			"items":       modItems,
+			"answered":    modAnswered,
 		})
 	}
 

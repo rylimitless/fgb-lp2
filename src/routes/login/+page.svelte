@@ -1,4 +1,5 @@
 <script lang="ts">
+    import "../layout.css";
     import { Mail, Lock, LogIn, Eye, EyeOff } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import { goto } from "$app/navigation";

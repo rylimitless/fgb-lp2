@@ -1,4 +1,5 @@
 <script lang="ts">
+    import "../layout.css";
     import { Mail, Lock, Eye, EyeOff, User, ShieldCheck } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import { goto } from "$app/navigation";
@@ -60,8 +61,8 @@
                 Create Admin Account
             </h1>
             <p class="mt-2 text-sm text-muted-foreground">
-                This is the first-time setup. Create the administrator account to
-                get started.
+                This is the first-time setup. Create the administrator account
+                to get started.
             </p>
         </div>
 

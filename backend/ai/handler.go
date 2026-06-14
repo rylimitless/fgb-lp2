@@ -7,79 +7,127 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/pgvector/pgvector-go"
 )
 
-const courseGenSystemPrompt = `You are an expert instructional designer. Given source material and a course topic, generate a structured course with modules that teach concepts through content blocks and then reinforce learning with interactive items.
+// ---- System prompts ----
 
-Output ONLY valid JSON — no markdown, no explanation outside the JSON. Follow this exact structure:
+// Step 1: Course Outliner — produces Markdown, not JSON.
+const coursePlanSystemPrompt = `You are an expert instructional designer. Given source material and a course topic, your job is to produce a high-level course plan consisting of module titles and descriptions.
+
+CRITICAL RULES:
+1. Structure your output EXACTLY like the Markdown example below. Do NOT use JSON, and do not write any introductory or concluding conversational filler.
+2. Generate 1-7 modules based on how much meaningful material the source contains. If the source is short or narrow, 1-3 modules is fine. Only use 5-7 if the source is genuinely broad and deep. Do not pad with empty modules.
+3. Order modules logically — build from foundational concepts to advanced applications.
+4. Base ALL module topics strictly on the provided source material. Every topic must be traceable to the source.
+5. Make titles and descriptions specific, academic, and substantive — not generic.
+
+OUTPUT FORMAT:
+# Course Title: [Insert Compelling Title]
+[Insert a 3-4 sentence compelling course overview explaining what the learner will master.]
+
+## Module 1: [Module Title]
+**Description:** [2-3 sentences describing what this module covers and its specific learning objectives.]
+
+## Module 2: [Module Title]
+**Description:** [2-3 sentences describing what this module covers and its specific learning objectives.]`
+
+// Step 2a: Section Lister — identifies 3-5 key sub-topics within a module.
+const moduleSectionListerPrompt = `You are an expert instructional designer. Given a course module's title, description, and source material, identify 3-5 key sub-topics or sections that comprehensively break down this module's content.
+
+Output ONLY a valid JSON array of section titles — no markdown, no other text:
+
+["Section Title 1", "Section Title 2", "Section Title 3"]
+
+CRITICAL RULES:
+- Produce 3-5 sections that together cover all the relevant source material for this module.
+- Order sections logically — foundational concepts first, then deeper material.
+- Each title should be specific and substantive, not generic.
+- Cover ALL key ideas from the source. Do not skip important concepts.`
+
+// Step 2b: Section Content Writer — produces raw Markdown content for ONE specific section.
+const moduleSectionWriterPrompt = `You are an expert instructional designer and university-level educator. Your primary job is to produce rich, thorough, and faithful teaching material for ONE SPECIFIC SECTION of a course module.
+
+You are writing the raw content for this section ONLY. Do not include quiz questions, formatting code, or structural wrappers.
+
+CRITICAL RULES:
+1. Write as many paragraphs as are needed to faithfully and thoroughly cover this section's topic. Cover every key concept, definition, example, argument, relationship between ideas, and practical takeaway. Do not abbreviate, summarize, or truncate.
+2. Be absolutely FAITHFUL to the information in the source. Paraphrasing is encouraged, but every fact, claim, concept, and example must accurately reflect the source. Do not invent, embellish, or add information not supported by the source.
+3. Organize your writing using clear Markdown subheadings (####), bold text, and bullet points where appropriate to make it highly readable and scannable.
+4. Do NOT use placeholders, TBD, or lorem ipsum.
+5. Do NOT include any quiz questions, multiple choice, true/false, or assessment items. This is PURE CONTENT only.`
+
+// Step 3: Question Generator — produces exactly 1 MCQ from a content summary.
+// The full content is NOT sent to the LLM — only a summary for context.
+// The JSON wrapping is done programmatically in Go code.
+const questionGenPrompt = `You are an expert assessment designer. Based on the educational content summary provided, generate exactly ONE high-quality multiple-choice question.
+
+Output ONLY valid JSON for the question data — no markdown, no other text:
+
+{
+  "question": "A meaningful multiple-choice question testing deep comprehension/application of the content — NOT trivial recall of names/dates.",
+  "options": ["Option A", "Option B", "Option C", "Option D"],
+  "correct": 0,
+  "explanation": "A thorough 2-4 sentence explanation of why this answer is correct and why the others are fundamentally wrong."
+}
+
+CRITICAL RULES:
+1. The question must test meaningful understanding of the concepts — NOT trivial fact recall.
+2. All 4 options must be plausible. The incorrect options should be common misconceptions or related-but-wrong answers.
+3. The explanation must be thorough — explain both why the correct answer is right AND why each wrong answer is wrong.
+4. "correct" is a 0-based index into the options array.
+5. Output ONLY the JSON object shown above. No wrapping, no markdown fences, no extra text.`
+
+// EditCourse system prompt — for AI-driven course editing.
+const editCourseSystemPrompt = `You are an expert instructional designer and course editor. Given an existing course in JSON format and edit instructions, produce the full modified course JSON.
+
+Output ONLY valid JSON — no markdown. Structure:
 
 {
   "title": "Course Title",
-  "description": "2-3 sentence course overview",
+  "description": "Course overview paragraph(s)",
   "modules": [
     {
       "title": "Module Title",
-      "description": "What this module covers",
+      "description": "Module description",
       "items": [
-        {
-          "type": "content",
-          "data": {
-            "body": "Paragraphs of teaching material. Explain concepts clearly with examples and key takeaways. 2-4 paragraphs of substantive content."
-          }
-        },
-        {
-          "type": "mc",
-          "data": {
-            "question": "Question text based on the content above?",
-            "options": ["A", "B", "C", "D"],
-            "correct": 2,
-            "explanation": "Why this is correct"
-          }
-        }
+        {"type": "content", "data": { "body": "..." }},
+        {"type": "mc", "data": { "question": "...", "options": [...], "correct": 0, "explanation": "..." }}
       ]
     }
   ]
 }
 
-Item types and their data shapes:
-- "content" (learning material): { body: "Substantive teaching content — 2-4 paragraphs covering key concepts, definitions, examples, and important points from the source material." }
-- "mc" (multiple choice): { question, options: string[], correct: number (0-based index), explanation }
-- "ma" (multiple answer): { question, options: string[], correct: number[], explanation }
-- "tf" (true/false): { statement, answer: boolean, explanation }
-- "fb" (fill-blank): { text: "sentence with ___ blanks", blanks: string[] }
-- "sa" (short answer): { question, sample_answer, keywords: string[] }
-- "matching": { pairs: [{left: string, right: string}] }
-- "drag_sort": { items: string[] }
-- "sequence": { steps: string[] }
-- "scale": { question, min: number, max: number, min_label: string, max_label: string }
-
-Rules:
-- Every module MUST start with at least one "content" block that teaches the material. Do not skip this.
-- Follow content with 2-4 assessment items (mc, tf, sa, etc.) to reinforce the material.
-- Content blocks must be substantive — 2-4 paragraphs with key concepts, definitions, and practical examples.
-- Base ALL content and questions on the provided source material. Cite facts from it.
-- Do NOT use placeholders or lorem ipsum. Every field must contain real educational content.
-- 3-5 modules total.
-- Use "mc" most often for assessments, then "tf", "sa", "fb" where appropriate.
-- Only use "matching", "drag_sort", "sequence", "scale" when the content naturally suits it.`
+CRITICAL RULES:
+- Apply the edit instructions faithfully while preserving the overall course structure.
+- Content must remain accurate and educational.
+- Keep assessment items meaningful and not trivial.
+- Do not use placeholders or lorem ipsum.`
 
 type Handler struct {
 	Queries   *database.Queries
 	LLM       *LLMClient
 	EmbClient *embeddings.Client
+	Jobs      *JobStore
+	Worker    *Worker
 }
 
 func NewHandler(queries *database.Queries) *Handler {
+	llm := NewLLMClient()
+	emb := embeddings.NewClient()
+	store := newJobStore(queries)
+	worker := newWorker(store, queries, llm, emb)
 	return &Handler{
 		Queries:   queries,
-		LLM:       NewLLMClient(),
-		EmbClient: embeddings.NewClient(),
+		LLM:       llm,
+		EmbClient: emb,
+		Jobs:      store,
+		Worker:    worker,
 	}
 }
 
@@ -102,6 +150,18 @@ type genCourse struct {
 	Modules     []genModule `json:"modules"`
 }
 
+// planModule is the parsed result from Step 1 Markdown output.
+type planModule struct {
+	Title       string
+	Description string
+}
+
+type plan struct {
+	Title       string
+	Description string
+	Modules     []planModule
+}
+
 // ---- Request types ----
 
 type GenerateCourseRequest struct {
@@ -110,7 +170,7 @@ type GenerateCourseRequest struct {
 	SourceDocIDs []int64 `json:"source_doc_ids"`
 }
 
-// ---- SSE helpers ----
+// ---- SSE writer ----
 
 type sseWriter struct {
 	c       *gin.Context
@@ -148,8 +208,8 @@ func (w *sseWriter) sendError(msg string) {
 
 // ---- Handlers ----
 
-// GenerateCourse creates a course with AI-generated modules and items,
-// streaming progress events via SSE.
+// GenerateCourse enqueues a course generation job and returns immediately.
+// The client should then subscribe to the job's SSE stream for progress updates.
 func (h *Handler) GenerateCourse(c *gin.Context) {
 	var req GenerateCourseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -161,180 +221,92 @@ func (h *Handler) GenerateCourse(c *gin.Context) {
 		return
 	}
 
+	job := h.Jobs.create(req)
+	h.Worker.enqueue(job)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"job_id": job.ID,
+		"status": job.Status,
+	})
+}
+
+// GetJobStatus returns the current state of a generation job.
+func (h *Handler) GetJobStatus(c *gin.Context) {
+	id := JobID(c.Param("id"))
+	job := h.Jobs.get(id)
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		return
+	}
+
+	job.mu.RLock()
+	defer job.mu.RUnlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":         job.ID,
+		"status":     job.Status,
+		"steps":      job.Steps,
+		"modules":    job.Modules,
+		"result":     job.Result,
+		"error":      job.Error,
+		"created_at": job.CreatedAt,
+	})
+}
+
+// StreamJob opens an SSE connection and streams progress events for a job.
+func (h *Handler) StreamJob(c *gin.Context) {
+	id := JobID(c.Param("id"))
+	job := h.Jobs.get(id)
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		return
+	}
+
 	w, ok := newSSEWriter(c)
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Streaming not supported"})
 		return
 	}
 
-	// Step 1: Embed the prompt
-	w.send("step", map[string]string{
-		"step":   "embedding",
-		"detail": "Analyzing your course description...",
-	})
-	embeddings, err := h.EmbClient.Embed([]string{req.Description})
-	if err != nil {
-		log.Printf("[ai] embed prompt: %v", err)
-		w.sendError("Failed to analyze description")
+	sub := job.subscribe()
+	defer job.unsubscribe(sub)
+
+	// Replay any steps that already happened (catch-up)
+	job.mu.RLock()
+	for _, step := range job.Steps {
+		w.send("step", step)
+	}
+	for _, mod := range job.Modules {
+		w.send("module", gin.H{"module": mod})
+	}
+	if job.Status == "completed" {
+		w.send("done", job.Result)
+		job.mu.RUnlock()
 		return
 	}
-	promptVec := pgvector.NewVector(float64ToFloat32(embeddings[0]))
-
-	// Step 2: Search for relevant chunks
-	w.send("step", map[string]string{
-		"step":   "searching",
-		"detail": "Searching approved documents for relevant content...",
-	})
-	chunks, err := h.Queries.SearchDocumentChunks(c.Request.Context(), database.SearchDocumentChunksParams{
-		Embedding: promptVec,
-		Limit:     15,
-	})
-	if err != nil {
-		log.Printf("[ai] search chunks: %v", err)
-		w.sendError("Failed to search documents")
+	if job.Status == "failed" {
+		w.send("error", map[string]string{"message": job.Error})
+		job.mu.RUnlock()
 		return
 	}
-	if len(chunks) == 0 {
-		w.send("step", map[string]string{
-			"step":   "searching",
-			"detail": "No approved documents found. Using general knowledge...",
-		})
-	}
+	job.mu.RUnlock()
 
-	// Step 3: Build context
-	var contextBuilder strings.Builder
-	for i, ch := range chunks {
-		contextBuilder.WriteString(fmt.Sprintf("\n--- Source: %s (chunk %d) ---\n%s\n",
-			ch.DocumentTitle, i+1, ch.Content))
-	}
-	context := contextBuilder.String()
-
-	// Step 4: Call LLM
-	w.send("step", map[string]string{
-		"step":   "ai_writing",
-		"detail": fmt.Sprintf("AI is writing your course using %d source chunks...", len(chunks)),
-	})
-	log.Printf("[ai] generating course: %s", req.Title)
-	userPrompt := fmt.Sprintf(`Course topic: %s
-Course description/idea: %s
-
-Source material:
-%s
-
-Generate the course JSON based on the source material above.`, req.Title, req.Description, context)
-
-	response, err := h.LLM.Chat(courseGenSystemPrompt, userPrompt)
-	if err != nil {
-		log.Printf("[ai] llm chat: %v", err)
-		w.sendError("AI generation failed")
-		return
-	}
-
-	// Step 5: Parse
-	w.send("step", map[string]string{
-		"step":   "parsing",
-		"detail": "Structuring the course content...",
-	})
-	jsonStr := stripMarkdownFences(response)
-
-	var gen genCourse
-	if err := json.Unmarshal([]byte(jsonStr), &gen); err != nil {
-		log.Printf("[ai] parse course json: %v\nRaw: %s", err, response[:min(len(response), 500)])
-		w.sendError("Failed to parse AI response")
-		return
-	}
-
-	// Build source references for the frontend
-	sourceRefs := make([]gin.H, 0, len(chunks))
-	for _, ch := range chunks {
-		excerpt := ch.Content
-		if len(excerpt) > 300 {
-			excerpt = excerpt[:300] + "..."
-		}
-		sourceRefs = append(sourceRefs, gin.H{
-			"document_id":    ch.DocumentID,
-			"document_title": ch.DocumentTitle,
-			"chunk_index":    ch.ChunkIndex,
-			"excerpt":        excerpt,
-		})
-	}
-
-	// Step 6: Store
-	w.send("step", map[string]string{
-		"step":   "saving",
-		"detail": fmt.Sprintf("Saving course: %s (%d modules)...", gen.Title, len(gen.Modules)),
-	})
-	settingsMap := map[string]interface{}{
-		"sources": sourceRefs,
-	}
-	settingsJSON, _ := json.Marshal(settingsMap)
-
-	course, err := h.Queries.CreateCourse(c.Request.Context(), database.CreateCourseParams{
-		Title:        gen.Title,
-		Description:  gen.Description,
-		CreatedBy:    1,
-		SourceDocIds: req.SourceDocIDs,
-		Settings:     settingsJSON,
-	})
-	if err != nil {
-		log.Printf("[ai] create course: %v", err)
-		w.sendError("Failed to save course")
-		return
-	}
-
-	modulesResult := make([]gin.H, 0)
-	for mi, mod := range gen.Modules {
-		module, err := h.Queries.CreateModule(c.Request.Context(), database.CreateModuleParams{
-			CourseID:    course.ID,
-			Title:       mod.Title,
-			Description: mod.Description,
-			SortOrder:   int32(mi),
-		})
-		if err != nil {
-			log.Printf("[ai] create module: %v", err)
-			continue
-		}
-
-		itemsResult := make([]gin.H, 0)
-		for ii, item := range mod.Items {
-			ci, err := h.Queries.CreateCourseItem(c.Request.Context(), database.CreateCourseItemParams{
-				CourseID:  course.ID,
-				ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
-				ItemType:  item.Type,
-				SortOrder: int32(ii),
-				Data:      []byte(item.Data),
-			})
-			if err != nil {
-				log.Printf("[ai] create item: %v", err)
-				continue
+	// Stream new events as they arrive
+	ctx := c.Request.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-sub:
+			if !ok {
+				return
 			}
-			itemsResult = append(itemsResult, gin.H{
-				"id":         ci.ID,
-				"item_type":  ci.ItemType,
-				"sort_order": ci.SortOrder,
-				"data":       json.RawMessage(ci.Data),
-			})
+			w.send(event.Event, event.Data)
+			if event.Event == "done" || event.Event == "error" {
+				return
+			}
 		}
-
-		modulesResult = append(modulesResult, gin.H{
-			"id":          module.ID,
-			"title":       module.Title,
-			"description": module.Description,
-			"sort_order":  module.SortOrder,
-			"items":       itemsResult,
-		})
 	}
-
-	// Done — send full course with sources
-	w.send("done", gin.H{
-		"id":             course.ID,
-		"title":          course.Title,
-		"description":    course.Description,
-		"status":         course.Status,
-		"source_doc_ids": course.SourceDocIds,
-		"sources":        sourceRefs,
-		"modules":        modulesResult,
-	})
 }
 
 // ListCourses returns all courses.
@@ -350,14 +322,13 @@ func (h *Handler) ListCourses(c *gin.Context) {
 	c.JSON(http.StatusOK, courses)
 }
 
-// GetCourse returns a course with its modules and items.
+// GetCourse returns a single course with modules and items.
 func (h *Handler) GetCourse(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
 	}
-
 	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
@@ -415,11 +386,85 @@ func (h *Handler) GetCourse(c *gin.Context) {
 	})
 }
 
+// PreviewCourse returns any course with modules and items for student-perspective preview,
+// regardless of publish status.
+func (h *Handler) PreviewCourse(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	modules, _ := h.Queries.GetModulesByCourse(c.Request.Context(), id)
+	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
+
+	itemMap := make(map[int64][]gin.H)
+	for _, item := range items {
+		mid := item.ModuleID.Int64
+		itemMap[mid] = append(itemMap[mid], gin.H{
+			"id":         item.ID,
+			"item_type":  item.ItemType,
+			"sort_order": item.SortOrder,
+			"data":       json.RawMessage(item.Data),
+		})
+	}
+
+	modulesResult := make([]gin.H, 0)
+	for _, m := range modules {
+		modItems := itemMap[m.ID]
+		if modItems == nil {
+			modItems = []gin.H{}
+		}
+		modulesResult = append(modulesResult, gin.H{
+			"id":          m.ID,
+			"title":       m.Title,
+			"description": m.Description,
+			"sort_order":  m.SortOrder,
+			"items":       modItems,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"title":       course.Title,
+		"description": course.Description,
+		"modules":     modulesResult,
+	})
+}
+
+// ListActiveJobs returns all currently active generation jobs.
+// The frontend uses this to discover in-progress generations across tabs.
+func (h *Handler) ListActiveJobs(c *gin.Context) {
+	active := h.Jobs.listActive()
+	result := make([]gin.H, len(active))
+	for i, job := range active {
+		job.mu.RLock()
+		result[i] = gin.H{
+			"id":         job.ID,
+			"status":     job.Status,
+			"steps":      job.Steps,
+			"modules":    job.Modules,
+			"created_at": job.CreatedAt,
+		}
+		job.mu.RUnlock()
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 // RegisterRoutes adds course generation routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/courses/generate", h.GenerateCourse)
+	r.GET("/courses/generate/active", h.ListActiveJobs)
+	r.GET("/courses/generate/:id", h.GetJobStatus)
+	r.GET("/courses/generate/:id/stream", h.StreamJob)
 	r.GET("/courses", h.ListCourses)
 	r.GET("/courses/:id", h.GetCourse)
+	r.GET("/courses/:id/preview", h.PreviewCourse)
 	r.PUT("/courses/:id/edit", h.EditCourse)
 }
 
@@ -486,7 +531,7 @@ Edit instructions: %s
 Apply these edits and return the FULL modified course JSON (not just the changes). Follow the same structure.`, string(currentJSON), body.Instructions)
 
 	log.Printf("[ai] editing course %d: %s", id, body.Instructions)
-	response, err := h.LLM.Chat(courseGenSystemPrompt, editPrompt)
+	response, err := h.LLM.Chat(editCourseSystemPrompt, editPrompt)
 	if err != nil {
 		log.Printf("[ai] edit llm: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI edit failed"})
@@ -577,6 +622,107 @@ func stripMarkdownFences(s string) string {
 		s = strings.TrimSuffix(s, "```")
 	}
 	return strings.TrimSpace(s)
+}
+
+// parsePlanMarkdown extracts a course plan from Step 1's Markdown output.
+//
+// Expected format:
+//
+//	# Course Title: [Title]
+//	[Description paragraph(s)]
+//
+//	## Module 1: [Module Title]
+//	**Description:** [Description]
+//
+//	## Module 2: [Module Title]
+//	**Description:** [Description]
+func parsePlanMarkdown(md string) plan {
+	result := plan{}
+
+	// Split on "## Module" to find module boundaries.
+	// Everything before the first "## Module" is the course header.
+	moduleRe := regexp.MustCompile(`(?m)^## Module \d+:\s*`)
+	locs := moduleRe.FindAllStringIndex(md, -1)
+
+	var headerSection string
+	var moduleSections []string
+
+	if len(locs) == 0 {
+		// Fallback: treat the whole thing as header
+		headerSection = md
+	} else {
+		headerSection = md[:locs[0][0]]
+		for i, loc := range locs {
+			end := len(md)
+			if i+1 < len(locs) {
+				end = locs[i+1][0]
+			}
+			moduleSections = append(moduleSections, md[loc[0]:end])
+		}
+	}
+
+	// Parse course title from header
+	titleRe := regexp.MustCompile(`(?m)^#\s+(?:Course Title:\s*)?(.+)$`)
+	if match := titleRe.FindStringSubmatch(headerSection); match != nil {
+		result.Title = strings.TrimSpace(match[1])
+	}
+
+	// Parse course description: everything in header that's not the title line
+	descLines := strings.Split(headerSection, "\n")
+	var descBuilder strings.Builder
+	for _, line := range descLines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		descBuilder.WriteString(trimmed)
+		descBuilder.WriteString("\n")
+	}
+	result.Description = strings.TrimSpace(descBuilder.String())
+
+	// Parse each module
+	for _, sec := range moduleSections {
+		pm := planModule{}
+
+		// Extract module title from the "## Module N: Title" line
+		modTitleRe := regexp.MustCompile(`^## Module \d+:\s*(.+)$`)
+		lines := strings.Split(sec, "\n")
+		for _, line := range lines {
+			if match := modTitleRe.FindStringSubmatch(strings.TrimSpace(line)); match != nil {
+				pm.Title = strings.TrimSpace(match[1])
+				break
+			}
+		}
+
+		// Extract description from **Description:** line
+		descRe := regexp.MustCompile(`\*\*Description:\*\*\s*(.+)`)
+		for _, line := range lines {
+			if match := descRe.FindStringSubmatch(line); match != nil {
+				pm.Description = strings.TrimSpace(match[1])
+				break
+			}
+		}
+
+		// Also try without bold markers (some LLMs drop the **)
+		if pm.Description == "" {
+			plainDescRe := regexp.MustCompile(`Description:\s*(.+)`)
+			for _, line := range lines {
+				if match := plainDescRe.FindStringSubmatch(line); match != nil {
+					pm.Description = strings.TrimSpace(match[1])
+					break
+				}
+			}
+		}
+
+		if pm.Title != "" {
+			result.Modules = append(result.Modules, pm)
+		}
+	}
+
+	return result
 }
 
 func float64ToFloat32(in []float64) []float32 {

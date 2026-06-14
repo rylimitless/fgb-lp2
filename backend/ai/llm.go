@@ -59,7 +59,7 @@ func (c *LLMClient) Chat(systemPrompt, userPrompt string) (string, error) {
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		MaxTokens: 8000,
+		MaxTokens: 16000,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

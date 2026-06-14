@@ -6,9 +6,11 @@ import (
 	"fgb-lp/ai"
 	"fgb-lp/app"
 	"fgb-lp/coach"
+	"fgb-lp/content_repository"
 	database "fgb-lp/database/queries"
 	"fgb-lp/documents"
 	"fgb-lp/lessons"
+	"fgb-lp/middlewares"
 	"fgb-lp/review"
 	"fgb-lp/worker"
 	"fmt"
@@ -36,6 +38,10 @@ func main() {
 	defer dbpool.Close()
 
 	queries := database.New(dbpool)
+
+	// Run startup migrations for schema changes that may not be applied
+	// (docker-entrypoint-initdb.d only runs on first container creation)
+	runMigrations(dbpool)
 
 	app := &app.App{
 		Pool:    dbpool,
@@ -102,7 +108,9 @@ func main() {
 
 	protected := r.Group("/api")
 
-	protected.POST("/logout", func(c *gin.Context) {
+	protected.Use(middlewares.RequireAuth(app.Queries))
+
+	r.POST("/api/logout", func(c *gin.Context) {
 		token, _ := c.Cookie("session_token")
 		_ = app.Logout(c.Request.Context(), token)
 		c.SetCookie("session_token", "", -1, "/", "", false, true)
@@ -152,8 +160,61 @@ func main() {
 	adaptiveHandler := adaptive.NewHandler(queries)
 	adaptiveHandler.RegisterRoutes(protected)
 
+	repoHandler := content_repository.NewHandler(dbpool)
+	repoHandler.RegisterRoutes(protected)
+
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())
 
 	r.Run(":5555")
+}
+
+// runMigrations applies schema changes that haven't been applied via docker-entrypoint.
+func runMigrations(pool *pgxpool.Pool) {
+	ctx := context.Background()
+
+	// Fix course_items constraint to allow 'content' type
+	_, err := pool.Exec(ctx, `
+DO $$
+DECLARE
+  constraint_name text;
+BEGIN
+  SELECT con.conname INTO constraint_name
+  FROM pg_constraint con
+  JOIN pg_class rel ON rel.oid = con.conrelid
+  WHERE rel.relname = 'course_items'
+    AND con.contype = 'c'
+    AND pg_get_constraintdef(con.oid) LIKE '%item_type%';
+  IF constraint_name IS NOT NULL THEN
+    EXECUTE 'ALTER TABLE course_items DROP CONSTRAINT ' || constraint_name;
+  END IF;
+END $$;
+
+ALTER TABLE course_items DROP CONSTRAINT IF EXISTS course_items_item_type_check;
+ALTER TABLE course_items ADD CONSTRAINT course_items_item_type_check
+  CHECK (item_type IN ('content','mc','ma','tf','fb','sa','matching','drag_sort','hotspot','sequence','scale'));
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration course_items constraint: %v\n", err)
+	}
+
+	// Create jobs table if it doesn't exist
+	_, err = pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS course_generation_jobs (
+  id text primary key,
+  status text not null default 'pending'
+    check (status in ('pending', 'running', 'completed', 'failed')),
+  request jsonb not null,
+  steps jsonb not null default '[]',
+  modules jsonb not null default '[]',
+  result jsonb,
+  error text,
+  course_id bigint references courses(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration jobs table: %v\n", err)
+	}
 }
