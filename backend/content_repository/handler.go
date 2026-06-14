@@ -1,6 +1,8 @@
 package content_repository
 
 import (
+	"fgb-lp/audit"
+	database "fgb-lp/database/queries"
 	"fgb-lp/middlewares"
 	"fmt"
 	"net/http"
@@ -14,11 +16,12 @@ import (
 )
 
 type Handler struct {
-	Pool *pgxpool.Pool
+	Pool    *pgxpool.Pool
+	Queries *database.Queries
 }
 
-func NewHandler(pool *pgxpool.Pool) *Handler {
-	return &Handler{Pool: pool}
+func NewHandler(pool *pgxpool.Pool, queries *database.Queries) *Handler {
+	return &Handler{Pool: pool, Queries: queries}
 }
 
 // userIdentity returns "Name (Role)" for the currently authenticated user.
@@ -183,6 +186,11 @@ func (h *Handler) DeleteDocument(c *gin.Context) {
 		return
 	}
 
+	audit.Log(h.Queries, c, "document_deleted", map[string]any{
+		"document_id": id,
+		"file_path":   filePath,
+	})
+
 	// Try to remove the file (best effort)
 	os.Remove(filepath.Join("uploads", filePath))
 	c.JSON(http.StatusOK, gin.H{"message": "Document deleted"})
@@ -195,12 +203,22 @@ func (h *Handler) DeleteCourse(c *gin.Context) {
 		return
 	}
 
+	// Get title before deleting for audit
+	var title string
+	h.Pool.QueryRow(c.Request.Context(),
+		"SELECT title FROM courses WHERE id = $1", id).Scan(&title)
+
 	_, err = h.Pool.Exec(c.Request.Context(),
 		"DELETE FROM courses WHERE id = $1", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete course"})
 		return
 	}
+
+	audit.Log(h.Queries, c, "course_deleted", map[string]any{
+		"course_id": id,
+		"title":     title,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "Course deleted"})
 }
@@ -239,6 +257,10 @@ func (h *Handler) ResubmitDocument(c *gin.Context) {
 		return
 	}
 
+	audit.Log(h.Queries, c, "document_resubmitted", map[string]any{
+		"document_id": id,
+	})
+
 	c.JSON(http.StatusOK, gin.H{"message": "Document resubmitted for review"})
 }
 
@@ -275,6 +297,10 @@ func (h *Handler) ResubmitCourse(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resubmit course"})
 		return
 	}
+
+	audit.Log(h.Queries, c, "course_resubmitted", map[string]any{
+		"course_id": id,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "Course resubmitted for review"})
 }

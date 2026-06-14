@@ -3,6 +3,7 @@ package coach
 import (
 	"context"
 	"fgb-lp/ai"
+	"fgb-lp/audit"
 	database "fgb-lp/database/queries"
 	"fgb-lp/embeddings"
 	"fmt"
@@ -89,6 +90,12 @@ func (h *Handler) Chat(c *gin.Context) {
 			SourcesCount: int32(len(sources)),
 		})
 	}()
+
+	// Audit log the GIA query
+	audit.Log(h.Queries, c, "gia_query", map[string]any{
+		"question":      req.Message,
+		"sources_count": len(sources),
+	})
 
 	if len(chunks) == 0 {
 		c.JSON(http.StatusOK, gin.H{

@@ -5,9 +5,12 @@
         MessageSquare,
         Target,
         Zap,
+        ClipboardList,
+        ArrowRight,
     } from "@lucide/svelte";
     import { onMount } from "svelte";
     import { Chart, registerables } from "chart.js";
+    import { goto } from "$app/navigation";
 
     Chart.register(...registerables);
 
@@ -17,6 +20,7 @@
     let mostFailed = $derived(data.mostFailed ?? []);
     let courseEffectiveness = $derived(data.courseEffectiveness ?? []);
     let coachUsage = $derived(data.coachUsage ?? []);
+    let auditLog = $derived(data.auditLog ?? []);
 
     // Chart.js instances
     let failedCanvas = $state<HTMLCanvasElement>();
@@ -39,6 +43,36 @@
 
     function truncate(str: string, len: number): string {
         return str.length > len ? str.slice(0, len) + "…" : str;
+    }
+
+    function actionBadge(action: string): string {
+        if (action.startsWith("login")) return "bg-blue-500/10 text-blue-500";
+        if (action.includes("failed")) return "bg-red-500/10 text-red-500";
+        if (action.includes("created") || action.includes("uploaded"))
+            return "bg-emerald-500/10 text-emerald-500";
+        if (action.includes("deleted")) return "bg-red-500/10 text-red-500";
+        if (action.includes("reviewed"))
+            return "bg-amber-500/10 text-amber-500";
+        if (action.includes("approved"))
+            return "bg-emerald-500/10 text-emerald-500";
+        if (action.startsWith("gia")) return "bg-violet-500/10 text-violet-500";
+        if (action.includes("user_")) return "bg-cyan-500/10 text-cyan-500";
+        return "bg-muted text-muted-foreground";
+    }
+
+    function formatDetails(entry: any): string {
+        const d = entry.details;
+        if (!d || typeof d !== "object") return "—";
+        // Show msg first, then other keys
+        const parts: string[] = [];
+        if (d.msg) parts.push(d.msg);
+        for (const [k, v] of Object.entries(d)) {
+            if (k === "msg" || k === "user_id" || k === "reason") continue;
+            if (typeof v === "string") parts.push(v);
+            else if (typeof v === "number") parts.push(`${k}: ${v}`);
+        }
+        if (d.reason && d.email) return `Failed login for ${d.email}`;
+        return parts.join(" · ") || "—";
     }
 
     onMount(() => {
@@ -444,5 +478,84 @@
                 </div>
             {/if}
         </div>
+    </div>
+
+    <!-- Audit Log Preview -->
+    <div class="rounded-xl border border-border bg-card p-5">
+        <div class="flex items-center justify-between mb-4">
+            <h3
+                class="text-sm font-semibold text-foreground flex items-center gap-2"
+            >
+                <ClipboardList class="size-4 text-muted-foreground" />
+                Recent Activity
+            </h3>
+            <button
+                class="text-xs text-primary hover:underline flex items-center gap-1"
+                onclick={() => goto("/audit-log")}
+            >
+                View full audit log <ArrowRight class="size-3" />
+            </button>
+        </div>
+        {#if auditLog.length === 0}
+            <p class="text-sm text-muted-foreground py-4 text-center">
+                No audit events recorded yet.
+            </p>
+        {:else}
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr
+                            class="text-left text-xs text-muted-foreground border-b border-border"
+                        >
+                            <th class="pb-2 pr-3 font-medium">Time</th>
+                            <th class="pb-2 pr-3 font-medium">User</th>
+                            <th class="pb-2 pr-3 font-medium">Action</th>
+                            <th class="pb-2 font-medium">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each auditLog.slice(0, 10) as entry}
+                            <tr class="border-b border-border/50">
+                                <td
+                                    class="py-2 pr-3 text-xs text-muted-foreground whitespace-nowrap"
+                                >
+                                    {new Date(
+                                        entry.created_at,
+                                    ).toLocaleString()}
+                                </td>
+                                <td class="py-2 pr-3 text-xs whitespace-nowrap">
+                                    {#if entry.user_name}
+                                        <span class="text-foreground"
+                                            >{entry.user_name}</span
+                                        >
+                                        <span class="text-muted-foreground ml-1"
+                                            >({entry.user_role})</span
+                                        >
+                                    {:else}
+                                        <span class="text-muted-foreground"
+                                            >System</span
+                                        >
+                                    {/if}
+                                </td>
+                                <td class="py-2 pr-3 whitespace-nowrap">
+                                    <span
+                                        class="inline-block px-1.5 py-0.5 rounded text-xs font-medium {actionBadge(
+                                            entry.action,
+                                        )}"
+                                    >
+                                        {entry.action}
+                                    </span>
+                                </td>
+                                <td
+                                    class="py-2 text-xs text-muted-foreground max-w-xs truncate"
+                                >
+                                    {formatDetails(entry)}
+                                </td>
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
+            </div>
+        {/if}
     </div>
 </div>

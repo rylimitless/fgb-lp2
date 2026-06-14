@@ -188,7 +188,7 @@ func main() {
 	adaptiveHandler := adaptive.NewHandler(queries)
 	adaptiveHandler.RegisterRoutes(protected)
 
-	repoHandler := content_repository.NewHandler(dbpool)
+	repoHandler := content_repository.NewHandler(dbpool, queries)
 	repoHandler.RegisterRoutes(protected)
 
 	notifHandler := notifications.NewHandler(queries)
@@ -361,12 +361,29 @@ SELECT 'auditor', id FROM permissions WHERE name IN (
 )
 ON CONFLICT (role, permission_id) DO NOTHING;
 
--- Migrate existing single-role users into user_roles table
-INSERT INTO user_roles (user_id, role)
-SELECT id, role FROM users
-ON CONFLICT (user_id, role) DO NOTHING;
-	`)
+	// Migrate existing single-role users into user_roles table
+	INSERT INTO user_roles (user_id, role)
+	SELECT id, role FROM users
+	ON CONFLICT (user_id, role) DO NOTHING;
+		`)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration role_permissions seed: %v\n", err)
+	}
+
+	// Create audit_log table if it doesn't exist
+	_, err = pool.Exec(ctx, `
+	CREATE TABLE IF NOT EXISTS audit_log (
+	  id bigserial primary key,
+	  user_id bigint references users(id) on delete set null,
+	  action text not null,
+	  details jsonb not null default '{}',
+	  created_at timestamptz not null default now()
+	);
+	CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at desc);
+	CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
+	CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+		`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration audit_log table: %v\n", err)
 	}
 }

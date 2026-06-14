@@ -237,3 +237,15 @@ create table if not exists coach_queries (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_coach_queries_created_at on coach_queries(created_at);
+
+-- Audit log: single table capturing all significant actions for admin review
+create table if not exists audit_log (
+  id bigserial primary key,
+  user_id bigint references users(id) on delete set null,
+  action text not null,
+  details jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_audit_log_created_at on audit_log(created_at desc);
+create index if not exists idx_audit_log_user_id on audit_log(user_id);
+create index if not exists idx_audit_log_action on audit_log(action);

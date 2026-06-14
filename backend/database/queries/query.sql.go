@@ -539,6 +539,63 @@ func (q *Queries) GetApprovedDocuments(ctx context.Context) ([]Document, error) 
 	return items, nil
 }
 
+const getAuditLogs = `-- name: GetAuditLogs :many
+select
+  al.id, al.user_id, al.action, al.details, al.created_at,
+  u.name as user_name,
+  u.email as user_email,
+  u.role as user_role
+from audit_log al
+left join users u on u.id = al.user_id
+order by al.created_at desc
+limit $1 offset $2
+`
+
+type GetAuditLogsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type GetAuditLogsRow struct {
+	ID        int64              `json:"id"`
+	UserID    pgtype.Int8        `json:"user_id"`
+	Action    string             `json:"action"`
+	Details   []byte             `json:"details"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UserName  pgtype.Text        `json:"user_name"`
+	UserEmail pgtype.Text        `json:"user_email"`
+	UserRole  pgtype.Text        `json:"user_role"`
+}
+
+func (q *Queries) GetAuditLogs(ctx context.Context, arg GetAuditLogsParams) ([]GetAuditLogsRow, error) {
+	rows, err := q.db.Query(ctx, getAuditLogs, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAuditLogsRow
+	for rows.Next() {
+		var i GetAuditLogsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Action,
+			&i.Details,
+			&i.CreatedAt,
+			&i.UserName,
+			&i.UserEmail,
+			&i.UserRole,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCoachQueriesOverTime = `-- name: GetCoachQueriesOverTime :many
 select
   date_trunc('day', created_at)::date as day,
@@ -1217,6 +1274,31 @@ func (q *Queries) GetUserNotifications(ctx context.Context, arg GetUserNotificat
 		return nil, err
 	}
 	return items, nil
+}
+
+const insertAuditLog = `-- name: InsertAuditLog :one
+insert into audit_log (user_id, action, details)
+values ($1, $2, $3)
+returning id, user_id, action, details, created_at
+`
+
+type InsertAuditLogParams struct {
+	UserID  pgtype.Int8 `json:"user_id"`
+	Action  string      `json:"action"`
+	Details []byte      `json:"details"`
+}
+
+func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) (AuditLog, error) {
+	row := q.db.QueryRow(ctx, insertAuditLog, arg.UserID, arg.Action, arg.Details)
+	var i AuditLog
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Action,
+		&i.Details,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const insertCoachQuery = `-- name: InsertCoachQuery :one

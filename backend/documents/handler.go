@@ -1,6 +1,7 @@
 package documents
 
 import (
+	"fgb-lp/audit"
 	database "fgb-lp/database/queries"
 	"fgb-lp/middlewares"
 	"fgb-lp/worker"
@@ -85,6 +86,12 @@ func (h *Handler) UploadDocument(c *gin.Context) {
 		return
 	}
 
+	audit.Log(h.Queries, c, "document_uploaded", map[string]any{
+		"document_id": doc.ID,
+		"title":       doc.Title,
+		"filename":    header.Filename,
+	})
+
 	c.JSON(http.StatusCreated, doc)
 }
 
@@ -111,6 +118,11 @@ func (h *Handler) DeleteDocument(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete document"})
 		return
 	}
+
+	audit.Log(h.Queries, c, "document_deleted", map[string]any{
+		"document_id": id,
+		"title":       doc.Title,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "Document deleted"})
 }
@@ -140,6 +152,12 @@ func (h *Handler) ApproveDocument(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
 		return
 	}
+
+	audit.Log(h.Queries, c, "document_approved", map[string]any{
+		"document_id": id,
+		"title":       doc.Title,
+		"approved":    body.Approved,
+	})
 
 	c.JSON(http.StatusOK, doc)
 }

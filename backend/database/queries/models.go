@@ -9,6 +9,14 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+type AuditLog struct {
+	ID        int64              `json:"id"`
+	UserID    pgtype.Int8        `json:"user_id"`
+	Action    string             `json:"action"`
+	Details   []byte             `json:"details"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type CoachQuery struct {
 	ID           int64              `json:"id"`
 	UserID       pgtype.Int8        `json:"user_id"`
@@ -160,4 +168,9 @@ type User struct {
 	Role         string             `json:"role"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserRole struct {
+	UserID int64  `json:"user_id"`
+	Role   string `json:"role"`
 }

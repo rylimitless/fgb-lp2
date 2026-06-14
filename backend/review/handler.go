@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"fgb-lp/audit"
 	database "fgb-lp/database/queries"
 	"fmt"
 	"net/http"
@@ -177,6 +178,12 @@ func (h *Handler) ReviewDocument(c *gin.Context) {
 	// Notify the document owner
 	h.sendDocNotification(doc, body.ReviewStatus)
 
+	audit.Log(h.Queries, c, "document_reviewed", map[string]any{
+		"document_id":   id,
+		"title":         doc.Title,
+		"review_status": body.ReviewStatus,
+	})
+
 	c.JSON(http.StatusOK, doc)
 }
 
@@ -239,6 +246,12 @@ func (h *Handler) ReviewCourse(c *gin.Context) {
 
 	// Notify the course owner
 	h.sendCourseNotification(course, body.ReviewStatus)
+
+	audit.Log(h.Queries, c, "course_reviewed", map[string]any{
+		"course_id":     id,
+		"title":         course.Title,
+		"review_status": body.ReviewStatus,
+	})
 
 	c.JSON(http.StatusOK, course)
 }

@@ -270,3 +270,19 @@ from coach_queries
 group by day
 order by day desc
 limit $1;
+
+-- name: InsertAuditLog :one
+insert into audit_log (user_id, action, details)
+values ($1, $2, $3)
+returning *;
+
+-- name: GetAuditLogs :many
+select
+  al.*,
+  u.name as user_name,
+  u.email as user_email,
+  u.role as user_role
+from audit_log al
+left join users u on u.id = al.user_id
+order by al.created_at desc
+limit $1 offset $2;

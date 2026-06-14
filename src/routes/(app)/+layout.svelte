@@ -18,6 +18,7 @@
         Bell,
         LoaderCircle,
         BarChart3,
+        ClipboardList,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Tabs from "$lib/components/ui/tabs";
@@ -111,6 +112,13 @@
             icon: BarChart3,
             href: "/analytics",
             roles: ["admin", "manager", "auditor"],
+        },
+        {
+            value: "audit-log",
+            label: "Audit Log",
+            icon: ClipboardList,
+            href: "/audit-log",
+            roles: ["admin", "auditor"],
         },
     ];
 

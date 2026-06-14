@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	database "fgb-lp/database/queries"
+	"fgb-lp/audit"
 	"fgb-lp/embeddings"
 	"fmt"
 	"log"
@@ -277,6 +278,11 @@ func (w *Worker) completeJob(job *GenerationJob, result gin.H, courseID int64) {
 	w.queries.CompleteGenerationJob(context.Background(), string(job.ID), resultJSON, courseID)
 	job.broadcast(SSEEvent{Event: "done", Data: result})
 
+	// Audit log the course creation
+	audit.Log(w.queries, nil, "course_created", map[string]any{
+		"course_id":  courseID,
+		"title":      title,
+	})
 	// Notify all users that a new course is ready
 	notifyAll(w.queries,
 		"Course generation complete",

@@ -1,6 +1,7 @@
 package users
 
 import (
+	"fgb-lp/audit"
 	database "fgb-lp/database/queries"
 	"fgb-lp/functions"
 	"net/http"
@@ -120,6 +121,13 @@ func (h *Handler) CreateUser(c *gin.Context) {
 			user.ID, r)
 	}
 
+	audit.Log(h.Queries, c, "user_created", map[string]any{
+		"created_user_id": user.ID,
+		"email":           body.Email,
+		"name":            body.Name,
+		"roles":           allRoles,
+	})
+
 	c.JSON(http.StatusCreated, gin.H{
 		"id":    user.ID,
 		"email": user.Email,
@@ -138,7 +146,7 @@ func (h *Handler) UpdateUserRoles(c *gin.Context) {
 	}
 
 	// Verify user exists
-	_, err = h.Queries.GetUserByID(c.Request.Context(), id)
+	user, err := h.Queries.GetUserByID(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
@@ -188,6 +196,13 @@ func (h *Handler) UpdateUserRoles(c *gin.Context) {
 		"UPDATE users SET role = $2, updated_at = now() WHERE id = $1",
 		id, body.Roles[0])
 
+	audit.Log(h.Queries, c, "user_roles_updated", map[string]any{
+		"target_user_id": id,
+		"email":          user.Email,
+		"name":           user.Name,
+		"new_roles":      body.Roles,
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"id":    id,
 		"roles": body.Roles,
@@ -202,6 +217,13 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		return
 	}
 
+	// Get user info before deleting for audit
+	user, err := h.Queries.GetUserByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
 	// Delete from user_roles first (though CASCADE should handle this)
 	h.Queries.GetDB().Exec(c.Request.Context(),
 		"DELETE FROM user_roles WHERE user_id = $1", id)
@@ -210,6 +232,12 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
+
+	audit.Log(h.Queries, c, "user_deleted", map[string]any{
+		"deleted_user_id": id,
+		"email":           user.Email,
+		"name":            user.Name,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "User deleted"})
 }
