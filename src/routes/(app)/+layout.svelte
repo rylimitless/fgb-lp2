@@ -13,9 +13,11 @@
         Sparkles,
         ClipboardCheck,
         Library,
+        Ellipsis,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Tabs from "$lib/components/ui/tabs";
+    import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
 
     let { children } = $props();
 
@@ -34,6 +36,9 @@
             icon: Bot,
             href: "/gia-coach",
         },
+    ];
+
+    const moreTabs = [
         {
             value: "adaptive-room",
             label: "Adaptive Room",
@@ -73,21 +78,7 @@
     ];
 
     let currentTab = $state(
-        $page.url.pathname.startsWith("/content-studio")
-            ? "content-studio"
-            : $page.url.pathname.startsWith("/content-repository")
-              ? "content-repository"
-              : $page.url.pathname.startsWith("/ai-content-generator")
-                ? "ai-content-generator"
-                : $page.url.pathname.startsWith("/review-queue")
-                  ? "review-queue"
-                  : $page.url.pathname.startsWith("/lesson-player")
-                    ? "lesson-player"
-                    : $page.url.pathname.startsWith("/gia-coach")
-                      ? "gia-coach"
-                      : $page.url.pathname.startsWith("/adaptive-room")
-                        ? "adaptive-room"
-                        : "dashboard",
+        $page.url.pathname.startsWith("/gia-coach") ? "gia-coach" : "dashboard",
     );
 
     async function handleLogout() {
@@ -135,6 +126,27 @@
                     {/each}
                 </Tabs.List>
             </Tabs.Root>
+            <DropdownMenu.Root>
+                <DropdownMenu.Trigger>
+                    {#snippet child({ props })}
+                        <Button.Root {...props} variant="ghost" size="sm">
+                            <Ellipsis class="size-4" />
+                            <span>Menu</span>
+                        </Button.Root>
+                    {/snippet}
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Content class="w-56" align="start">
+                    {#each moreTabs as tab}
+                        <DropdownMenu.Item
+                            onclick={() => goto(tab.href)}
+                            class="py-2.5"
+                        >
+                            <tab.icon class="size-4" />
+                            <span class="text-sm">{tab.label}</span>
+                        </DropdownMenu.Item>
+                    {/each}
+                </DropdownMenu.Content>
+            </DropdownMenu.Root>
         </div>
         <Button.Root
             variant="ghost"
