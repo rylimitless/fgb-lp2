@@ -31,6 +31,7 @@ type Course struct {
 	Approved     pgtype.Bool        `json:"approved"`
 	ReviewStatus pgtype.Text        `json:"review_status"`
 	ReviewNotes  pgtype.Text        `json:"review_notes"`
+	ApprovedBy   pgtype.Int8        `json:"approved_by"`
 }
 
 type CourseGenerationJob struct {

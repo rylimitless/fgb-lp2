@@ -123,7 +123,7 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, userID pgtype.In
 const createCourse = `-- name: CreateCourse :one
 insert into courses (title, description, created_by, source_doc_ids, settings)
 values ($1, $2, $3, $4, $5)
-returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
 `
 
 type CreateCourseParams struct {
@@ -157,6 +157,7 @@ func (q *Queries) CreateCourse(ctx context.Context, arg CreateCourseParams) (Cou
 		&i.Approved,
 		&i.ReviewStatus,
 		&i.ReviewNotes,
+		&i.ApprovedBy,
 	)
 	return i, err
 }
@@ -574,7 +575,7 @@ func (q *Queries) GetCoachQueriesOverTime(ctx context.Context, limit int32) ([]G
 }
 
 const getCourseByID = `-- name: GetCourseByID :one
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses where id = $1
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses where id = $1
 `
 
 func (q *Queries) GetCourseByID(ctx context.Context, id int64) (Course, error) {
@@ -594,6 +595,7 @@ func (q *Queries) GetCourseByID(ctx context.Context, id int64) (Course, error) {
 		&i.Approved,
 		&i.ReviewStatus,
 		&i.ReviewNotes,
+		&i.ApprovedBy,
 	)
 	return i, err
 }
@@ -711,7 +713,7 @@ func (q *Queries) GetCourseItemsByModule(ctx context.Context, moduleID pgtype.In
 }
 
 const getCourses = `-- name: GetCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses order by updated_at desc
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses order by updated_at desc
 `
 
 func (q *Queries) GetCourses(ctx context.Context) ([]Course, error) {
@@ -737,6 +739,7 @@ func (q *Queries) GetCourses(ctx context.Context) ([]Course, error) {
 			&i.Approved,
 			&i.ReviewStatus,
 			&i.ReviewNotes,
+			&i.ApprovedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -1000,7 +1003,7 @@ func (q *Queries) GetPendingDocuments(ctx context.Context) ([]Document, error) {
 }
 
 const getPendingReviewCourses = `-- name: GetPendingReviewCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses where review_status = 'pending' order by updated_at desc limit $1 offset $2
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses where review_status = 'pending' order by updated_at desc limit $1 offset $2
 `
 
 type GetPendingReviewCoursesParams struct {
@@ -1031,6 +1034,7 @@ func (q *Queries) GetPendingReviewCourses(ctx context.Context, arg GetPendingRev
 			&i.Approved,
 			&i.ReviewStatus,
 			&i.ReviewNotes,
+			&i.ApprovedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -1085,7 +1089,7 @@ func (q *Queries) GetPendingReviewDocuments(ctx context.Context, arg GetPendingR
 }
 
 const getPublishedCourses = `-- name: GetPublishedCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses where status = 'published' and approved = true order by updated_at desc
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses where status = 'published' and approved = true order by updated_at desc
 `
 
 func (q *Queries) GetPublishedCourses(ctx context.Context) ([]Course, error) {
@@ -1111,6 +1115,7 @@ func (q *Queries) GetPublishedCourses(ctx context.Context) ([]Course, error) {
 			&i.Approved,
 			&i.ReviewStatus,
 			&i.ReviewNotes,
+			&i.ApprovedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -1381,7 +1386,7 @@ func (q *Queries) SearchDocumentChunks(ctx context.Context, arg SearchDocumentCh
 }
 
 const searchPublishedCourses = `-- name: SearchPublishedCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, ts_rank(to_tsvector('english', title || ' ' || description), plainto_tsquery('english', $1)) as rank
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, ts_rank(to_tsvector('english', title || ' ' || description), plainto_tsquery('english', $1)) as rank
 from courses
 where status = 'published' and approved = true
   and to_tsvector('english', title || ' ' || description) @@ plainto_tsquery('english', $1)
@@ -1408,6 +1413,7 @@ type SearchPublishedCoursesRow struct {
 	Approved     pgtype.Bool        `json:"approved"`
 	ReviewStatus pgtype.Text        `json:"review_status"`
 	ReviewNotes  pgtype.Text        `json:"review_notes"`
+	ApprovedBy   pgtype.Int8        `json:"approved_by"`
 	Rank         float32            `json:"rank"`
 }
 
@@ -1434,6 +1440,7 @@ func (q *Queries) SearchPublishedCourses(ctx context.Context, arg SearchPublishe
 			&i.Approved,
 			&i.ReviewStatus,
 			&i.ReviewNotes,
+			&i.ApprovedBy,
 			&i.Rank,
 		); err != nil {
 			return nil, err
@@ -1447,7 +1454,7 @@ func (q *Queries) SearchPublishedCourses(ctx context.Context, arg SearchPublishe
 }
 
 const updateCourseMeta = `-- name: UpdateCourseMeta :one
-update courses set title = $2, description = $3, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+update courses set title = $2, description = $3, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
 `
 
 type UpdateCourseMetaParams struct {
@@ -1473,6 +1480,7 @@ func (q *Queries) UpdateCourseMeta(ctx context.Context, arg UpdateCourseMetaPara
 		&i.Approved,
 		&i.ReviewStatus,
 		&i.ReviewNotes,
+		&i.ApprovedBy,
 	)
 	return i, err
 }
@@ -1482,10 +1490,11 @@ update courses
 set review_status = $2,
     review_notes = $3,
     approved = $4,
+    approved_by = $5,
     status = case when $4 then 'published' else status end,
     updated_at = now()
 where id = $1
-returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
 `
 
 type UpdateCourseReviewParams struct {
@@ -1493,6 +1502,7 @@ type UpdateCourseReviewParams struct {
 	ReviewStatus pgtype.Text `json:"review_status"`
 	ReviewNotes  pgtype.Text `json:"review_notes"`
 	Approved     pgtype.Bool `json:"approved"`
+	ApprovedBy   pgtype.Int8 `json:"approved_by"`
 }
 
 func (q *Queries) UpdateCourseReview(ctx context.Context, arg UpdateCourseReviewParams) (Course, error) {
@@ -1501,6 +1511,7 @@ func (q *Queries) UpdateCourseReview(ctx context.Context, arg UpdateCourseReview
 		arg.ReviewStatus,
 		arg.ReviewNotes,
 		arg.Approved,
+		arg.ApprovedBy,
 	)
 	var i Course
 	err := row.Scan(
@@ -1517,12 +1528,13 @@ func (q *Queries) UpdateCourseReview(ctx context.Context, arg UpdateCourseReview
 		&i.Approved,
 		&i.ReviewStatus,
 		&i.ReviewNotes,
+		&i.ApprovedBy,
 	)
 	return i, err
 }
 
 const updateCourseStatus = `-- name: UpdateCourseStatus :one
-update courses set status = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes
+update courses set status = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
 `
 
 type UpdateCourseStatusParams struct {
@@ -1547,6 +1559,7 @@ func (q *Queries) UpdateCourseStatus(ctx context.Context, arg UpdateCourseStatus
 		&i.Approved,
 		&i.ReviewStatus,
 		&i.ReviewNotes,
+		&i.ApprovedBy,
 	)
 	return i, err
 }

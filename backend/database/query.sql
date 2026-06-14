@@ -186,6 +186,7 @@ update courses
 set review_status = $2,
     review_notes = $3,
     approved = $4,
+    approved_by = $5,
     status = case when $4 then 'published' else status end,
     updated_at = now()
 where id = $1

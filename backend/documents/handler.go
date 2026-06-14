@@ -2,6 +2,7 @@ package documents
 
 import (
 	database "fgb-lp/database/queries"
+	"fgb-lp/middlewares"
 	"fgb-lp/worker"
 	"io"
 	"log"
@@ -163,8 +164,8 @@ func (h *Handler) GetDocumentChunks(c *gin.Context) {
 
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/documents", h.ListDocuments)
-	r.POST("/documents/upload", h.UploadDocument)
-	r.DELETE("/documents/:id", h.DeleteDocument)
-	r.PUT("/documents/:id/approve", h.ApproveDocument)
+	r.POST("/documents/upload", middlewares.WrapRequireRole(h.UploadDocument, "content creator"))
+	r.DELETE("/documents/:id", middlewares.WrapRequireRole(h.DeleteDocument, "content creator"))
+	r.PUT("/documents/:id/approve", middlewares.WrapRequireRole(h.ApproveDocument, "approver"))
 	r.GET("/documents/:id/chunks", h.GetDocumentChunks)
 }

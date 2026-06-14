@@ -1,6 +1,7 @@
 package content_repository
 
 import (
+	"fgb-lp/middlewares"
 	"fmt"
 	"net/http"
 	"os"
@@ -268,7 +269,7 @@ func (h *Handler) ResubmitCourse(c *gin.Context) {
 	}
 
 	_, err = h.Pool.Exec(c.Request.Context(),
-		`UPDATE courses SET review_status = 'pending', review_notes = $2, approved = false WHERE id = $1`,
+		`UPDATE courses SET review_status = 'pending', review_notes = $2, approved = false, approved_by = null WHERE id = $1`,
 		id, finalNotes)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resubmit course"})
@@ -280,8 +281,8 @@ func (h *Handler) ResubmitCourse(c *gin.Context) {
 
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/content-repository", h.ListContent)
-	r.DELETE("/content-repository/documents/:id", h.DeleteDocument)
-	r.DELETE("/content-repository/courses/:id", h.DeleteCourse)
-	r.PUT("/content-repository/documents/:id/resubmit", h.ResubmitDocument)
-	r.PUT("/content-repository/courses/:id/resubmit", h.ResubmitCourse)
+	r.DELETE("/content-repository/documents/:id", middlewares.WrapRequireRole(h.DeleteDocument, "content creator"))
+	r.DELETE("/content-repository/courses/:id", middlewares.WrapRequireRole(h.DeleteCourse, "content creator"))
+	r.PUT("/content-repository/documents/:id/resubmit", middlewares.WrapRequireRole(h.ResubmitDocument, "content creator"))
+	r.PUT("/content-repository/courses/:id/resubmit", middlewares.WrapRequireRole(h.ResubmitCourse, "content creator"))
 }

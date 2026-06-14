@@ -24,75 +24,103 @@
     import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
     import { onMount } from "svelte";
 
-    let { children } = $props();
+    let { children, data } = $props();
 
     let loggingOut = $state(false);
 
-    const navTabs = [
+    // User roles from the layout server load
+    let userRoles: string[] = $derived(data?.user?.roles ?? []);
+
+    // Check if user has any of the specified roles (admin always passes)
+    function hasRole(...roles: string[]): boolean {
+        if (userRoles.includes("admin")) return true;
+        return roles.some((r) => userRoles.includes(r));
+    }
+
+    // All possible nav tabs with role requirements (empty roles = everyone)
+    const allNavTabs = [
         {
             value: "dashboard",
             label: "Dashboard",
             icon: LayoutDashboard,
             href: "/",
+            roles: [] as string[],
         },
         {
             value: "gia-coach",
             label: "Gia Coach",
             icon: Bot,
             href: "/gia-coach",
+            roles: ["end user", "content creator", "approver"],
         },
     ];
 
-    const moreTabs = [
+    const allMoreTabs = [
         {
             value: "adaptive-room",
             label: "Adaptive Room",
             icon: Brain,
             href: "/adaptive-room",
+            roles: ["end user", "content creator", "approver"],
         },
         {
             value: "lesson-player",
             label: "Guided Lesson Player",
             icon: GraduationCap,
             href: "/lesson-player",
+            roles: ["end user", "content creator", "approver"],
         },
         {
             value: "content-studio",
             label: "Content Studio",
             icon: PenTool,
             href: "/content-studio",
+            roles: ["content creator"],
         },
         {
             value: "ai-content-generator",
             label: "AI Generator",
             icon: Sparkles,
             href: "/ai-content-generator",
+            roles: ["content creator"],
         },
         {
             value: "review-queue",
             label: "Review Queue",
             icon: ClipboardCheck,
             href: "/review-queue",
+            roles: ["approver"],
         },
         {
             value: "content-repository",
             label: "Repository",
             icon: Library,
             href: "/content-repository",
+            roles: [] as string[],
         },
         {
             value: "user-management",
             label: "User Management",
             icon: Users,
             href: "/user-management",
+            roles: ["admin"],
         },
         {
             value: "analytics",
             label: "Analytics",
             icon: BarChart3,
             href: "/analytics",
+            roles: ["admin", "manager", "auditor"],
         },
     ];
+
+    // Filter tabs based on user roles
+    let navTabs = $derived(
+        allNavTabs.filter((t) => t.roles.length === 0 || hasRole(...t.roles)),
+    );
+    let moreTabs = $derived(
+        allMoreTabs.filter((t) => t.roles.length === 0 || hasRole(...t.roles)),
+    );
 
     let currentTab = $state(
         $page.url.pathname.startsWith("/gia-coach") ? "gia-coach" : "dashboard",
@@ -314,27 +342,29 @@
                 </DropdownMenu.Content>
             </DropdownMenu.Root>
 
-            <DropdownMenu.Root>
-                <DropdownMenu.Trigger>
-                    {#snippet child({ props })}
-                        <Button.Root {...props} variant="ghost" size="sm">
-                            <Ellipsis class="size-4" />
-                            <span>Menu</span>
-                        </Button.Root>
-                    {/snippet}
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Content class="w-56" align="start">
-                    {#each moreTabs as tab}
-                        <DropdownMenu.Item
-                            onclick={() => goto(tab.href)}
-                            class="py-2.5"
-                        >
-                            <tab.icon class="size-4" />
-                            <span class="text-sm">{tab.label}</span>
-                        </DropdownMenu.Item>
-                    {/each}
-                </DropdownMenu.Content>
-            </DropdownMenu.Root>
+            {#if moreTabs.length > 0}
+                <DropdownMenu.Root>
+                    <DropdownMenu.Trigger>
+                        {#snippet child({ props })}
+                            <Button.Root {...props} variant="ghost" size="sm">
+                                <Ellipsis class="size-4" />
+                                <span>Menu</span>
+                            </Button.Root>
+                        {/snippet}
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content class="w-56" align="start">
+                        {#each moreTabs as tab}
+                            <DropdownMenu.Item
+                                onclick={() => goto(tab.href)}
+                                class="py-2.5"
+                            >
+                                <tab.icon class="size-4" />
+                                <span class="text-sm">{tab.label}</span>
+                            </DropdownMenu.Item>
+                        {/each}
+                    </DropdownMenu.Content>
+                </DropdownMenu.Root>
+            {/if}
         </div>
         <Button.Root
             variant="ghost"

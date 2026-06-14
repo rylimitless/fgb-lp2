@@ -17,6 +17,13 @@
     let recentDocs = $derived(data.recentDocs ?? []);
     let recentCourses = $derived(data.recentCourses ?? []);
 
+    // User roles from layout data
+    let userRoles: string[] = $derived((data as any)?.user?.roles ?? []);
+    function hasRole(...roles: string[]): boolean {
+        if (userRoles.includes("admin")) return true;
+        return roles.some((r) => userRoles.includes(r));
+    }
+
     function thetaLabel(t: number): string {
         if (t < -1) return "Beginner";
         if (t < 0) return "Developing";
@@ -27,13 +34,14 @@
 
     let thetaPct = $derived(((stats.theta + 3) / 6) * 100);
 
-    const features = [
+    const allFeatures = [
         {
             icon: Bot,
             label: "Gia  AI Coach",
             desc: "Ask AI about your documents",
             href: "/gia-coach",
             color: "bg-emerald-500/10 text-emerald-500",
+            roles: ["end user", "content creator", "approver"],
         },
         {
             icon: Brain,
@@ -41,6 +49,7 @@
             desc: "Personalized practice sessions",
             href: "/adaptive-room",
             color: "bg-violet-500/10 text-violet-500",
+            roles: ["end user", "content creator", "approver"],
         },
         {
             icon: GraduationCap,
@@ -48,6 +57,7 @@
             desc: "Take guided courses",
             href: "/lesson-player",
             color: "bg-blue-500/10 text-blue-500",
+            roles: ["end user", "content creator", "approver"],
         },
         {
             icon: FileText,
@@ -55,6 +65,7 @@
             desc: "Upload & manage documents",
             href: "/content-studio",
             color: "bg-amber-500/10 text-amber-500",
+            roles: ["content creator"],
         },
         {
             icon: Sparkles,
@@ -62,6 +73,7 @@
             desc: "Create courses with AI",
             href: "/ai-content-generator",
             color: "bg-rose-500/10 text-rose-500",
+            roles: ["content creator"],
         },
         {
             icon: ClipboardCheck,
@@ -69,8 +81,13 @@
             desc: "Approve documents & courses",
             href: "/review-queue",
             color: "bg-cyan-500/10 text-cyan-500",
+            roles: ["approver"],
         },
     ];
+
+    let features = $derived(
+        allFeatures.filter((f) => f.roles.length === 0 || hasRole(...f.roles)),
+    );
 </script>
 
 <div class="flex w-full max-w-6xl mx-auto flex-col gap-6">

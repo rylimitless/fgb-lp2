@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	database "fgb-lp/database/queries"
 	"fgb-lp/embeddings"
+	"fgb-lp/middlewares"
 	"fmt"
 	"log"
 	"net/http"
@@ -393,6 +394,7 @@ func (h *Handler) GetCourse(c *gin.Context) {
 		"source_doc_ids": course.SourceDocIds,
 		"sources":        sources,
 		"modules":        modulesResult,
+		"approved_by":    course.ApprovedBy,
 	})
 }
 
@@ -468,14 +470,14 @@ func (h *Handler) ListActiveJobs(c *gin.Context) {
 
 // RegisterRoutes adds course generation routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
-	r.POST("/courses/generate", h.GenerateCourse)
+	r.POST("/courses/generate", middlewares.WrapRequireRole(h.GenerateCourse, "content creator"))
 	r.GET("/courses/generate/active", h.ListActiveJobs)
 	r.GET("/courses/generate/:id", h.GetJobStatus)
 	r.GET("/courses/generate/:id/stream", h.StreamJob)
 	r.GET("/courses", h.ListCourses)
 	r.GET("/courses/:id", h.GetCourse)
 	r.GET("/courses/:id/preview", h.PreviewCourse)
-	r.PUT("/courses/:id/edit", h.EditCourse)
+	r.PUT("/courses/:id/edit", middlewares.WrapRequireRole(h.EditCourse, "content creator"))
 }
 
 // EditCourse modifies an existing course based on AI-driven edit instructions.

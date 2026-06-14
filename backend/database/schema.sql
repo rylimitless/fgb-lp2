@@ -23,6 +23,13 @@ create table if not exists sessions (
   created_at timestamptz not null default now()
 );
 
+-- Many-to-many user-role assignments
+create table if not exists user_roles (
+  user_id bigint not null references users(id) on delete cascade,
+  role text not null,
+  primary key (user_id, role)
+);
+
 -- A flat list of every action someone could take
 CREATE TABLE IF NOT EXISTS permissions (
   id   BIGSERIAL PRIMARY KEY,
@@ -108,6 +115,7 @@ alter table courses add column department varchar(255);
 alter table courses add column approved boolean default false;
 alter table courses add column review_status text default 'pending';
 alter table courses add column review_notes text default '';
+alter table courses add column approved_by bigint references users(id);
 
 -- Migrations: add module support
 create table if not exists modules (

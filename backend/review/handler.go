@@ -218,11 +218,19 @@ func (h *Handler) ReviewCourse(c *gin.Context) {
 	}
 
 	approved := body.ReviewStatus == "approved"
+	var approvedBy pgtype.Int8
+	if approved {
+		userID, exists := c.Get("user_id")
+		if exists {
+			approvedBy = pgtype.Int8{Int64: userID.(int64), Valid: true}
+		}
+	}
 	course, err := h.Queries.UpdateCourseReview(c.Request.Context(), database.UpdateCourseReviewParams{
 		ID:           id,
 		ReviewStatus: pgtype.Text{String: body.ReviewStatus, Valid: true},
 		ReviewNotes:  pgtype.Text{String: finalNotes, Valid: true},
 		Approved:     pgtype.Bool{Bool: approved, Valid: true},
+		ApprovedBy:   approvedBy,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

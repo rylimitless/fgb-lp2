@@ -14,6 +14,7 @@ import (
 	"fgb-lp/middlewares"
 	"fgb-lp/notifications"
 	"fgb-lp/review"
+	"fgb-lp/users"
 	"fgb-lp/worker"
 	"fmt"
 	"net/http"
@@ -112,11 +113,32 @@ func main() {
 
 	protected.Use(middlewares.RequireAuth(app.Queries))
 
+	// Role-gated sub-groups for API route protection
+	adminGroup := protected.Group("")
+	adminGroup.Use(middlewares.RequireRole("admin"))
+
+	approverGroup := protected.Group("")
+	approverGroup.Use(middlewares.RequireRole("approver"))
+
 	r.POST("/api/logout", func(c *gin.Context) {
 		token, _ := c.Cookie("session_token")
 		_ = app.Logout(c.Request.Context(), token)
 		c.SetCookie("session_token", "", -1, "/", "", false, true)
 		c.JSON(http.StatusOK, gin.H{"message": "logged out"})
+	})
+
+	// Returns the list of available roles and their descriptions for frontend config
+	protected.GET("/roles", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"roles": []gin.H{
+				{"id": "admin", "label": "Admin", "description": "Full system access"},
+				{"id": "end user", "label": "End User", "description": "Access to Gia Coach, courses, and adaptive learning"},
+				{"id": "content creator", "label": "Content Creator", "description": "Create and upload content and courses, plus all end-user features"},
+				{"id": "approver", "label": "Approver", "description": "Approve, request changes, or reject content and courses, plus end-user features"},
+				{"id": "manager", "label": "Manager", "description": "View analytics and manage users"},
+				{"id": "auditor", "label": "Auditor", "description": "View-only access to reports and users"},
+			},
+		})
 	})
 
 	protected.GET("/me", func(c *gin.Context) {
@@ -130,11 +152,15 @@ func main() {
 			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 			return
 		}
+		// Get all roles from user_roles (with fallback to single role)
+		roles, _ := middlewares.GetUserRoles(c, queries, userID.(int64))
+
 		c.JSON(http.StatusOK, gin.H{
 			"id":    user.ID,
 			"email": user.Email,
 			"name":  user.Name,
 			"role":  user.Role,
+			"roles": roles,
 		})
 	})
 
@@ -151,7 +177,7 @@ func main() {
 	aiHandler.RegisterRoutes(protected)
 
 	reviewHandler := review.NewHandler(queries)
-	reviewHandler.RegisterRoutes(protected)
+	reviewHandler.RegisterRoutes(approverGroup)
 
 	lessonHandler := lessons.NewHandler(queries)
 	lessonHandler.RegisterRoutes(protected)
@@ -168,8 +194,11 @@ func main() {
 	notifHandler := notifications.NewHandler(queries)
 	notifHandler.RegisterRoutes(protected)
 
+	userHandler := users.NewHandler(queries)
+	userHandler.RegisterRoutes(adminGroup)
+
 	analyticsHandler := analytics.NewHandler(queries)
-	analyticsHandler.RegisterRoutes(protected)
+	analyticsHandler.RegisterRoutes(adminGroup)
 
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())
@@ -257,5 +286,87 @@ CREATE INDEX IF NOT EXISTS idx_coach_queries_created_at on coach_queries(created
 	`)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration coach_queries table: %v\n", err)
+	}
+
+	// Create user_roles junction table for many-to-many role assignments
+	_, err = pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS user_roles (
+  user_id bigint not null references users(id) on delete cascade,
+  role text not null,
+  primary key (user_id, role)
+);
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration user_roles table: %v\n", err)
+	}
+
+	// Seed role_permissions for all roles
+	_, err = pool.Exec(ctx, `
+INSERT INTO permissions (name) VALUES
+  ('content:upload'),
+  ('content:create_course'),
+  ('content:edit_course'),
+  ('content:delete'),
+  ('content:approve'),
+  ('content:reject'),
+  ('content:request_changes'),
+  ('users:manage'),
+  ('users:view'),
+  ('gia:talk'),
+  ('courses:take'),
+  ('adaptive:practice'),
+  ('analytics:view')
+ON CONFLICT (name) DO NOTHING;
+
+-- Admin: all permissions
+INSERT INTO role_permissions (role, permission_id)
+SELECT 'admin', id FROM permissions
+ON CONFLICT (role, permission_id) DO NOTHING;
+
+-- End user: talk to Gia, take courses, adaptive learning
+INSERT INTO role_permissions (role, permission_id)
+SELECT 'end user', id FROM permissions WHERE name IN (
+  'gia:talk', 'courses:take', 'adaptive:practice'
+)
+ON CONFLICT (role, permission_id) DO NOTHING;
+
+-- Content creator: end user + create/upload/edit/delete content
+INSERT INTO role_permissions (role, permission_id)
+SELECT 'content creator', id FROM permissions WHERE name IN (
+  'gia:talk', 'courses:take', 'adaptive:practice',
+  'content:upload', 'content:create_course', 'content:edit_course', 'content:delete'
+)
+ON CONFLICT (role, permission_id) DO NOTHING;
+
+-- Approver: end user + approve/reject/request changes but NOT create/upload
+INSERT INTO role_permissions (role, permission_id)
+SELECT 'approver', id FROM permissions WHERE name IN (
+  'gia:talk', 'courses:take', 'adaptive:practice',
+  'content:approve', 'content:reject', 'content:request_changes'
+)
+ON CONFLICT (role, permission_id) DO NOTHING;
+
+-- Manager: view everything, manage users
+INSERT INTO role_permissions (role, permission_id)
+SELECT 'manager', id FROM permissions WHERE name IN (
+  'gia:talk', 'courses:take', 'adaptive:practice',
+  'users:manage', 'users:view', 'analytics:view'
+)
+ON CONFLICT (role, permission_id) DO NOTHING;
+
+-- Auditor: view-only across the board
+INSERT INTO role_permissions (role, permission_id)
+SELECT 'auditor', id FROM permissions WHERE name IN (
+  'users:view', 'analytics:view'
+)
+ON CONFLICT (role, permission_id) DO NOTHING;
+
+-- Migrate existing single-role users into user_roles table
+INSERT INTO user_roles (user_id, role)
+SELECT id, role FROM users
+ON CONFLICT (user_id, role) DO NOTHING;
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration role_permissions seed: %v\n", err)
 	}
 }
