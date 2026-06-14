@@ -286,3 +286,17 @@ from audit_log al
 left join users u on u.id = al.user_id
 order by al.created_at desc
 limit $1 offset $2;
+
+-- name: GetUserRoles :many
+select role from user_roles where user_id = $1;
+
+-- name: InsertUserRole :exec
+insert into user_roles (user_id, role)
+values ($1, $2)
+on conflict (user_id, role) do nothing;
+
+-- name: DeleteUserRoles :exec
+delete from user_roles where user_id = $1;
+
+-- name: UpdateUserPrimaryRole :exec
+update users set role = $2, updated_at = now() where id = $1;

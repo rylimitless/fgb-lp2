@@ -43,26 +43,10 @@ func GetUserRoles(c *gin.Context, queries *database.Queries, userID int64) ([]st
 		return nil, err
 	}
 
-	rows, err := queries.GetDB().Query(c.Request.Context(),
-		"SELECT role FROM user_roles WHERE user_id = $1", userID)
-	if err != nil {
+	roles, err := queries.GetUserRoles(c.Request.Context(), userID)
+	if err != nil || len(roles) == 0 {
 		// Fall back to single role
 		return []string{user.Role}, nil
 	}
-	defer rows.Close()
-
-	var roles []string
-	for rows.Next() {
-		var r string
-		if err := rows.Scan(&r); err != nil {
-			continue
-		}
-		roles = append(roles, r)
-	}
-
-	if len(roles) == 0 {
-		return []string{user.Role}, nil
-	}
-
 	return roles, nil
 }

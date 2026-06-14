@@ -116,9 +116,10 @@ func (h *Handler) CreateUser(c *gin.Context) {
 
 	// Insert all roles into user_roles table
 	for _, r := range allRoles {
-		h.Queries.GetDB().Exec(c.Request.Context(),
-			"INSERT INTO user_roles (user_id, role) VALUES ($1, $2) ON CONFLICT (user_id, role) DO NOTHING",
-			user.ID, r)
+		h.Queries.InsertUserRole(c.Request.Context(), database.InsertUserRoleParams{
+			UserID: user.ID,
+			Role:   r,
+		})
 	}
 
 	audit.Log(h.Queries, c, "user_created", map[string]any{
@@ -182,19 +183,20 @@ func (h *Handler) UpdateUserRoles(c *gin.Context) {
 	}
 
 	// Delete all existing roles and re-insert
-	h.Queries.GetDB().Exec(c.Request.Context(),
-		"DELETE FROM user_roles WHERE user_id = $1", id)
+	h.Queries.DeleteUserRoles(c.Request.Context(), id)
 
 	for _, r := range body.Roles {
-		h.Queries.GetDB().Exec(c.Request.Context(),
-			"INSERT INTO user_roles (user_id, role) VALUES ($1, $2)",
-			id, r)
+		h.Queries.InsertUserRole(c.Request.Context(), database.InsertUserRoleParams{
+			UserID: id,
+			Role:   r,
+		})
 	}
 
 	// Update the primary role column to the first role
-	h.Queries.GetDB().Exec(c.Request.Context(),
-		"UPDATE users SET role = $2, updated_at = now() WHERE id = $1",
-		id, body.Roles[0])
+	h.Queries.UpdateUserPrimaryRole(c.Request.Context(), database.UpdateUserPrimaryRoleParams{
+		ID:   id,
+		Role: body.Roles[0],
+	})
 
 	audit.Log(h.Queries, c, "user_roles_updated", map[string]any{
 		"target_user_id": id,
@@ -225,8 +227,7 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	}
 
 	// Delete from user_roles first (though CASCADE should handle this)
-	h.Queries.GetDB().Exec(c.Request.Context(),
-		"DELETE FROM user_roles WHERE user_id = $1", id)
+	h.Queries.DeleteUserRoles(c.Request.Context(), id)
 
 	if err := h.Queries.DeleteUser(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
@@ -244,23 +245,9 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 
 // getUserRoles fetches all roles for a user from the user_roles junction table
 func (h *Handler) getUserRoles(c *gin.Context, userID int64) []string {
-	rows, err := h.Queries.GetDB().Query(c.Request.Context(),
-		"SELECT role FROM user_roles WHERE user_id = $1", userID)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-
-	var roles []string
-	for rows.Next() {
-		var r string
-		if err := rows.Scan(&r); err != nil {
-			continue
-		}
-		roles = append(roles, r)
-	}
-	if roles == nil {
-		roles = []string{}
+	roles, err := h.Queries.GetUserRoles(c.Request.Context(), userID)
+	if err != nil || len(roles) == 0 {
+		return []string{}
 	}
 	return roles
 }

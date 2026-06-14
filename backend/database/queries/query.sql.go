@@ -373,6 +373,15 @@ func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteUserRoles = `-- name: DeleteUserRoles :exec
+delete from user_roles where user_id = $1
+`
+
+func (q *Queries) DeleteUserRoles(ctx context.Context, userID int64) error {
+	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
+	return err
+}
+
 const getAdaptiveOverview = `-- name: GetAdaptiveOverview :one
 select
   count(distinct user_id) as active_users,
@@ -1276,6 +1285,30 @@ func (q *Queries) GetUserNotifications(ctx context.Context, arg GetUserNotificat
 	return items, nil
 }
 
+const getUserRoles = `-- name: GetUserRoles :many
+select role from user_roles where user_id = $1
+`
+
+func (q *Queries) GetUserRoles(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, getUserRoles, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			return nil, err
+		}
+		items = append(items, role)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertAuditLog = `-- name: InsertAuditLog :one
 insert into audit_log (user_id, action, details)
 values ($1, $2, $3)
@@ -1390,6 +1423,22 @@ func (q *Queries) InsertDocumentChunk(ctx context.Context, arg InsertDocumentChu
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertUserRole = `-- name: InsertUserRole :exec
+insert into user_roles (user_id, role)
+values ($1, $2)
+on conflict (user_id, role) do nothing
+`
+
+type InsertUserRoleParams struct {
+	UserID int64  `json:"user_id"`
+	Role   string `json:"role"`
+}
+
+func (q *Queries) InsertUserRole(ctx context.Context, arg InsertUserRoleParams) error {
+	_, err := q.db.Exec(ctx, insertUserRole, arg.UserID, arg.Role)
+	return err
 }
 
 const markNotificationRead = `-- name: MarkNotificationRead :one
@@ -1735,6 +1784,20 @@ func (q *Queries) UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentSt
 		&i.ReviewNotes,
 	)
 	return i, err
+}
+
+const updateUserPrimaryRole = `-- name: UpdateUserPrimaryRole :exec
+update users set role = $2, updated_at = now() where id = $1
+`
+
+type UpdateUserPrimaryRoleParams struct {
+	ID   int64  `json:"id"`
+	Role string `json:"role"`
+}
+
+func (q *Queries) UpdateUserPrimaryRole(ctx context.Context, arg UpdateUserPrimaryRoleParams) error {
+	_, err := q.db.Exec(ctx, updateUserPrimaryRole, arg.ID, arg.Role)
+	return err
 }
 
 const upsertLearningPreference = `-- name: UpsertLearningPreference :one
