@@ -22,14 +22,21 @@ const coursePlanSystemPrompt = `You are an expert instructional designer. Given 
 
 CRITICAL RULES:
 1. Structure your output EXACTLY like the Markdown example below. Do NOT use JSON, and do not write any introductory or concluding conversational filler.
-2. Generate 1-7 modules based on how much meaningful material the source contains. If the source is short or narrow, 1-3 modules is fine. Only use 5-7 if the source is genuinely broad and deep. Do not pad with empty modules.
+2. The number of modules MUST be proportional to the source material's actual size and depth. Use this hard cap:
+   - Under 1,000 chars of source → at most 1 module
+   - 1,000–3,000 chars → at most 2 modules
+   - 3,000–8,000 chars → at most 3 modules
+   - 8,000–15,000 chars → at most 4 modules
+   - Over 15,000 chars → at most 6 modules
+   Do NOT split thin content into multiple modules. A single focused module is correct for short source material.
 3. Order modules logically — build from foundational concepts to advanced applications.
-4. Base ALL module topics strictly on the provided source material. Every topic must be traceable to the source.
+4. Base ALL module topics strictly on the provided source material. Every topic must be directly traceable to the source. If there isn't enough material to justify a distinct module, don't create one.
 5. Make titles and descriptions specific, academic, and substantive — not generic.
+6. The course overview should reflect the ACTUAL scope of the source — if the source is narrow, the overview should be 1-2 sentences, not inflated.
 
 OUTPUT FORMAT:
 # Course Title: [Insert Compelling Title]
-[Insert a 3-4 sentence compelling course overview explaining what the learner will master.]
+[Insert a course overview explaining what the learner will master — length proportional to source scope.]
 
 ## Module 1: [Module Title]
 **Description:** [2-3 sentences describing what this module covers and its specific learning objectives.]
@@ -37,30 +44,33 @@ OUTPUT FORMAT:
 ## Module 2: [Module Title]
 **Description:** [2-3 sentences describing what this module covers and its specific learning objectives.]`
 
-// Step 2a: Section Lister — identifies 3-5 key sub-topics within a module.
-const moduleSectionListerPrompt = `You are an expert instructional designer. Given a course module's title, description, and source material, identify 3-5 key sub-topics or sections that comprehensively break down this module's content.
+// Step 2a: Section Lister — identifies 1-5 key sub-topics within a module.
+const moduleSectionListerPrompt = `You are an expert instructional designer. Given a course module's title, description, and source material, identify key sub-topics or sections that comprehensively break down this module's content.
 
 Output ONLY a valid JSON array of section titles — no markdown, no other text:
 
 ["Section Title 1", "Section Title 2", "Section Title 3"]
 
 CRITICAL RULES:
-- Produce 3-5 sections that together cover all the relevant source material for this module.
+- The number of sections MUST match the depth of the available source material for this module. Produce 1-5 sections — use fewer when the source is thin, more when it's rich.
+- If the source material is very short (only a few paragraphs), 1-2 sections is perfectly appropriate.
 - Order sections logically — foundational concepts first, then deeper material.
 - Each title should be specific and substantive, not generic.
-- Cover ALL key ideas from the source. Do not skip important concepts.`
+- Cover ALL key ideas from the source. Do not skip important concepts.
+- Do NOT create sections that aren't supported by the source — do not invent topics to fill a quota.`
 
 // Step 2b: Section Content Writer — produces raw Markdown content for ONE specific section.
-const moduleSectionWriterPrompt = `You are an expert instructional designer and university-level educator. Your primary job is to produce rich, thorough, and faithful teaching material for ONE SPECIFIC SECTION of a course module.
+const moduleSectionWriterPrompt = `You are an expert instructional designer and university-level educator. Your primary job is to produce faithful teaching material for ONE SPECIFIC SECTION of a course module.
 
 You are writing the raw content for this section ONLY. Do not include quiz questions, formatting code, or structural wrappers.
 
 CRITICAL RULES:
-1. Write as many paragraphs as are needed to faithfully and thoroughly cover this section's topic. Cover every key concept, definition, example, argument, relationship between ideas, and practical takeaway. Do not abbreviate, summarize, or truncate.
-2. Be absolutely FAITHFUL to the information in the source. Paraphrasing is encouraged, but every fact, claim, concept, and example must accurately reflect the source. Do not invent, embellish, or add information not supported by the source.
+1. Match your output length to the source material available for this section. If the source provides only a few sentences on this topic, write 1-2 concise paragraphs. If the source is rich and detailed, you may write longer. NEVER stretch thin content into long passages — conciseness is valuable.
+2. Be absolutely FAITHFUL to the information in the source. Paraphrasing is encouraged, but every fact, claim, concept, and example must accurately reflect the source. Do NOT invent, embellish, or add information not supported by the source.
 3. Organize your writing using clear Markdown subheadings (####), bold text, and bullet points where appropriate to make it highly readable and scannable.
 4. Do NOT use placeholders, TBD, or lorem ipsum.
-5. Do NOT include any quiz questions, multiple choice, true/false, or assessment items. This is PURE CONTENT only.`
+5. Do NOT include any quiz questions, multiple choice, true/false, or assessment items. This is PURE CONTENT only.
+6. If the source material for this section is very thin, it is better to be short and accurate than long and fabricated.`
 
 // Step 3: Question Generator — produces exactly 1 MCQ from a content summary.
 // The full content is NOT sent to the LLM — only a summary for context.

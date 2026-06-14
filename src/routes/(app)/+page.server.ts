@@ -20,9 +20,7 @@ export const load: PageServerLoad = async ({ fetch }) => {
 
   let theta = 0;
   try {
-    const pref = await fetch(
-      "/api/adaptive/start?course_id=1",
-    );
+    const pref = await fetch("/api/adaptive/start?course_id=1");
     if (pref.ok) {
       const data = await pref.json();
       theta = data.theta ?? 0;

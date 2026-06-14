@@ -271,18 +271,34 @@ func (w *Worker) completeJob(job *GenerationJob, result gin.H, courseID int64) {
 	job.Status = "completed"
 	job.Result = result
 	job.courseID = &courseID
+	title := job.Request.Title
 	job.mu.Unlock()
 	resultJSON, _ := json.Marshal(result)
 	w.queries.CompleteGenerationJob(context.Background(), string(job.ID), resultJSON, courseID)
 	job.broadcast(SSEEvent{Event: "done", Data: result})
+
+	// Notify all users that a new course is ready
+	notifyAll(w.queries,
+		"Course generation complete",
+		fmt.Sprintf("\"%s\" is ready for review.", title),
+		"/review-queue",
+	)
 }
 
 // processJob runs the full 3-step generation pipeline in a background goroutine.
 func (w *Worker) processJob(job *GenerationJob) {
 	job.mu.Lock()
 	job.Status = "running"
+	reqTitle := job.Request.Title
 	job.mu.Unlock()
 	w.queries.StartGenerationJob(context.Background(), string(job.ID))
+
+	// Notify admins that generation has started
+	notifyAdmins(w.queries,
+		"Course generation started",
+		fmt.Sprintf("AI is generating \"%s\".", reqTitle),
+		"/ai-content-generator",
+	)
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -331,14 +347,19 @@ func (w *Worker) processJob(job *GenerationJob) {
 	job.addStep("planning", "Step 1/3: Creating course outline and module structure...")
 	log.Printf("[worker] job %s STEP 1 (outliner): %s", job.ID, req.Title)
 
+	sourceCharCount := len(sourceContext)
+	chunkCount := len(chunks)
+
 	planPrompt := fmt.Sprintf(`Course topic: %s
 Course description/idea: %s
+
+Source material statistics: %d total characters across %d chunks.
 
 Source material:
 %s
 
-Generate a comprehensive Markdown course plan based on the source material above.`,
-		req.Title, req.Description, sourceContext)
+Generate a Markdown course plan PROPORTIONAL to the source material size shown above.`,
+		req.Title, req.Description, sourceCharCount, chunkCount, sourceContext)
 
 	planResp, err := w.llm.Chat(coursePlanSystemPrompt, planPrompt)
 	if err != nil {

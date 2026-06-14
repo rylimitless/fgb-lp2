@@ -72,6 +72,17 @@ func (q *Queries) CountPendingReviewDocuments(ctx context.Context) (int64, error
 	return count, err
 }
 
+const countUnreadNotifications = `-- name: CountUnreadNotifications :one
+select count(*) from notifications where user_id = $1 and is_read = false
+`
+
+func (q *Queries) CountUnreadNotifications(ctx context.Context, userID pgtype.Int8) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnreadNotifications, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createCourse = `-- name: CreateCourse :one
 insert into courses (title, description, created_by, source_doc_ids, settings)
 values ($1, $2, $3, $4, $5)
@@ -180,6 +191,39 @@ func (q *Queries) CreateModule(ctx context.Context, arg CreateModuleParams) (Mod
 	return i, err
 }
 
+const createNotification = `-- name: CreateNotification :one
+insert into notifications (user_id, title, message, link)
+values ($1, $2, $3, $4)
+returning id, user_id, title, message, link, is_read, created_at
+`
+
+type CreateNotificationParams struct {
+	UserID  pgtype.Int8 `json:"user_id"`
+	Title   string      `json:"title"`
+	Message string      `json:"message"`
+	Link    string      `json:"link"`
+}
+
+func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotificationParams) (Notification, error) {
+	row := q.db.QueryRow(ctx, createNotification,
+		arg.UserID,
+		arg.Title,
+		arg.Message,
+		arg.Link,
+	)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Message,
+		&i.Link,
+		&i.IsRead,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createSession = `-- name: CreateSession :one
 insert into sessions (user_id, token, expires_at)
 values ($1, $2, now() + interval '24 hours')
@@ -282,6 +326,47 @@ func (q *Queries) DeleteSession(ctx context.Context, token string) error {
 	return err
 }
 
+const deleteUser = `-- name: DeleteUser :exec
+delete from users where id = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteUser, id)
+	return err
+}
+
+const getAdminUsers = `-- name: GetAdminUsers :many
+select id, email, password_hash, name, role, created_at, updated_at from users where role = 'admin' order by created_at
+`
+
+func (q *Queries) GetAdminUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, getAdminUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.PasswordHash,
+			&i.Name,
+			&i.Role,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAllLessonProgress = `-- name: GetAllLessonProgress :many
 select id, user_id, course_id, current_module, completed, score_pct, started_at, completed_at from lesson_progress where user_id = $1
 `
@@ -304,6 +389,38 @@ func (q *Queries) GetAllLessonProgress(ctx context.Context, userID int64) ([]Les
 			&i.ScorePct,
 			&i.StartedAt,
 			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getAllUsers = `-- name: GetAllUsers :many
+select id, email, password_hash, name, role, created_at, updated_at from users order by created_at desc
+`
+
+func (q *Queries) GetAllUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, getAllUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.PasswordHash,
+			&i.Name,
+			&i.Role,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -501,6 +618,39 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, erro
 		&i.ReviewNotes,
 	)
 	return i, err
+}
+
+const getDocumentChunks = `-- name: GetDocumentChunks :many
+select id, document_id, chunk_index, content, page_number, source_label, embedding, created_at from document_chunks where document_id = $1 order by chunk_index
+`
+
+func (q *Queries) GetDocumentChunks(ctx context.Context, documentID int64) ([]DocumentChunk, error) {
+	rows, err := q.db.Query(ctx, getDocumentChunks, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DocumentChunk
+	for rows.Next() {
+		var i DocumentChunk
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.ChunkIndex,
+			&i.Content,
+			&i.PageNumber,
+			&i.SourceLabel,
+			&i.Embedding,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getDocuments = `-- name: GetDocuments :many
@@ -830,6 +980,43 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 	return i, err
 }
 
+const getUserNotifications = `-- name: GetUserNotifications :many
+select id, user_id, title, message, link, is_read, created_at from notifications where user_id = $1 order by created_at desc limit $2
+`
+
+type GetUserNotificationsParams struct {
+	UserID pgtype.Int8 `json:"user_id"`
+	Limit  int32       `json:"limit"`
+}
+
+func (q *Queries) GetUserNotifications(ctx context.Context, arg GetUserNotificationsParams) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, getUserNotifications, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Notification
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Title,
+			&i.Message,
+			&i.Link,
+			&i.IsRead,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertDocument = `-- name: InsertDocument :one
 insert into documents (title, file_path, status, uploaded_by)
 values ($1, $2, 'uploaded', $3)
@@ -891,6 +1078,25 @@ func (q *Queries) InsertDocumentChunk(ctx context.Context, arg InsertDocumentChu
 		&i.PageNumber,
 		&i.SourceLabel,
 		&i.Embedding,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const markNotificationRead = `-- name: MarkNotificationRead :one
+update notifications set is_read = true where id = $1 returning id, user_id, title, message, link, is_read, created_at
+`
+
+func (q *Queries) MarkNotificationRead(ctx context.Context, id int64) (Notification, error) {
+	row := q.db.QueryRow(ctx, markNotificationRead, id)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Message,
+		&i.Link,
+		&i.IsRead,
 		&i.CreatedAt,
 	)
 	return i, err

@@ -21,6 +21,7 @@ func NewHandler(queries *database.Queries) *Handler {
 
 func (h *Handler) ListPublished(c *gin.Context) {
 	query := c.Query("q")
+	userID := c.GetInt64("user_id")
 
 	var courses []database.Course
 	var err error
@@ -54,7 +55,7 @@ func (h *Handler) ListPublished(c *gin.Context) {
 		courses = []database.Course{}
 	}
 
-	progressList, _ := h.Queries.GetAllLessonProgress(c.Request.Context(), 1)
+	progressList, _ := h.Queries.GetAllLessonProgress(c.Request.Context(), userID)
 	progressMap := make(map[int64]database.LessonProgress)
 	for _, p := range progressList {
 		progressMap[p.CourseID] = p
@@ -88,6 +89,7 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
+	userID := c.GetInt64("user_id")
 	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
@@ -97,7 +99,6 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
 
 	itemMap := make(map[int64][]gin.H)
-	answeredMap := make(map[int64][]interface{})
 	for _, item := range items {
 		mid := item.ModuleID.Int64
 		itemMap[mid] = append(itemMap[mid], gin.H{
@@ -106,7 +107,6 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 			"sort_order": item.SortOrder,
 			"data":       json.RawMessage(item.Data),
 		})
-		answeredMap[mid] = append(answeredMap[mid], nil)
 	}
 
 	mods := make([]gin.H, 0)
@@ -115,23 +115,18 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 		if modItems == nil {
 			modItems = []gin.H{}
 		}
-		modAnswered := answeredMap[m.ID]
-		if modAnswered == nil {
-			modAnswered = []interface{}{}
-		}
 		mods = append(mods, gin.H{
 			"id":          m.ID,
 			"title":       m.Title,
 			"description": m.Description,
 			"sort_order":  m.SortOrder,
 			"items":       modItems,
-			"answered":    modAnswered,
 		})
 	}
 
 	// Get progress
 	progress, _ := h.Queries.GetLessonProgress(c.Request.Context(),
-		database.GetLessonProgressParams{UserID: 1, CourseID: id})
+		database.GetLessonProgressParams{UserID: userID, CourseID: id})
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":          course.ID,
@@ -154,12 +149,13 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	userID := c.GetInt64("user_id")
 	pct := pgtype.Numeric{}
 	pct.Scan(body.ScorePct)
 
 	progress, err := h.Queries.UpsertLessonProgress(c.Request.Context(),
 		database.UpsertLessonProgressParams{
-			UserID:        1,
+			UserID:        userID,
 			CourseID:      body.CourseID,
 			CurrentModule: body.CurrentModule,
 			Completed:     body.Completed,

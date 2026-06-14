@@ -9,6 +9,7 @@
         ChevronLeft,
         ChevronRight,
         LoaderCircle,
+        Eye,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
 
@@ -30,6 +31,11 @@
     let reviewItem = $state<any>(null);
     let reviewType = $state<"document" | "course">("document");
     let reviewNotes = $state("");
+
+    // Document viewer state
+    let viewingDoc = $state<any>(null);
+    let viewingChunks = $state<any[]>([]);
+    let viewingLoading = $state(false);
 
     async function loadDocuments(page: number) {
         docsLoading = true;
@@ -130,6 +136,28 @@
         }
     }
 
+    async function viewDocument(doc: any) {
+        viewingDoc = doc;
+        viewingChunks = [];
+        viewingLoading = true;
+        try {
+            const res = await fetch(`/api/documents/${doc.id}/chunks`, {
+                credentials: "include",
+            });
+            if (res.ok) {
+                viewingChunks = await res.json();
+            }
+        } catch {
+            /* ignore */
+        }
+        viewingLoading = false;
+    }
+
+    function closeViewer() {
+        viewingDoc = null;
+        viewingChunks = [];
+    }
+
     function formatDate(d: string) {
         if (!d) return "";
         return new Date(d).toLocaleDateString("en-US", {
@@ -149,8 +177,8 @@
     );
 
     $effect(() => {
-        if (activeTab === "documents") loadDocuments(0);
-        else loadCourses(0);
+        loadDocuments(0);
+        loadCourses(0);
     });
 </script>
 
@@ -247,6 +275,15 @@
                                         <Button.Root
                                             variant="outline"
                                             size="sm"
+                                            onclick={() => viewDocument(doc)}
+                                            class="text-sky-600 border-sky-500/20 hover:bg-sky-500/10"
+                                        >
+                                            <Eye class="size-3.5 mr-1.5" />
+                                            View
+                                        </Button.Root>
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
                                             onclick={() =>
                                                 submitReviewDirect(
                                                     doc.id,
@@ -270,7 +307,7 @@
                                             <RotateCcw
                                                 class="size-3.5 mr-1.5"
                                             />
-                                            Changes
+                                            Request Changes
                                         </Button.Root>
                                         <Button.Root
                                             variant="outline"
@@ -319,6 +356,19 @@
                                             variant="outline"
                                             size="sm"
                                             onclick={() =>
+                                                window.open(
+                                                    `/lesson-player?preview=${course.id}`,
+                                                    "_blank",
+                                                )}
+                                            class="text-sky-600 border-sky-500/20 hover:bg-sky-500/10"
+                                        >
+                                            <Eye class="size-3.5 mr-1.5" />
+                                            View
+                                        </Button.Root>
+                                        <Button.Root
+                                            variant="outline"
+                                            size="sm"
+                                            onclick={() =>
                                                 submitReviewDirect(
                                                     course.id,
                                                     "course",
@@ -341,7 +391,7 @@
                                             <RotateCcw
                                                 class="size-3.5 mr-1.5"
                                             />
-                                            Changes
+                                            Request Changes
                                         </Button.Root>
                                         <Button.Root
                                             variant="outline"
@@ -449,6 +499,90 @@
                     <CheckCircle class="size-4 mr-1.5" />
                     Approve
                 </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if viewingDoc}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onclick={closeViewer}
+    >
+        <div
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col"
+            onclick={(e: MouseEvent) => e.stopPropagation()}
+        >
+            <div
+                class="flex items-center justify-between px-6 py-4 border-b border-border"
+            >
+                <div class="min-w-0">
+                    <h3
+                        class="text-base font-semibold text-foreground truncate"
+                    >
+                        {viewingDoc.title}
+                    </h3>
+                    <p class="text-xs text-muted-foreground mt-0.5">
+                        Document &middot; {viewingDoc.total_chunks ?? 0} chunks &middot;
+                        Status: {viewingDoc.status}
+                    </p>
+                </div>
+                <Button.Root
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={closeViewer}
+                    class="shrink-0 ml-3"
+                >
+                    <XCircle class="size-5" />
+                </Button.Root>
+            </div>
+            <div class="overflow-y-auto px-6 py-4 flex-1">
+                {#if viewingLoading}
+                    <div class="flex items-center justify-center py-12">
+                        <LoaderCircle
+                            class="size-6 text-muted-foreground animate-spin"
+                        />
+                    </div>
+                {:else if viewingChunks.length === 0}
+                    <p class="text-sm text-muted-foreground text-center py-12">
+                        No content chunks available for this document.
+                    </p>
+                {:else}
+                    <div class="flex flex-col gap-4">
+                        {#each viewingChunks as chunk, i}
+                            <div
+                                class="rounded-lg border border-border bg-muted/30 px-4 py-3"
+                            >
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span
+                                        class="text-xs font-medium text-muted-foreground"
+                                    >
+                                        Chunk {chunk.chunk_index + 1}
+                                    </span>
+                                    {#if chunk.page_number}
+                                        <span
+                                            class="text-xs text-muted-foreground/60"
+                                        >
+                                            &middot; Page {chunk.page_number}
+                                        </span>
+                                    {/if}
+                                    {#if chunk.source_label}
+                                        <span
+                                            class="text-xs text-muted-foreground/60"
+                                        >
+                                            &middot; {chunk.source_label}
+                                        </span>
+                                    {/if}
+                                </div>
+                                <p
+                                    class="text-sm text-foreground/85 leading-relaxed whitespace-pre-wrap"
+                                >
+                                    {chunk.content}
+                                </p>
+                            </div>
+                        {/each}
+                    </div>
+                {/if}
             </div>
         </div>
     </div>

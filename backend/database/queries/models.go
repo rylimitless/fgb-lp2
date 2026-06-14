@@ -25,6 +25,19 @@ type Course struct {
 	ReviewNotes  pgtype.Text        `json:"review_notes"`
 }
 
+type CourseGenerationJob struct {
+	ID        string             `json:"id"`
+	Status    string             `json:"status"`
+	Request   []byte             `json:"request"`
+	Steps     []byte             `json:"steps"`
+	Modules   []byte             `json:"modules"`
+	Result    []byte             `json:"result"`
+	Error     pgtype.Text        `json:"error"`
+	CourseID  pgtype.Int8        `json:"course_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type CourseItem struct {
 	ID        int64              `json:"id"`
 	CourseID  int64              `json:"course_id"`
@@ -89,6 +102,16 @@ type Module struct {
 	Description string             `json:"description"`
 	SortOrder   int32              `json:"sort_order"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Notification struct {
+	ID        int64              `json:"id"`
+	UserID    pgtype.Int8        `json:"user_id"`
+	Title     string             `json:"title"`
+	Message   string             `json:"message"`
+	Link      string             `json:"link"`
+	IsRead    bool               `json:"is_read"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Permission struct {

@@ -1,6 +1,7 @@
 package content_repository
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,24 @@ func NewHandler(pool *pgxpool.Pool) *Handler {
 	return &Handler{Pool: pool}
 }
 
+// userIdentity returns "Name (Role)" for the currently authenticated user.
+func (h *Handler) userIdentity(c *gin.Context) string {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		return "Unknown"
+	}
+	var name, role string
+	err := h.Pool.QueryRow(c.Request.Context(),
+		"SELECT name, role FROM users WHERE id = $1", userID).Scan(&name, &role)
+	if err != nil {
+		return "Unknown"
+	}
+	if name != "" {
+		return fmt.Sprintf("%s (%s)", name, role)
+	}
+	return role
+}
+
 // ContentItem is the unified representation returned to the frontend.
 type ContentItem struct {
 	ID           int64  `json:"id"`
@@ -27,6 +46,7 @@ type ContentItem struct {
 	ContentType  string `json:"content_type"` // "document" or "course"
 	Status       string `json:"status"`       // document: uploaded/processing/ready/failed ; course: draft/published/archived
 	ReviewStatus string `json:"review_status,omitempty"`
+	ReviewNotes  string `json:"review_notes,omitempty"`
 	Approved     bool   `json:"approved"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at,omitempty"`
@@ -61,6 +81,7 @@ func (h *Handler) ListContent(c *gin.Context) {
 	query := `
 		SELECT id, title, 'document' as content_type, status, approved, review_status,
 		       total_chunks, chunks_done, COALESCE(error_message, '') as error_message,
+		       COALESCE(review_notes, '') as review_notes,
 		       created_at, created_at as updated_at
 		FROM documents
 		WHERE ($3::text = '' OR $3 = 'document')
@@ -69,6 +90,7 @@ func (h *Handler) ListContent(c *gin.Context) {
 		SELECT id, title, 'course' as content_type, status, COALESCE(approved, false) as approved,
 		       COALESCE(review_status, 'pending') as review_status,
 		       0, 0, '' as error_message,
+		       COALESCE(review_notes, '') as review_notes,
 		       created_at, updated_at
 		FROM courses
 		WHERE ($3::text = '' OR $3 = 'course')
@@ -91,7 +113,7 @@ func (h *Handler) ListContent(c *gin.Context) {
 		if err := rows.Scan(
 			&item.ID, &item.Title, &item.ContentType, &item.Status, &item.Approved,
 			&item.ReviewStatus, &item.TotalChunks, &item.ChunksDone, &item.ErrorMessage,
-			&createdAt, &updatedAt,
+			&item.ReviewNotes, &createdAt, &updatedAt,
 		); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -182,8 +204,84 @@ func (h *Handler) DeleteCourse(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Course deleted"})
 }
 
+func (h *Handler) ResubmitDocument(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	// Fetch current notes to append resubmit marker
+	var currentNotes string
+	err = h.Pool.QueryRow(c.Request.Context(),
+		"SELECT COALESCE(review_notes, '') FROM documents WHERE id = $1", id).Scan(&currentNotes)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+		return
+	}
+
+	who := h.userIdentity(c)
+	ts := time.Now().Format("2006-01-02 15:04")
+	resubmitNote := fmt.Sprintf("[%s %s resubmitted for review]", ts, who)
+	var finalNotes string
+	if currentNotes != "" {
+		finalNotes = resubmitNote + "\n---\n" + currentNotes
+	} else {
+		finalNotes = resubmitNote
+	}
+
+	_, err = h.Pool.Exec(c.Request.Context(),
+		`UPDATE documents SET review_status = 'pending', review_notes = $2, approved = false WHERE id = $1`,
+		id, finalNotes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resubmit document"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Document resubmitted for review"})
+}
+
+func (h *Handler) ResubmitCourse(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	// Fetch current notes to append resubmit marker
+	var currentNotes string
+	err = h.Pool.QueryRow(c.Request.Context(),
+		"SELECT COALESCE(review_notes, '') FROM courses WHERE id = $1", id).Scan(&currentNotes)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	who := h.userIdentity(c)
+	ts := time.Now().Format("2006-01-02 15:04")
+	resubmitNote := fmt.Sprintf("[%s %s resubmitted for review]", ts, who)
+	var finalNotes string
+	if currentNotes != "" {
+		finalNotes = resubmitNote + "\n---\n" + currentNotes
+	} else {
+		finalNotes = resubmitNote
+	}
+
+	_, err = h.Pool.Exec(c.Request.Context(),
+		`UPDATE courses SET review_status = 'pending', review_notes = $2, approved = false WHERE id = $1`,
+		id, finalNotes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resubmit course"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Course resubmitted for review"})
+}
+
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/content-repository", h.ListContent)
 	r.DELETE("/content-repository/documents/:id", h.DeleteDocument)
 	r.DELETE("/content-repository/courses/:id", h.DeleteCourse)
+	r.PUT("/content-repository/documents/:id/resubmit", h.ResubmitDocument)
+	r.PUT("/content-repository/courses/:id/resubmit", h.ResubmitCourse)
 }

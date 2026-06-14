@@ -143,9 +143,28 @@ func (h *Handler) ApproveDocument(c *gin.Context) {
 	c.JSON(http.StatusOK, doc)
 }
 
+func (h *Handler) GetDocumentChunks(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+		return
+	}
+	chunks, err := h.Queries.GetDocumentChunks(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chunks"})
+		return
+	}
+	if chunks == nil {
+		chunks = []database.DocumentChunk{}
+	}
+	c.JSON(http.StatusOK, chunks)
+}
+
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/documents", h.ListDocuments)
 	r.POST("/documents/upload", h.UploadDocument)
 	r.DELETE("/documents/:id", h.DeleteDocument)
 	r.PUT("/documents/:id/approve", h.ApproveDocument)
+	r.GET("/documents/:id/chunks", h.GetDocumentChunks)
 }

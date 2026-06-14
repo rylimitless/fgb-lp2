@@ -13,6 +13,7 @@
         RotateCcw,
         ArrowRight,
         Eye,
+        AlertTriangle,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
 
@@ -27,6 +28,11 @@
     let playerLoading = $state(false);
     let currentModuleIdx = $state(0);
     let showResults = $state(false);
+    let saving = $state(false);
+
+    // Confirmation dialog for skipping unanswered questions
+    let skipConfirmOpen = $state(false);
+    let pendingNavigation: (() => void) | null = $state(null);
 
     // Answers: { [itemId]: answer }
     let answers = $state<Record<number, any>>({});
@@ -74,6 +80,33 @@
         loading = false;
     }
 
+    async function saveProgress(completed: boolean = false) {
+        if (previewMode || saving || !enrolledCourse) return;
+        saving = true;
+        try {
+            const score = computeScore();
+            const pct =
+                score.total === 0
+                    ? "0"
+                    : ((score.correct / score.total) * 100).toFixed(2);
+            const body: any = {
+                course_id: enrolledCourse.id,
+                current_module: currentModuleIdx,
+                completed,
+                score_pct: pct,
+            };
+            await fetch("/api/lessons/progress", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+        } catch {
+            /* ignore */
+        }
+        saving = false;
+    }
+
     async function enroll(courseId: number) {
         playerLoading = true;
         enrolledCourse = null;
@@ -84,7 +117,20 @@
             const res = await fetch(`/api/courses/${courseId}/play`, {
                 credentials: "include",
             });
-            if (res.ok) enrolledCourse = await res.json();
+            if (res.ok) {
+                enrolledCourse = await res.json();
+                // Resume from saved progress if available
+                const prog = enrolledCourse.progress;
+                if (
+                    prog &&
+                    !prog.completed &&
+                    prog.current_module !== undefined
+                ) {
+                    const savedModule = prog.current_module;
+                    const maxModule = (enrolledCourse.modules?.length ?? 1) - 1;
+                    currentModuleIdx = Math.min(savedModule, maxModule);
+                }
+            }
         } catch {
             /* ignore */
         }
@@ -98,18 +144,66 @@
         loadCourses();
     }
 
+    function unansweredCount(mod: any): number {
+        let unanswered = 0;
+        if (!mod?.items) return 0;
+        for (const item of mod.items) {
+            if (item.item_type === "content") continue;
+            if (answers[item.id] === undefined) unanswered++;
+        }
+        return unanswered;
+    }
+
+    function tryNavigate(fn: () => void) {
+        const mod = enrolledCourse?.modules?.[currentModuleIdx];
+        const unanswered = unansweredCount(mod);
+        if (unanswered > 0) {
+            pendingNavigation = fn;
+            skipConfirmOpen = true;
+        } else {
+            fn();
+        }
+    }
+
+    function confirmSkip() {
+        skipConfirmOpen = false;
+        if (pendingNavigation) {
+            pendingNavigation();
+            pendingNavigation = null;
+        }
+    }
+
+    function cancelSkip() {
+        skipConfirmOpen = false;
+        pendingNavigation = null;
+    }
+
     function nextModule() {
         if (currentModuleIdx < (enrolledCourse.modules?.length ?? 0) - 1) {
-            currentModuleIdx++;
+            const nav = () => {
+                currentModuleIdx++;
+                saveProgress(false);
+            };
+            tryNavigate(nav);
         }
     }
 
     function prevModule() {
-        if (currentModuleIdx > 0) currentModuleIdx--;
+        if (currentModuleIdx > 0) {
+            const nav = () => {
+                currentModuleIdx--;
+                saveProgress(false);
+            };
+            tryNavigate(nav);
+        }
     }
 
     function finishCourse() {
-        showResults = true;
+        const nav = () => {
+            showResults = true;
+            saveProgress(true);
+        };
+        tryNavigate(nav);
     }
 
     function setAnswer(itemId: number, answer: any) {
@@ -151,20 +245,62 @@
         return { correct, total };
     }
 
-    function moduleProgress(mod: any): number {
+    function moduleProgress(mod: any): {
+        done: number;
+        total: number;
+        pct: number;
+    } {
         let done = 0,
             total = 0;
-        if (!mod?.items) return 100;
+        if (!mod?.items) return { done: 0, total: 0, pct: 100 };
         for (const item of mod.items) {
             if (item.item_type === "content") continue;
             total++;
             if (answers[item.id] !== undefined) done++;
         }
-        return total === 0 ? 100 : Math.round((done / total) * 100);
+        const pct = total === 0 ? 100 : Math.round((done / total) * 100);
+        return { done, total, pct };
     }
 
     let currentModule = $derived(enrolledCourse?.modules?.[currentModuleIdx]);
 </script>
+
+{#if skipConfirmOpen}
+    <!-- Skip Confirmation Dialog -->
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    >
+        <div
+            class="rounded-xl border border-border bg-card p-6 max-w-md w-full mx-4 shadow-xl"
+        >
+            <div class="flex items-start gap-3 mb-4">
+                <AlertTriangle class="size-5 text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                    <h3 class="text-sm font-semibold text-foreground">
+                        Unanswered Questions
+                    </h3>
+                    <p class="text-sm text-muted-foreground mt-1">
+                        You have {unansweredCount(
+                            enrolledCourse?.modules?.[currentModuleIdx],
+                        )} unanswered question{unansweredCount(
+                            enrolledCourse?.modules?.[currentModuleIdx],
+                        ) !== 1
+                            ? "s"
+                            : ""} in this module. Are you sure you want to skip them?
+                    </p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3">
+                <Button.Root variant="outline" size="sm" onclick={cancelSkip}>
+                    Go Back
+                </Button.Root>
+                <Button.Root size="sm" onclick={confirmSkip}>
+                    Skip & Continue
+                </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}
 
 <!-- Course List -->
 {#if !enrolledCourse}
@@ -319,6 +455,9 @@
         <p class="text-sm text-muted-foreground">
             {score.correct} of {score.total} correct
         </p>
+        <p class="text-xs text-muted-foreground">
+            Your progress has been saved.
+        </p>
         <div class="flex gap-3">
             <Button.Root variant="outline" onclick={goHome}
                 >Back to Courses</Button.Root
@@ -326,7 +465,9 @@
             <Button.Root
                 onclick={() => {
                     showResults = false;
-                    currentModuleIdx = 0;
+                    currentModuleIdx = enrolledCourse.modules?.length
+                        ? enrolledCourse.modules.length - 1
+                        : 0;
                 }}>Review Answers</Button.Root
             >
         </div>
@@ -364,6 +505,7 @@
                 {enrolledCourse.title}
             </h3>
             {#each enrolledCourse.modules as mod, mi}
+                {@const mp = moduleProgress(mod)}
                 <button
                     class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors {mi ===
                     currentModuleIdx
@@ -375,9 +517,11 @@
                         class="size-5 rounded-full border flex items-center justify-center shrink-0 text-[10px] font-bold
                         {mi === currentModuleIdx
                             ? 'border-primary text-primary'
-                            : 'border-border text-muted-foreground'}"
+                            : mp.pct === 100
+                              ? 'border-emerald-500 text-emerald-500 bg-emerald-500/10'
+                              : 'border-border text-muted-foreground'}"
                     >
-                        {moduleProgress(mod) === 100 ? "✓" : mi + 1}
+                        {mp.pct === 100 ? "✓" : mi + 1}
                     </div>
                     <span class="truncate">{mod.title}</span>
                 </button>
@@ -387,6 +531,7 @@
         <!-- Main Content -->
         <main class="flex-1 min-w-0">
             {#if currentModule}
+                {@const mp = moduleProgress(currentModule)}
                 <div class="rounded-xl border border-border bg-card p-6 mb-4">
                     <h2 class="text-lg font-semibold text-foreground">
                         {currentModule.title}
@@ -394,6 +539,19 @@
                     <p class="text-sm text-muted-foreground mt-1">
                         {currentModule.description}
                     </p>
+                    <div class="mt-3 flex items-center gap-2">
+                        <div
+                            class="h-1.5 flex-1 rounded-full bg-muted overflow-hidden"
+                        >
+                            <div
+                                class="h-full rounded-full bg-primary transition-all"
+                                style="width: {mp.pct}%"
+                            ></div>
+                        </div>
+                        <span class="text-xs text-muted-foreground shrink-0"
+                            >{mp.done}/{mp.total}</span
+                        >
+                    </div>
                 </div>
 
                 <div class="flex flex-col gap-4">

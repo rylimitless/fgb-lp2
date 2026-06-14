@@ -11,6 +11,7 @@ import (
 	"fgb-lp/documents"
 	"fgb-lp/lessons"
 	"fgb-lp/middlewares"
+	"fgb-lp/notifications"
 	"fgb-lp/review"
 	"fgb-lp/worker"
 	"fmt"
@@ -163,6 +164,9 @@ func main() {
 	repoHandler := content_repository.NewHandler(dbpool)
 	repoHandler.RegisterRoutes(protected)
 
+	notifHandler := notifications.NewHandler(queries)
+	notifHandler.RegisterRoutes(protected)
+
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())
 
@@ -216,5 +220,23 @@ CREATE TABLE IF NOT EXISTS course_generation_jobs (
 	`)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration jobs table: %v\n", err)
+	}
+
+	// Create notifications table if it doesn't exist
+	_, err = pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS notifications (
+  id bigserial primary key,
+  user_id bigint references users(id) on delete cascade,
+  title text not null,
+  message text not null default '',
+  link text not null default '',
+  is_read boolean not null default false,
+  created_at timestamptz not null default now()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
+  on notifications(user_id, is_read) where is_read = false;
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration notifications table: %v\n", err)
 	}
 }

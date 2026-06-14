@@ -23,6 +23,12 @@ select * from sessions where token = $1 and expires_at > now();
 -- name: DeleteSession :exec
 delete from sessions where token = $1;
 
+-- name: GetAllUsers :many
+select * from users order by created_at desc;
+
+-- name: DeleteUser :exec
+delete from users where id = $1;
+
 -- name: InsertDocument :one
 insert into documents (title, file_path, status, uploaded_by)
 values ($1, $2, 'uploaded', $3)
@@ -69,6 +75,9 @@ join documents d on d.id = dc.document_id
 where d.approved = true and dc.embedding is not null
 order by dc.embedding <=> $1
 limit $2;
+
+-- name: GetDocumentChunks :many
+select * from document_chunks where document_id = $1 order by chunk_index;
 
 -- name: GetApprovedDocuments :many
 select * from documents where approved = true order by created_at desc;
@@ -181,3 +190,20 @@ set review_status = $2,
     updated_at = now()
 where id = $1
 returning *;
+
+-- name: GetUserNotifications :many
+select * from notifications where user_id = $1 order by created_at desc limit $2;
+
+-- name: CountUnreadNotifications :one
+select count(*) from notifications where user_id = $1 and is_read = false;
+
+-- name: CreateNotification :one
+insert into notifications (user_id, title, message, link)
+values ($1, $2, $3, $4)
+returning *;
+
+-- name: MarkNotificationRead :one
+update notifications set is_read = true where id = $1 returning *;
+
+-- name: GetAdminUsers :many
+select * from users where role = 'admin' order by created_at;

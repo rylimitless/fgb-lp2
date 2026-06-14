@@ -192,6 +192,19 @@ create table if not exists lesson_progress (
   unique(user_id, course_id)
 );
 
+-- Notifications: system notifications for users
+create table if not exists notifications (
+  id bigserial primary key,
+  user_id bigint references users(id) on delete cascade,
+  title text not null,
+  message text not null default '',
+  link text not null default '',
+  is_read boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_notifications_user_unread
+  on notifications(user_id, is_read) where is_read = false;
+
 -- Course Generation Jobs: persists generation state across restarts
 create table if not exists course_generation_jobs (
   id text primary key,
