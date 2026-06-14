@@ -17,6 +17,7 @@
         Ellipsis,
         Bell,
         LoaderCircle,
+        BarChart3,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Tabs from "$lib/components/ui/tabs";
@@ -84,6 +85,12 @@
             label: "User Management",
             icon: Users,
             href: "/user-management",
+        },
+        {
+            value: "analytics",
+            label: "Analytics",
+            icon: BarChart3,
+            href: "/analytics",
         },
     ];
 

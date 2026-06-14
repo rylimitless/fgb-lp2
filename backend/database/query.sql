@@ -207,3 +207,65 @@ update notifications set is_read = true where id = $1 returning *;
 
 -- name: GetAdminUsers :many
 select * from users where role = 'admin' order by created_at;
+
+-- name: InsertCoachQuery :one
+insert into coach_queries (user_id, question, sources_count)
+values ($1, $2, $3)
+returning *;
+
+-- name: CountCoachQueries :one
+select count(*) from coach_queries;
+
+-- name: CountActiveLearners :one
+select count(distinct user_id) from (
+  select user_id from practice_sessions where started_at > now() - interval '30 days'
+  union
+  select user_id from lesson_progress where started_at > now() - interval '30 days'
+) sub;
+
+-- name: CountTotalUsers :one
+select count(*) from users;
+
+-- name: GetMostFailedTopics :many
+select
+  topic,
+  sum(question_count)::int as total_questions,
+  sum(correct_count)::int as total_correct,
+  sum(question_count - correct_count)::int as total_wrong
+from practice_sessions
+where completed_at is not null
+group by topic
+order by total_wrong desc
+limit $1;
+
+-- name: GetCourseEffectiveness :many
+select
+  c.id as course_id,
+  c.title as course_title,
+  count(lp.user_id) as learner_count,
+  coalesce(avg(lp.score_pct), 0) as avg_score,
+  count(case when lp.completed then 1 end) as completed_count
+from courses c
+left join lesson_progress lp on lp.course_id = c.id
+where c.status = 'published' and c.approved = true
+group by c.id, c.title
+order by avg_score desc;
+
+-- name: GetAdaptiveOverview :one
+select
+  count(distinct user_id) as active_users,
+  coalesce(avg(theta), 0) as avg_theta,
+  coalesce(stddev(theta), 0) as stddev_theta,
+  coalesce(min(theta), 0) as min_theta,
+  coalesce(max(theta), 0) as max_theta
+from learning_preferences
+where updated_at > now() - interval '30 days';
+
+-- name: GetCoachQueriesOverTime :many
+select
+  date_trunc('day', created_at)::date as day,
+  count(*)::int as query_count
+from coach_queries
+group by day
+order by day desc
+limit $1;

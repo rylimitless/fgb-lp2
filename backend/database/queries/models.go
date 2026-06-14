@@ -9,6 +9,14 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+type CoachQuery struct {
+	ID           int64              `json:"id"`
+	UserID       pgtype.Int8        `json:"user_id"`
+	Question     string             `json:"question"`
+	SourcesCount int32              `json:"sources_count"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Course struct {
 	ID           int64              `json:"id"`
 	Title        string             `json:"title"`

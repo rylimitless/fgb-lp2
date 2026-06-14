@@ -50,6 +50,32 @@ func (q *Queries) ClaimDocument(ctx context.Context, id int64) (Document, error)
 	return i, err
 }
 
+const countActiveLearners = `-- name: CountActiveLearners :one
+select count(distinct user_id) from (
+  select user_id from practice_sessions where started_at > now() - interval '30 days'
+  union
+  select user_id from lesson_progress where started_at > now() - interval '30 days'
+) sub
+`
+
+func (q *Queries) CountActiveLearners(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveLearners)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countCoachQueries = `-- name: CountCoachQueries :one
+select count(*) from coach_queries
+`
+
+func (q *Queries) CountCoachQueries(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countCoachQueries)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingReviewCourses = `-- name: CountPendingReviewCourses :one
 select count(*) from courses where review_status = 'pending'
 `
@@ -67,6 +93,17 @@ select count(*) from documents where review_status = 'pending'
 
 func (q *Queries) CountPendingReviewDocuments(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countPendingReviewDocuments)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTotalUsers = `-- name: CountTotalUsers :one
+select count(*) from users
+`
+
+func (q *Queries) CountTotalUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countTotalUsers)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -335,6 +372,38 @@ func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
 	return err
 }
 
+const getAdaptiveOverview = `-- name: GetAdaptiveOverview :one
+select
+  count(distinct user_id) as active_users,
+  coalesce(avg(theta), 0) as avg_theta,
+  coalesce(stddev(theta), 0) as stddev_theta,
+  coalesce(min(theta), 0) as min_theta,
+  coalesce(max(theta), 0) as max_theta
+from learning_preferences
+where updated_at > now() - interval '30 days'
+`
+
+type GetAdaptiveOverviewRow struct {
+	ActiveUsers int64       `json:"active_users"`
+	AvgTheta    interface{} `json:"avg_theta"`
+	StddevTheta interface{} `json:"stddev_theta"`
+	MinTheta    interface{} `json:"min_theta"`
+	MaxTheta    interface{} `json:"max_theta"`
+}
+
+func (q *Queries) GetAdaptiveOverview(ctx context.Context) (GetAdaptiveOverviewRow, error) {
+	row := q.db.QueryRow(ctx, getAdaptiveOverview)
+	var i GetAdaptiveOverviewRow
+	err := row.Scan(
+		&i.ActiveUsers,
+		&i.AvgTheta,
+		&i.StddevTheta,
+		&i.MinTheta,
+		&i.MaxTheta,
+	)
+	return i, err
+}
+
 const getAdminUsers = `-- name: GetAdminUsers :many
 select id, email, password_hash, name, role, created_at, updated_at from users where role = 'admin' order by created_at
 `
@@ -469,6 +538,41 @@ func (q *Queries) GetApprovedDocuments(ctx context.Context) ([]Document, error) 
 	return items, nil
 }
 
+const getCoachQueriesOverTime = `-- name: GetCoachQueriesOverTime :many
+select
+  date_trunc('day', created_at)::date as day,
+  count(*)::int as query_count
+from coach_queries
+group by day
+order by day desc
+limit $1
+`
+
+type GetCoachQueriesOverTimeRow struct {
+	Day        pgtype.Date `json:"day"`
+	QueryCount int32       `json:"query_count"`
+}
+
+func (q *Queries) GetCoachQueriesOverTime(ctx context.Context, limit int32) ([]GetCoachQueriesOverTimeRow, error) {
+	rows, err := q.db.Query(ctx, getCoachQueriesOverTime, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCoachQueriesOverTimeRow
+	for rows.Next() {
+		var i GetCoachQueriesOverTimeRow
+		if err := rows.Scan(&i.Day, &i.QueryCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCourseByID = `-- name: GetCourseByID :one
 select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes from courses where id = $1
 `
@@ -492,6 +596,54 @@ func (q *Queries) GetCourseByID(ctx context.Context, id int64) (Course, error) {
 		&i.ReviewNotes,
 	)
 	return i, err
+}
+
+const getCourseEffectiveness = `-- name: GetCourseEffectiveness :many
+select
+  c.id as course_id,
+  c.title as course_title,
+  count(lp.user_id) as learner_count,
+  coalesce(avg(lp.score_pct), 0) as avg_score,
+  count(case when lp.completed then 1 end) as completed_count
+from courses c
+left join lesson_progress lp on lp.course_id = c.id
+where c.status = 'published' and c.approved = true
+group by c.id, c.title
+order by avg_score desc
+`
+
+type GetCourseEffectivenessRow struct {
+	CourseID       int64       `json:"course_id"`
+	CourseTitle    string      `json:"course_title"`
+	LearnerCount   int64       `json:"learner_count"`
+	AvgScore       interface{} `json:"avg_score"`
+	CompletedCount int64       `json:"completed_count"`
+}
+
+func (q *Queries) GetCourseEffectiveness(ctx context.Context) ([]GetCourseEffectivenessRow, error) {
+	rows, err := q.db.Query(ctx, getCourseEffectiveness)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCourseEffectivenessRow
+	for rows.Next() {
+		var i GetCourseEffectivenessRow
+		if err := rows.Scan(
+			&i.CourseID,
+			&i.CourseTitle,
+			&i.LearnerCount,
+			&i.AvgScore,
+			&i.CompletedCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getCourseItemsByCourse = `-- name: GetCourseItemsByCourse :many
@@ -765,6 +917,51 @@ func (q *Queries) GetModulesByCourse(ctx context.Context, courseID int64) ([]Mod
 	return items, nil
 }
 
+const getMostFailedTopics = `-- name: GetMostFailedTopics :many
+select
+  topic,
+  sum(question_count)::int as total_questions,
+  sum(correct_count)::int as total_correct,
+  sum(question_count - correct_count)::int as total_wrong
+from practice_sessions
+where completed_at is not null
+group by topic
+order by total_wrong desc
+limit $1
+`
+
+type GetMostFailedTopicsRow struct {
+	Topic          string `json:"topic"`
+	TotalQuestions int32  `json:"total_questions"`
+	TotalCorrect   int32  `json:"total_correct"`
+	TotalWrong     int32  `json:"total_wrong"`
+}
+
+func (q *Queries) GetMostFailedTopics(ctx context.Context, limit int32) ([]GetMostFailedTopicsRow, error) {
+	rows, err := q.db.Query(ctx, getMostFailedTopics, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetMostFailedTopicsRow
+	for rows.Next() {
+		var i GetMostFailedTopicsRow
+		if err := rows.Scan(
+			&i.Topic,
+			&i.TotalQuestions,
+			&i.TotalCorrect,
+			&i.TotalWrong,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getPendingDocuments = `-- name: GetPendingDocuments :many
 select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes from documents where status = 'uploaded' order by created_at asc
 `
@@ -1015,6 +1212,31 @@ func (q *Queries) GetUserNotifications(ctx context.Context, arg GetUserNotificat
 		return nil, err
 	}
 	return items, nil
+}
+
+const insertCoachQuery = `-- name: InsertCoachQuery :one
+insert into coach_queries (user_id, question, sources_count)
+values ($1, $2, $3)
+returning id, user_id, question, sources_count, created_at
+`
+
+type InsertCoachQueryParams struct {
+	UserID       pgtype.Int8 `json:"user_id"`
+	Question     string      `json:"question"`
+	SourcesCount int32       `json:"sources_count"`
+}
+
+func (q *Queries) InsertCoachQuery(ctx context.Context, arg InsertCoachQueryParams) (CoachQuery, error) {
+	row := q.db.QueryRow(ctx, insertCoachQuery, arg.UserID, arg.Question, arg.SourcesCount)
+	var i CoachQuery
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Question,
+		&i.SourcesCount,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const insertDocument = `-- name: InsertDocument :one

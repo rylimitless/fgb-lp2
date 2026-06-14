@@ -219,3 +219,13 @@ create table if not exists course_generation_jobs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Coach queries: tracks GIA AI Coach usage for analytics
+create table if not exists coach_queries (
+  id bigserial primary key,
+  user_id bigint references users(id) on delete set null,
+  question text not null,
+  sources_count int not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_coach_queries_created_at on coach_queries(created_at);

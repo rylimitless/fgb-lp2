@@ -1,6 +1,7 @@
 package coach
 
 import (
+	"context"
 	"fgb-lp/ai"
 	database "fgb-lp/database/queries"
 	"fgb-lp/embeddings"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -78,6 +80,16 @@ func (h *Handler) Chat(c *gin.Context) {
 		}
 	}
 
+	// Log the query for analytics (fire-and-forget)
+	go func() {
+		uid := getUserID(c)
+		h.Queries.InsertCoachQuery(context.Background(), database.InsertCoachQueryParams{
+			UserID:       uid,
+			Question:     req.Message,
+			SourcesCount: int32(len(sources)),
+		})
+	}()
+
 	if len(chunks) == 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"answer":  "I don't find any approved documents in the system yet. Please upload and approve some documents first.",
@@ -110,4 +122,16 @@ func float64ToFloat32(in []float64) []float32 {
 		out[i] = float32(v)
 	}
 	return out
+}
+
+func getUserID(c *gin.Context) pgtype.Int8 {
+	uid, exists := c.Get("user_id")
+	if !exists {
+		return pgtype.Int8{Valid: false}
+	}
+	id, ok := uid.(int64)
+	if !ok {
+		return pgtype.Int8{Valid: false}
+	}
+	return pgtype.Int8{Int64: id, Valid: true}
 }

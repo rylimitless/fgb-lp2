@@ -4,6 +4,7 @@ import (
 	"context"
 	"fgb-lp/adaptive"
 	"fgb-lp/ai"
+	"fgb-lp/analytics"
 	"fgb-lp/app"
 	"fgb-lp/coach"
 	"fgb-lp/content_repository"
@@ -167,6 +168,9 @@ func main() {
 	notifHandler := notifications.NewHandler(queries)
 	notifHandler.RegisterRoutes(protected)
 
+	analyticsHandler := analytics.NewHandler(queries)
+	analyticsHandler.RegisterRoutes(protected)
+
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())
 
@@ -238,5 +242,20 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
 	`)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration notifications table: %v\n", err)
+	}
+
+	// Create coach_queries table if it doesn't exist
+	_, err = pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS coach_queries (
+  id bigserial primary key,
+  user_id bigint references users(id) on delete set null,
+  question text not null,
+  sources_count int not null default 0,
+  created_at timestamptz not null default now()
+);
+CREATE INDEX IF NOT EXISTS idx_coach_queries_created_at on coach_queries(created_at);
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration coach_queries table: %v\n", err)
 	}
 }
