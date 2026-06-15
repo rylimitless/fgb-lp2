@@ -17,7 +17,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
-    allowedHosts: [".ngrok-free.app"],
+    allowedHosts: [".ngrok-free.app", "fgbguide.rybuildstuff.dev"],
     hmr: {
       clientPort: 5173,
     },
