@@ -1,8 +1,12 @@
 import type { LayoutServerLoad } from "./$types";
 
-export const load: LayoutServerLoad = async ({ fetch }) => {
+export const load: LayoutServerLoad = async ({ fetch, cookies }) => {
+  const sessionToken = cookies.get("session_token");
+
   try {
-    const res = await fetch("/api/me");
+    const res = await fetch("/api/me", {
+      headers: sessionToken ? { cookie: `session_token=${sessionToken}` } : {},
+    });
     if (res.ok) {
       const user = await res.json();
       return {
@@ -15,8 +19,8 @@ export const load: LayoutServerLoad = async ({ fetch }) => {
         },
       };
     }
-  } catch {
-    // User not authenticated or fetch failed — hooks.server will redirect to login
+  } catch (e) {
+    console.error("[layout] /api/me failed:", e);
   }
   return { user: null };
 };
