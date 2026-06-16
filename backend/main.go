@@ -68,6 +68,11 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"first_user": isFirst})
 	})
 
+	r.GET("/api/health", func(c *gin.Context) {
+
+		c.JSON(http.StatusOK, gin.H{"Status": "Ok"})
+	})
+
 	r.POST("/api/setup", func(c *gin.Context) {
 		var body struct {
 			Email    string `json:"email" binding:"required,email"`
