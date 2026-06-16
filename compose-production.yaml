@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: example_db
     ports:
       - "5440:5432"
+    restart: unless-stopped
+
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
@@ -21,6 +23,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile.prod
     container_name: fgb-backend
+    restart: unless-stopped
+
     environment:
       DATABASE_URL: postgres://postgres:password@db:5432/example_db
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -43,6 +47,8 @@ services:
     # Port 3000 is still exposed within the Docker network
     expose:
       - "3000"
+    restart: unless-stopped
+
     volumes:
       - ./src:/app/src
       - ./static:/app/static
@@ -51,20 +57,20 @@ services:
     depends_on:
       - backend
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - frontend
-      - backend
+  # caddy:
+  # image: caddy:2-alpine
+  # restart: unless-stopped
+  # ports:
+  #   - "80:80"
+  #   - "443:443"
+  #   - "443:443/udp"
+  # volumes:
+  #   - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+  #   - caddy_data:/data
+  #   - caddy_config:/config
+  # depends_on:
+  #   - frontend
+  #   - backend
 
 volumes:
   pgdata:
