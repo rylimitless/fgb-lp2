@@ -16,7 +16,7 @@ export default defineConfig({
   ],
   server: {
     host: "0.0.0.0",
-    allowedHosts: ["fgbacademy.rybuildstuff.dev"],
+    allowedHosts: ["fgbacademy.rybuildstuff.dev", "fgbguide.rybuildstuff.dev"],
 
     port: 5173,
     hmr: {
