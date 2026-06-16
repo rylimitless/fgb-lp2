@@ -2,6 +2,8 @@ services:
   db:
     image: pgvector/pgvector:pg17
     container_name: fgb-db
+    restart: unless-stopped
+
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -20,6 +22,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
+    restart: unless-stopped
+
     container_name: fgb-backend
     environment:
       DATABASE_URL: postgres://postgres:password@db:5432/example_db
@@ -39,6 +43,8 @@ services:
       context: .
       dockerfile: Dockerfile.frontend.prod
     container_name: fgb-frontend
+    restart: unless-stopped
+
     ports:
       - "3038:3000"
     volumes:
@@ -49,17 +55,17 @@ services:
     depends_on:
       - backend
 
-  # caddy:
-  #   image: caddy:2-alpine
-  #   restart: unless-stopped
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #     - "443:443/udp"
-  #   volumes:
-  #     - ./caddy/Caddyfile:/etc/caddy/Caddyfile
-  #     - caddy_data:/data
-  #     - caddy_config:/config
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   pgdata:
