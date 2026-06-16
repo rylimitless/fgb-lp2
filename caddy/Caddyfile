@@ -1,0 +1,10 @@
+fgbacademy.rybuildstuff.dev {
+	# Frontend (SvelteKit static build served via preview)
+	handle_path /api/* {
+		reverse_proxy backend:5555
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

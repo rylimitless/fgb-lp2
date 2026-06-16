@@ -39,8 +39,10 @@ services:
       context: .
       dockerfile: Dockerfile.frontend.prod
     container_name: fgb-frontend
-    ports:
-      - "3038:3000"
+    # No host port needed — Caddy proxies internally
+    # Port 3000 is still exposed within the Docker network
+    expose:
+      - "3000"
     volumes:
       - ./src:/app/src
       - ./static:/app/static
@@ -49,18 +51,20 @@ services:
     depends_on:
       - backend
 
-    # caddy:
-    #   image: caddy:<version>
-    #   restart: unless-stopped
-    #   ports:
-    #     - "80:80"
-    #     - "443:443"
-    #     - "443:443/udp"
-    #   volumes:
-    #     - ./conf:/etc/caddy
-    #     - ./site:/srv
-    #     - caddy_data:/data
-    #     - caddy_config:/config
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
 
 volumes:
   pgdata:
