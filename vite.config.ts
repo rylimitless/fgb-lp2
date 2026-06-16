@@ -16,6 +16,8 @@ export default defineConfig({
   ],
   server: {
     host: "0.0.0.0",
+    allowedHosts: ["fgbacademy.rybuildstuff.dev"],
+
     port: 5173,
     hmr: {
       clientPort: 3038,
