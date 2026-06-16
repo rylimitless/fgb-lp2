@@ -1,0 +1,39 @@
+/**
+ * FGB Academy — brand components barrel.
+ * Single import surface for design-system pieces. Keep this file alphabetical.
+ */
+export { default as AchievementsWall } from "./AchievementsWall.svelte";
+export { default as AnimatedGradient } from "./AnimatedGradient.svelte";
+export { default as AnimatedGrid } from "./AnimatedGrid.svelte";
+export { default as AnimatedList } from "./AnimatedList.svelte";
+export { default as AnswerFeedback } from "./AnswerFeedback.svelte";
+export { default as BadgeMedal } from "./BadgeMedal.svelte";
+export { default as BorderBeam } from "./BorderBeam.svelte";
+export { default as BrandLogo } from "./BrandLogo.svelte";
+export { default as CommandPalette } from "./CommandPalette.svelte";
+export { default as Confetti } from "./Confetti.svelte";
+export { default as ContinueLearning } from "./ContinueLearning.svelte";
+export { default as CourseCard } from "./CourseCard.svelte";
+export { default as EmptyState } from "./EmptyState.svelte";
+export { default as GiaAvatar } from "./GiaAvatar.svelte";
+export { default as GiaTip } from "./GiaTip.svelte";
+export { default as LoadingDots } from "./LoadingDots.svelte";
+export { default as Markdown } from "./Markdown.svelte";
+export { default as Marquee } from "./Marquee.svelte";
+export { default as NumberTicker } from "./NumberTicker.svelte";
+export { default as OrbitingInsights } from "./OrbitingInsights.svelte";
+export { default as PageHeader } from "./PageHeader.svelte";
+export { default as Particles } from "./Particles.svelte";
+export { default as PremiumTable } from "./PremiumTable.svelte";
+export { default as QuestionHotspot } from "./QuestionHotspot.svelte";
+export { default as QuestionMatching } from "./QuestionMatching.svelte";
+export { default as QuestionOrdering } from "./QuestionOrdering.svelte";
+export { default as Recommendations } from "./Recommendations.svelte";
+export { default as ScrollReveal } from "./ScrollReveal.svelte";
+export { default as Spotlight } from "./Spotlight.svelte";
+export { default as StatCard } from "./StatCard.svelte";
+export { default as StreakFlame } from "./StreakFlame.svelte";
+export { default as ToastViewport } from "./ToastViewport.svelte";
+export { default as WordRotate } from "./WordRotate.svelte";
+export { default as XpRing } from "./XpRing.svelte";
+export { showToast, dismissToast, toasts } from "./toast.svelte";

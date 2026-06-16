@@ -1,0 +1,69 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: fgb-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: example_db
+    ports:
+      - "5440:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: fgb-backend
+    environment:
+      DATABASE_URL: postgres://postgres:password@db:5432/example_db
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend:/app
+      - /app/tmp
+      - uploads_data:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend.prod
+    container_name: fgb-frontend
+    ports:
+      - "3038:3000"
+    volumes:
+      - ./src:/app/src
+      - ./static:/app/static
+      - ./vite.config.ts:/app/vite.config.ts
+      - /app/node_modules
+    depends_on:
+      - backend
+
+    # caddy:
+    #   image: caddy:<version>
+    #   restart: unless-stopped
+    #   ports:
+    #     - "80:80"
+    #     - "443:443"
+    #     - "443:443/udp"
+    #   volumes:
+    #     - ./conf:/etc/caddy
+    #     - ./site:/srv
+    #     - caddy_data:/data
+    #     - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+  uploads_data:

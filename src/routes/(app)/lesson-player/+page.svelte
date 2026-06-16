@@ -14,11 +14,36 @@
         ArrowRight,
         Eye,
         AlertTriangle,
+        Sparkles,
+        Search,
+        X,
+        Printer,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import {
+        AnswerFeedback,
+        BadgeMedal,
+        Confetti,
+        CourseCard,
+        GiaAvatar,
+        Spotlight,
+        NumberTicker,
+        PageHeader,
+        EmptyState,
+        LoadingDots,
+        XpRing,
+        Markdown,
+        QuestionMatching,
+        QuestionOrdering,
+        QuestionHotspot,
+    } from "$lib/components/brand";
 
     let courses = $state<any[]>([]);
     let loading = $state(true);
+
+    // Catalogue filter state
+    let search = $state("");
+    let filter = $state<"all" | "in_progress" | "completed" | "new">("all");
 
     // Preview mode
     let previewMode = $state(false);
@@ -225,8 +250,47 @@
             }
             case "tf":
                 return answer === d.answer;
+            case "matching": {
+                const pairs = d.pairs ?? [];
+                if (!pairs.length || !answer || typeof answer !== "object") return false;
+                return pairs.every((_p: any, index: number) => answer[String(index)] === index);
+            }
+            case "drag_sort": {
+                const items = d.items ?? [];
+                if (!items.length || !Array.isArray(answer)) return false;
+                return answer.length === items.length && answer.every((v: number, i: number) => v === i);
+            }
+            case "hotspot": {
+                const regions = d.regions ?? [];
+                if (typeof answer !== "number") return false;
+                return Boolean(regions[answer]?.correct);
+            }
             default:
                 return false;
+        }
+    }
+
+    function correctAnswerLabel(item: any): string {
+        const d = item.data ?? {};
+        switch (item.item_type) {
+            case "mc":
+                return d.options?.[d.correct] ?? "";
+            case "ma":
+                return Array.isArray(d.correct)
+                    ? d.correct.map((i: number) => d.options?.[i]).filter(Boolean).join(", ")
+                    : "";
+            case "tf":
+                return d.answer === true ? "True" : "False";
+            case "matching":
+                return (d.pairs ?? [])
+                    .map((p: any) => `${p.left} → ${p.right}`)
+                    .join("; ");
+            case "drag_sort":
+                return (d.items ?? []).join(" → ");
+            case "hotspot":
+                return (d.regions ?? []).find((r: any) => r.correct)?.label ?? "";
+            default:
+                return "";
         }
     }
 
@@ -263,6 +327,73 @@
     }
 
     let currentModule = $derived(enrolledCourse?.modules?.[currentModuleIdx]);
+
+    // ---------------------------------------------------------------------
+    // Catalogue derivations
+    // ---------------------------------------------------------------------
+
+    function matchesSearch(c: any, q: string): boolean {
+        if (!q) return true;
+        const needle = q.toLowerCase();
+        return (
+            (c.title ?? "").toLowerCase().includes(needle) ||
+            (c.description ?? "").toLowerCase().includes(needle)
+        );
+    }
+
+    function courseState(c: any): "completed" | "in_progress" | "new" {
+        if (c.progress?.completed) return "completed";
+        if (c.progress?.current_module !== undefined) return "in_progress";
+        return "new";
+    }
+
+    let filteredCourses = $derived(
+        courses.filter(
+            (c) =>
+                matchesSearch(c, search) &&
+                (filter === "all" || courseState(c) === filter),
+        ),
+    );
+
+    let continueCourses = $derived(
+        filteredCourses.filter((c) => courseState(c) === "in_progress"),
+    );
+    let newCourses = $derived(
+        filteredCourses.filter((c) => courseState(c) === "new"),
+    );
+    let completedCourses = $derived(
+        filteredCourses.filter((c) => courseState(c) === "completed"),
+    );
+
+    const questionTypeLabels: Record<string, string> = {
+        mc: "Multiple choice",
+        ma: "Multiple answer",
+        tf: "True/false",
+        fb: "Fill blanks",
+        sa: "Short answer",
+        matching: "Matching",
+        drag_sort: "Ordering",
+        hotspot: "Hotspot",
+    };
+
+    let assessmentMix = $derived.by(() => {
+        const counts: Record<string, number> = {};
+        for (const mod of enrolledCourse?.modules ?? []) {
+            for (const item of mod.items ?? []) {
+                if (item.item_type === "content") continue;
+                counts[item.item_type] = (counts[item.item_type] ?? 0) + 1;
+            }
+        }
+        const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+        return Object.entries(counts)
+            .map(([type, count]) => ({
+                type,
+                label: questionTypeLabels[type] ?? type,
+                count,
+                pct: total === 0 ? 0 : Math.round((count / total) * 100),
+            }))
+            .sort((a, b) => b.count - a.count);
+    });
 </script>
 
 {#if skipConfirmOpen}
@@ -274,7 +405,7 @@
             class="rounded-xl border border-border bg-card p-6 max-w-md w-full mx-4 shadow-xl"
         >
             <div class="flex items-start gap-3 mb-4">
-                <AlertTriangle class="size-5 text-amber-500 shrink-0 mt-0.5" />
+                <AlertTriangle class="size-5 text-warning shrink-0 mt-0.5" />
                 <div>
                     <h3 class="text-sm font-semibold text-foreground">
                         Unanswered Questions
@@ -305,134 +436,189 @@
 <!-- Course List -->
 {#if !enrolledCourse}
     <div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
-        <div class="flex items-center gap-3">
-            <GraduationCap class="size-6 text-primary" />
-            <h1 class="text-2xl font-semibold tracking-tight text-foreground">
-                Guided Lesson Player
-            </h1>
-        </div>
+        <PageHeader
+            title="Course library"
+            eyebrow="Lesson player"
+            description="Browse approved courses. Continue where you left off, or pick a new pathway."
+        >
+            {#snippet icon()}
+                <GraduationCap class="size-6 text-primary" />
+            {/snippet}
+        </PageHeader>
 
         {#if loading}
-            <div class="flex justify-center py-16">
-                <LoaderCircle
-                    class="size-6 text-muted-foreground animate-spin"
-                />
+            <div class="flex flex-col items-center gap-3 py-16 text-muted-foreground">
+                <LoadingDots label="Loading courses" />
             </div>
         {:else if courses.length === 0}
-            <div
-                class="rounded-xl border border-border bg-card p-12 text-center"
-            >
-                <BookOpen
-                    class="size-10 text-muted-foreground/40 mx-auto mb-3"
-                />
-                <p class="text-sm text-muted-foreground">
-                    No approved courses available yet. Courses must be published
-                    and approved to appear here.
-                </p>
-            </div>
+            <EmptyState
+                title="No approved courses yet"
+                description="Courses must be published and approved to appear here. Ask a content creator to publish one, or generate one in the AI Generator."
+            />
         {:else}
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {#each courses as course}
-                    <div
-                        class="rounded-xl border border-border bg-card p-6 flex flex-col gap-4 hover:border-primary/30 transition-colors"
-                    >
-                        <div class="flex items-start gap-3">
-                            <BookOpen
-                                class="size-6 text-primary shrink-0 mt-0.5"
-                            />
-                            <div class="min-w-0">
-                                <h3
-                                    class="text-base font-semibold text-foreground leading-snug"
-                                >
-                                    {course.title}
-                                </h3>
-                                <p
-                                    class="text-sm text-muted-foreground mt-1.5 line-clamp-2"
-                                >
-                                    {course.description}
-                                </p>
-                            </div>
-                        </div>
-
-                        {#if course.progress}
-                            <div class="space-y-2">
-                                <div
-                                    class="flex items-center justify-between text-xs"
-                                >
-                                    <span class="text-muted-foreground"
-                                        >Module {course.progress
-                                            .current_module + 1}</span
-                                    >
-                                    <span class="text-muted-foreground"
-                                        >{course.progress.completed
-                                            ? "Completed"
-                                            : "In progress"}</span
-                                    >
-                                </div>
-                                <div
-                                    class="h-2 w-full rounded-full bg-muted overflow-hidden"
-                                >
-                                    <div
-                                        class="h-full rounded-full bg-primary transition-all"
-                                        style="width: {course.progress.completed
-                                            ? '100%'
-                                            : Math.min(
-                                                  (course.progress
-                                                      .current_module /
-                                                      5) *
-                                                      100,
-                                                  90,
-                                              ) + '%'}"
-                                    ></div>
-                                </div>
-                            </div>
-                        {/if}
-
-                        <div
-                            class="flex items-center gap-3 text-xs text-muted-foreground"
+            <!-- Search + filter bar -->
+            <div
+                class="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-3"
+                role="search"
+            >
+                <div class="relative flex-1 min-w-[200px]">
+                    <Search
+                        class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                    />
+                    <input
+                        bind:value={search}
+                        type="search"
+                        placeholder="Search by title or description"
+                        aria-label="Search courses"
+                        class="placeholder:text-muted-foreground/60 flex h-9 w-full rounded-md border border-input bg-background pl-9 pr-9 text-sm text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                    />
+                    {#if search}
+                        <button
+                            type="button"
+                            onclick={() => (search = "")}
+                            aria-label="Clear search"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                         >
-                            <span class="flex items-center gap-1"
-                                ><Layers class="size-3.5" />
-                                {course.source_doc_ids?.length ?? 0} sources</span
-                            >
-                            {#if course.progress?.completed}
-                                <span
-                                    class="flex items-center gap-1 text-emerald-500"
-                                    ><CheckCircle class="size-3.5" />
-                                    {course.progress.score_pct}%</span
-                                >
-                            {/if}
-                        </div>
+                            <X class="size-3.5" />
+                        </button>
+                    {/if}
+                </div>
 
-                        {#if course.progress?.completed}
-                            <Button.Root
-                                variant="outline"
-                                size="default"
-                                class="w-full mt-auto"
-                                onclick={() => enroll(course.id)}
-                            >
-                                <RotateCcw class="size-4 mr-1.5" /> Retake
-                            </Button.Root>
-                        {:else if course.progress}
-                            <Button.Root
-                                size="default"
-                                class="w-full mt-auto"
-                                onclick={() => enroll(course.id)}
-                            >
-                                <Play class="size-4 mr-1.5" /> Continue
-                            </Button.Root>
-                        {:else}
-                            <Button.Root
-                                size="default"
-                                class="w-full mt-auto"
-                                onclick={() => enroll(course.id)}
-                            >
-                                <Play class="size-4 mr-1.5" /> Enroll
-                            </Button.Root>
-                        {/if}
-                    </div>
-                {/each}
+                <div
+                    class="inline-flex items-center rounded-full border border-border bg-background p-0.5"
+                    role="tablist"
+                    aria-label="Filter by status"
+                >
+                    {#each [
+                        { key: "all", label: "All" },
+                        { key: "in_progress", label: "In progress" },
+                        { key: "new", label: "Not started" },
+                        { key: "completed", label: "Completed" },
+                    ] as f}
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={filter === f.key}
+                            class={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${filter === f.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                            onclick={() => (filter = f.key as typeof filter)}
+                        >
+                            {f.label}
+                        </button>
+                    {/each}
+                </div>
             </div>
+
+            {#if filteredCourses.length === 0}
+                <EmptyState
+                    title="Nothing matches that"
+                    description="Try a shorter search or switch the filter to 'All'."
+                />
+            {:else}
+                <!-- Category bands -->
+                {#if continueCourses.length > 0 && (filter === "all" || filter === "in_progress")}
+                    <section aria-labelledby="band-continue">
+                        <div class="flex items-baseline justify-between mb-3">
+                            <h2
+                                id="band-continue"
+                                class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+                            >
+                                <Play class="size-4 text-accent" />
+                                Continue learning
+                            </h2>
+                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground tabular">
+                                {continueCourses.length}
+                            </span>
+                        </div>
+                        <div
+                            class="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-2 -mx-2 px-2 [scroll-padding-inline:0.5rem]"
+                            role="list"
+                        >
+                            {#each continueCourses as course, i (course.id)}
+                                <div
+                                    class="snap-start motion-rise-in"
+                                    style="animation-delay: {Math.min(i * 30, 200)}ms"
+                                    role="listitem"
+                                >
+                                    <CourseCard
+                                        {course}
+                                        compact
+                                        onenroll={enroll}
+                                    />
+                                </div>
+                            {/each}
+                        </div>
+                    </section>
+                {/if}
+
+                {#if newCourses.length > 0 && (filter === "all" || filter === "new")}
+                    <section aria-labelledby="band-new">
+                        <div class="flex items-baseline justify-between mb-3">
+                            <h2
+                                id="band-new"
+                                class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+                            >
+                                <Sparkles class="size-4 text-accent" />
+                                Recommended for you
+                            </h2>
+                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground tabular">
+                                {newCourses.length}
+                            </span>
+                        </div>
+                        <div
+                            class="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-2 -mx-2 px-2 [scroll-padding-inline:0.5rem]"
+                            role="list"
+                        >
+                            {#each newCourses as course, i (course.id)}
+                                <div
+                                    class="snap-start motion-rise-in"
+                                    style="animation-delay: {Math.min(i * 30, 200)}ms"
+                                    role="listitem"
+                                >
+                                    <CourseCard
+                                        {course}
+                                        compact
+                                        onenroll={enroll}
+                                    />
+                                </div>
+                            {/each}
+                        </div>
+                    </section>
+                {/if}
+
+                {#if completedCourses.length > 0 && (filter === "all" || filter === "completed")}
+                    <section aria-labelledby="band-done">
+                        <div class="flex items-baseline justify-between mb-3">
+                            <h2
+                                id="band-done"
+                                class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+                            >
+                                <CheckCircle class="size-4 text-success" />
+                                Completed
+                            </h2>
+                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground tabular">
+                                {completedCourses.length}
+                            </span>
+                        </div>
+                        <div
+                            class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+                            role="list"
+                        >
+                            {#each completedCourses as course, i (course.id)}
+                                <div
+                                    class="motion-rise-in"
+                                    style="animation-delay: {Math.min(i * 30, 200)}ms"
+                                    role="listitem"
+                                >
+                                    <CourseCard
+                                        {course}
+                                        onenroll={enroll}
+                                    />
+                                </div>
+                            {/each}
+                        </div>
+                    </section>
+                {/if}
+            {/if}
         {/if}
     </div>
 
@@ -443,134 +629,319 @@
     </div>
 {:else if showResults}
     {@const score = computeScore()}
+    {@const pct = Math.round((score.correct / Math.max(score.total, 1)) * 100)}
+    {@const tier = pct >= 90 ? "gold" : pct >= 75 ? "silver" : "bronze"}
+    {@const headline =
+        pct >= 90
+            ? "Outstanding."
+            : pct >= 75
+              ? "Strong work."
+              : pct >= 50
+                ? "Good progress."
+                : "Keep going."}
+
+    <!-- Celebration overlay — confetti only on pass (>= 50%) and non-preview -->
+    {#if !previewMode && pct >= 50}
+        <Confetti count={pct >= 90 ? 120 : 80} duration={2600} />
+    {/if}
+
     <div
-        class="flex w-full max-w-2xl mx-auto flex-col items-center gap-6 py-12"
+        class="relative flex w-full max-w-3xl mx-auto flex-col gap-6 py-8 motion-rise-in"
     >
-        <Trophy class="size-16 text-amber-500" />
-        <h1 class="text-2xl font-semibold text-foreground">Course Complete!</h1>
-        <p class="text-muted-foreground">{enrolledCourse.title}</p>
-        <div class="text-5xl font-bold text-foreground">
-            {Math.round((score.correct / Math.max(score.total, 1)) * 100)}%
-        </div>
-        <p class="text-sm text-muted-foreground">
-            {score.correct} of {score.total} correct
-        </p>
-        <p class="text-xs text-muted-foreground">
-            Your progress has been saved.
-        </p>
-        <div class="flex gap-3">
-            <Button.Root variant="outline" onclick={goHome}
-                >Back to Courses</Button.Root
-            >
+        <!-- Ceremony card -->
+        <section
+            class="certificate-print-card relative overflow-hidden rounded-3xl border border-border brand-gradient px-6 py-10 md:px-12 md:py-14 text-primary-foreground"
+        >
+            <!-- Higgsfield gold laurel emblem ceremony backdrop -->
+            <img
+                src="/brand/achievements/ceremony.png"
+                alt=""
+                aria-hidden="true"
+                class="absolute inset-0 size-full object-cover opacity-30 mix-blend-luminosity"
+                fetchpriority="high"
+            />
+            <Spotlight class="h-full w-full" opacity={0.7} />
+
+            <div class="relative z-10 flex flex-col items-center text-center gap-6">
+                <span
+                    class="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent"
+                >
+                    <Sparkles class="size-3" />
+                    Course complete
+                </span>
+
+                <BadgeMedal {tier} size={120} />
+
+                <div class="flex flex-col items-center gap-2 max-w-lg">
+                    <GiaAvatar state="celebrating" size={56} />
+                    <h1 class="text-display-lg font-bold tracking-tight text-primary-foreground">
+                        {headline}
+                    </h1>
+                    <p class="text-sm text-primary-foreground/80">
+                        {enrolledCourse.title}
+                    </p>
+                </div>
+
+                <div class="flex items-baseline gap-3 tabular">
+                    <p
+                        class="text-display-2xl font-bold leading-none text-accent"
+                    >
+                        <NumberTicker value={pct} suffix="%" />
+                    </p>
+                </div>
+                <p class="text-xs text-primary-foreground/70 tabular">
+                    {score.correct} of {score.total} correct ·
+                    {tier === "gold"
+                        ? "Gold tier"
+                        : tier === "silver"
+                          ? "Silver tier"
+                          : "Bronze tier"}
+                </p>
+                <!-- Caption layer — fades in after the badge -->
+                {#if pct >= 90}
+                    <p
+                        class="ceremony-caption text-xs text-accent font-medium tracking-wide motion-rise-in"
+                        style="animation-delay: 600ms"
+                    >
+                        Gold on {enrolledCourse.title}. Audit-ready.
+                    </p>
+                {:else if pct >= 75}
+                    <p
+                        class="ceremony-caption text-xs text-primary-foreground/80 font-medium tracking-wide motion-rise-in"
+                        style="animation-delay: 600ms"
+                    >
+                        Silver tier. One more attempt and you're at gold.
+                    </p>
+                {:else if pct >= 50}
+                    <p
+                        class="ceremony-caption text-xs text-primary-foreground/80 font-medium tracking-wide motion-rise-in"
+                        style="animation-delay: 600ms"
+                    >
+                        Bronze tier earned. Steady the foundations and retry.
+                    </p>
+                {/if}
+                <p class="text-[11px] text-primary-foreground/60">
+                    Your progress has been saved.
+                </p>
+                <!-- Print-only certificate footer; hidden in screen view -->
+                <p class="print-only text-[10px] text-primary-foreground/60 mt-2 tabular">
+                    Issued by FGB Academy · {new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
+                </p>
+            </div>
+        </section>
+
+        <div class="ceremony-actions flex flex-wrap justify-center gap-3">
+            <Button.Root variant="outline" size="lg" onclick={goHome}>
+                <ChevronLeft class="size-4" />
+                Back to courses
+            </Button.Root>
             <Button.Root
+                size="lg"
                 onclick={() => {
                     showResults = false;
                     currentModuleIdx = enrolledCourse.modules?.length
                         ? enrolledCourse.modules.length - 1
                         : 0;
-                }}>Review Answers</Button.Root
+                }}
             >
+                Review answers
+                <ArrowRight class="size-4" />
+            </Button.Root>
+            {#if pct >= 75}
+                <Button.Root
+                    variant="outline"
+                    size="lg"
+                    onclick={() => window.print()}
+                    aria-label="Print certificate"
+                >
+                    <Printer class="size-4" />
+                    Print certificate
+                </Button.Root>
+            {/if}
         </div>
     </div>
 {:else}
-    {#if previewMode}
-        <div
-            class="w-full rounded-lg border border-blue-500/30 bg-blue-500/5 px-4 py-2.5 mb-4 flex items-center justify-between"
-        >
-            <div class="flex items-center gap-2">
-                <Eye class="size-4 text-blue-500" />
-                <span
-                    class="text-sm font-medium text-blue-600 dark:text-blue-400"
-                    >Preview Mode</span
-                >
-                <span class="text-xs text-blue-500/70"
-                    >— this is a course preview, answers are not saved</span
-                >
+    <div class="flex w-full max-w-6xl mx-auto flex-col gap-4">
+        {#if previewMode}
+            <div
+                role="status"
+                class="w-full rounded-2xl border border-info/30 bg-info/5 px-4 py-2.5 flex items-center justify-between motion-rise-in"
+            >
+                <div class="flex items-center gap-2">
+                    <Eye class="size-4 text-info" />
+                    <span class="text-sm font-medium text-info"
+                        >Preview mode</span
+                    >
+                    <span class="text-xs text-info/80"
+                        >— this is a course preview, answers are not saved</span
+                    >
+                </div>
+                <Button.Root variant="outline" size="sm" onclick={goHome}>
+                    <ChevronLeft class="size-3.5 mr-1" /> Back to editor
+                </Button.Root>
             </div>
-            <Button.Root variant="outline" size="sm" onclick={goHome}>
-                <ChevronLeft class="size-3.5 mr-1" /> Back to Editor
-            </Button.Root>
-        </div>
-    {/if}
-    <div class="flex w-full max-w-6xl mx-auto gap-6">
-        <!-- Module Sidebar -->
-        <aside class="w-[240px] shrink-0 flex flex-col gap-2">
+        {/if}
+        <div class="flex flex-col md:flex-row w-full gap-4 md:gap-6">
+        <!-- Module Sidebar - collapses to horizontal scroll on mobile -->
+        <aside class="md:w-[240px] shrink-0 flex flex-col gap-2 md:sticky md:top-20 md:self-start">
             <button
-                class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-2"
+                class="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors press w-fit"
                 onclick={goHome}
             >
-                <ChevronLeft class="size-4" /> Back
+                <ChevronLeft class="size-3.5" /> All courses
             </button>
-            <h3 class="text-sm font-semibold text-foreground mb-1">
-                {enrolledCourse.title}
-            </h3>
-            {#each enrolledCourse.modules as mod, mi}
-                {@const mp = moduleProgress(mod)}
-                <button
-                    class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors {mi ===
-                    currentModuleIdx
-                        ? 'bg-primary/10 text-foreground font-medium'
-                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-                    onclick={() => (currentModuleIdx = mi)}
-                >
-                    <div
-                        class="size-5 rounded-full border flex items-center justify-center shrink-0 text-[10px] font-bold
-                        {mi === currentModuleIdx
-                            ? 'border-primary text-primary'
-                            : mp.pct === 100
-                              ? 'border-emerald-500 text-emerald-500 bg-emerald-500/10'
-                              : 'border-border text-muted-foreground'}"
+            <div class="rounded-2xl border border-border bg-card p-3 flex flex-col gap-1">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-2 pt-1 pb-2">
+                    Modules
+                </h3>
+                <p class="text-sm font-semibold text-foreground px-2 line-clamp-2 leading-snug mb-1">
+                    {enrolledCourse.title}
+                </p>
+                {#each enrolledCourse.modules as mod, mi}
+                    {@const mp = moduleProgress(mod)}
+                    {@const isLast = mi === enrolledCourse.modules.length - 1}
+                    {@const isCurrent = mi === currentModuleIdx}
+                    <button
+                        class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors {isCurrent ? 'bg-primary/10 text-foreground font-medium' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+                        onclick={() => (currentModuleIdx = mi)}
                     >
-                        {mp.pct === 100 ? "✓" : mi + 1}
-                    </div>
-                    <span class="truncate">{mod.title}</span>
-                </button>
-            {/each}
+                        {#if mp.pct === 100 && isLast}
+                            <span class="shrink-0" aria-hidden="true">
+                                <BadgeMedal tier="gold" size={24} />
+                            </span>
+                        {:else if mp.total > 0}
+                            <span class="shrink-0" aria-hidden="true">
+                                <XpRing
+                                    value={mp.pct}
+                                    size={24}
+                                    stroke={3}
+                                    ring={mp.pct === 100 ? "success" : "primary"}
+                                >
+                                    {#snippet center()}
+                                        {#if mp.pct === 100}
+                                            <CheckCircle class="size-3 text-success" />
+                                        {:else}
+                                            <span class="text-[9px] font-bold tabular text-muted-foreground">
+                                                {mi + 1}
+                                            </span>
+                                        {/if}
+                                    {/snippet}
+                                </XpRing>
+                            </span>
+                        {:else}
+                            <span
+                                class="size-6 rounded-full border border-border flex items-center justify-center shrink-0 text-[10px] font-bold {isCurrent ? 'border-primary text-primary' : 'text-muted-foreground'}"
+                            >
+                                {mi + 1}
+                            </span>
+                        {/if}
+                        <span class="truncate text-xs">{mod.title}</span>
+                    </button>
+                {/each}
+            </div>
         </aside>
 
         <!-- Main Content -->
         <main class="flex-1 min-w-0">
             {#if currentModule}
                 {@const mp = moduleProgress(currentModule)}
-                <div class="rounded-xl border border-border bg-card p-6 mb-4">
-                    <h2 class="text-lg font-semibold text-foreground">
-                        {currentModule.title}
-                    </h2>
-                    <p class="text-sm text-muted-foreground mt-1">
-                        {currentModule.description}
-                    </p>
-                    <div class="mt-3 flex items-center gap-2">
+                <div class="rounded-2xl border border-border bg-card p-6 mb-4 lift">
+                    <div class="flex items-start justify-between gap-4">
+                        <div class="min-w-0">
+                            <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                                Module {currentModuleIdx + 1} of {enrolledCourse.modules.length}
+                            </span>
+                            <h2 class="text-xl font-semibold text-foreground mt-1 leading-tight">
+                                {currentModule.title}
+                            </h2>
+                            {#if currentModule.description}
+                                <p class="text-sm text-muted-foreground mt-1.5 leading-relaxed">
+                                    {currentModule.description}
+                                </p>
+                            {/if}
+                        </div>
+                        {#if mp.total > 0}
+                            <span class="shrink-0" aria-label={`${mp.done} of ${mp.total} questions answered`}>
+                                <XpRing
+                                    value={mp.pct}
+                                    size={56}
+                                    stroke={5}
+                                    ring={mp.pct === 100 ? "success" : "primary"}
+                                >
+                                    {#snippet center()}
+                                        <span class="text-[10px] font-bold tabular text-foreground">
+                                            {mp.done}/{mp.total}
+                                        </span>
+                                    {/snippet}
+                                </XpRing>
+                            </span>
+                        {/if}
+                    </div>
+                    <div class="mt-4 flex items-center gap-2">
                         <div
                             class="h-1.5 flex-1 rounded-full bg-muted overflow-hidden"
                         >
                             <div
-                                class="h-full rounded-full bg-primary transition-all"
+                                class="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-500"
                                 style="width: {mp.pct}%"
                             ></div>
                         </div>
-                        <span class="text-xs text-muted-foreground shrink-0"
+                        <span class="text-xs text-muted-foreground shrink-0 tabular"
                             >{mp.done}/{mp.total}</span
                         >
                     </div>
                 </div>
 
+                {#if assessmentMix.length > 0}
+                    <div class="mb-4 rounded-2xl border border-border bg-card p-4 lift">
+                        <div class="mb-3 flex items-center justify-between">
+                            <h3 class="text-sm font-semibold text-foreground">
+                                Assessment mix
+                            </h3>
+                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                {assessmentMix.reduce((sum, item) => sum + item.count, 0)} items
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+                            {#each assessmentMix.slice(0, 8) as item}
+                                <div class="rounded-xl border border-border bg-surface-1 p-3">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="truncate text-xs font-medium text-foreground">
+                                            {item.label}
+                                        </span>
+                                        <span class="text-xs font-semibold tabular text-primary">
+                                            {item.count}
+                                        </span>
+                                    </div>
+                                    <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                                        <div
+                                            class="h-full rounded-full bg-gradient-to-r from-primary to-accent"
+                                            style:width="{item.pct}%"
+                                        ></div>
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    </div>
+                {/if}
+
                 <div class="flex flex-col gap-4">
                     {#each currentModule.items as item, ii}
                         {#if item.item_type === "content"}
-                            <div
-                                class="rounded-xl border border-border bg-card p-5"
+                            <article
+                                class="rounded-2xl border border-border bg-card p-6 md:p-8 motion-rise-in"
+                                style="animation-delay: {Math.min(ii * 30, 200)}ms"
                             >
-                                <p
-                                    class="text-[10px] font-semibold uppercase text-muted-foreground mb-2"
+                                <span
+                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
                                 >
-                                    Learning Material
-                                </p>
-                                <div
-                                    class="text-sm text-foreground leading-relaxed whitespace-pre-line"
-                                >
-                                    {item.data?.body ?? ""}
-                                </div>
-                            </div>
+                                    Learning material
+                                </span>
+                                <Markdown
+                                    source={item.data?.body ?? ""}
+                                    class="mt-3 max-w-prose text-[15px]"
+                                />
+                            </article>
                         {:else if item.item_type === "mc"}
                             <div
                                 class="rounded-xl border border-border bg-card p-5"
@@ -616,20 +987,21 @@
                                         </label>
                                     {/each}
                                 </div>
-                                {#if answers[item.id] !== undefined && showResults}
-                                    <p
-                                        class="mt-2 text-xs {isCorrect(
-                                            item,
-                                            answers[item.id],
-                                        )
-                                            ? 'text-emerald-500'
-                                            : 'text-red-500'}"
+                                {#if showResults}
+                                    <AnswerFeedback
+                                        status={answers[item.id] === undefined
+                                            ? "unanswered"
+                                            : isCorrect(item, answers[item.id])
+                                              ? "correct"
+                                              : "incorrect"}
+                                        correctAnswer={correctAnswerLabel(item)}
                                     >
-                                        {isCorrect(item, answers[item.id])
-                                            ? "✓ Correct"
-                                            : "✗ Incorrect"} — {item.data
-                                            ?.explanation ?? ""}
-                                    </p>
+                                        {#snippet explanation()}
+                                            {#if item.data?.explanation}
+                                                {item.data.explanation}
+                                            {/if}
+                                        {/snippet}
+                                    </AnswerFeedback>
                                 {/if}
                             </div>
                         {:else if item.item_type === "ma"}
@@ -693,6 +1065,16 @@
                                         </label>
                                     {/each}
                                 </div>
+                                {#if showResults}
+                                    <AnswerFeedback
+                                        status={answers[item.id] === undefined
+                                            ? "unanswered"
+                                            : isCorrect(item, answers[item.id])
+                                              ? "correct"
+                                              : "incorrect"}
+                                        correctAnswer={correctAnswerLabel(item)}
+                                    />
+                                {/if}
                             </div>
                         {:else if item.item_type === "tf"}
                             <div
@@ -718,6 +1100,16 @@
                                         </button>
                                     {/each}
                                 </div>
+                                {#if showResults}
+                                    <AnswerFeedback
+                                        status={answers[item.id] === undefined
+                                            ? "unanswered"
+                                            : isCorrect(item, answers[item.id])
+                                              ? "correct"
+                                              : "incorrect"}
+                                        correctAnswer={correctAnswerLabel(item)}
+                                    />
+                                {/if}
                             </div>
                         {:else if item.item_type === "fb"}
                             <div
@@ -782,6 +1174,90 @@
                                     </p>
                                 {/if}
                             </div>
+                        {:else if item.item_type === "matching"}
+                            <div class="rounded-xl border border-border bg-card p-5">
+                                <p class="mb-3 text-sm font-medium text-foreground">
+                                    {ii + 1}. {item.data?.question ?? "Match each item with its definition."}
+                                </p>
+                                <QuestionMatching
+                                    data={item.data}
+                                    value={answers[item.id]}
+                                    reveal={showResults}
+                                    onChange={(v) => setAnswer(item.id, v)}
+                                />
+                                {#if showResults}
+                                    <AnswerFeedback
+                                        status={answers[item.id] === undefined
+                                            ? "unanswered"
+                                            : isCorrect(item, answers[item.id])
+                                              ? "correct"
+                                              : "incorrect"}
+                                        correctAnswer={correctAnswerLabel(item)}
+                                    >
+                                        {#snippet explanation()}
+                                            {#if item.data?.explanation}
+                                                {item.data.explanation}
+                                            {/if}
+                                        {/snippet}
+                                    </AnswerFeedback>
+                                {/if}
+                            </div>
+                        {:else if item.item_type === "drag_sort"}
+                            <div class="rounded-xl border border-border bg-card p-5">
+                                <p class="mb-3 text-sm font-medium text-foreground">
+                                    {ii + 1}. {item.data?.question ?? "Put these items in the correct order."}
+                                </p>
+                                <QuestionOrdering
+                                    data={item.data}
+                                    value={answers[item.id]}
+                                    reveal={showResults}
+                                    onChange={(v) => setAnswer(item.id, v)}
+                                />
+                                {#if showResults}
+                                    <AnswerFeedback
+                                        status={answers[item.id] === undefined
+                                            ? "unanswered"
+                                            : isCorrect(item, answers[item.id])
+                                              ? "correct"
+                                              : "incorrect"}
+                                        correctAnswer={correctAnswerLabel(item)}
+                                    >
+                                        {#snippet explanation()}
+                                            {#if item.data?.explanation}
+                                                {item.data.explanation}
+                                            {/if}
+                                        {/snippet}
+                                    </AnswerFeedback>
+                                {/if}
+                            </div>
+                        {:else if item.item_type === "hotspot"}
+                            <div class="rounded-xl border border-border bg-card p-5">
+                                <p class="mb-3 text-sm font-medium text-foreground">
+                                    {ii + 1}. {item.data?.question ?? "Select the correct hotspot."}
+                                </p>
+                                <QuestionHotspot
+                                    data={item.data}
+                                    value={answers[item.id]}
+                                    reveal={showResults}
+                                    onChange={(v) => setAnswer(item.id, v)}
+                                />
+                                {#if showResults}
+                                    <AnswerFeedback
+                                        status={answers[item.id] === undefined
+                                            ? "unanswered"
+                                            : isCorrect(item, answers[item.id])
+                                              ? "correct"
+                                              : "incorrect"}
+                                        correctAnswer={correctAnswerLabel(item)}
+                                    >
+                                        {#snippet explanation()}
+                                            {#if item.data?.explanation}
+                                                {item.data.explanation}
+                                            {/if}
+                                        {/snippet}
+                                    </AnswerFeedback>
+                                {/if}
+                            </div>
                         {:else}
                             <div
                                 class="rounded-xl border border-border bg-card p-5"
@@ -821,5 +1297,6 @@
                 </div>
             {/if}
         </main>
+        </div>
     </div>
 {/if}

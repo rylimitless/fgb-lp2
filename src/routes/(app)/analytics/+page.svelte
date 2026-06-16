@@ -11,6 +11,10 @@
     import { onMount } from "svelte";
     import { Chart, registerables } from "chart.js";
     import { goto } from "$app/navigation";
+    import {
+        PageHeader,
+        StatCard,
+    } from "$lib/components/brand";
 
     Chart.register(...registerables);
 
@@ -28,17 +32,38 @@
     let radarCanvas = $state<HTMLCanvasElement>();
     let usageCanvas = $state<HTMLCanvasElement>();
 
+    /**
+     * FGB Academy chart palette — derived from the brand tokens defined in
+     * layout.css (chart-1..5). These mirror the navy/info/gold/success/streak
+     * palette so charts read consistently with the rest of the platform.
+     * Hex strings are needed because Chart.js renders to canvas and cannot
+     * resolve CSS custom properties.
+     */
+    const brandPalette = {
+        navy:    "#00548e",
+        navySoft:"#00548e33",
+        info:    "#3a87cf",
+        infoSoft:"#3a87cf33",
+        gold:    "#d6c47e",
+        goldSoft:"#d6c47e44",
+        success: "#3fa46a",
+        successSoft:"#3fa46a44",
+        streak:  "#e07a3e",
+        streakSoft:"#e07a3e44",
+        danger:  "#d6464d",
+        dangerSoft:"#d6464d33",
+    };
     const accentColors = [
-        "#ef4444", // red
-        "#f97316", // orange
-        "#eab308", // yellow
-        "#22c55e", // green
-        "#06b6d4", // cyan
-        "#3b82f6", // blue
-        "#8b5cf6", // violet
-        "#ec4899", // pink
-        "#64748b", // slate
-        "#14b8a6", // teal
+        brandPalette.navy,
+        brandPalette.info,
+        brandPalette.gold,
+        brandPalette.success,
+        brandPalette.streak,
+        brandPalette.danger,
+        "#8b5cf6",
+        "#06b6d4",
+        "#64748b",
+        "#14b8a6",
     ];
 
     function truncate(str: string, len: number): string {
@@ -46,17 +71,15 @@
     }
 
     function actionBadge(action: string): string {
-        if (action.startsWith("login")) return "bg-blue-500/10 text-blue-500";
-        if (action.includes("failed")) return "bg-red-500/10 text-red-500";
-        if (action.includes("created") || action.includes("uploaded"))
-            return "bg-emerald-500/10 text-emerald-500";
-        if (action.includes("deleted")) return "bg-red-500/10 text-red-500";
-        if (action.includes("reviewed"))
-            return "bg-amber-500/10 text-amber-500";
-        if (action.includes("approved"))
-            return "bg-emerald-500/10 text-emerald-500";
-        if (action.startsWith("gia")) return "bg-violet-500/10 text-violet-500";
-        if (action.includes("user_")) return "bg-cyan-500/10 text-cyan-500";
+        // Mirrors /audit-log: 4-token semantic mapping. See BRAND.md §4.3.
+        if (action.includes("failed") || action.includes("deleted"))
+            return "bg-destructive/10 text-destructive";
+        if (action.includes("created") || action.includes("uploaded") || action.includes("approved"))
+            return "bg-success/10 text-success";
+        if (action.includes("reviewed") || action.includes("resubmitted"))
+            return "bg-warning/10 text-warning";
+        if (action.startsWith("login") || action.startsWith("logout") || action.startsWith("gia") || action.includes("user_") || action.includes("admin"))
+            return "bg-info/10 text-info";
         return "bg-muted text-muted-foreground";
     }
 
@@ -94,16 +117,18 @@
                         {
                             label: "Wrong",
                             data: wrongData,
-                            backgroundColor: "#ef444480",
-                            borderColor: "#ef4444",
+                            backgroundColor: brandPalette.dangerSoft,
+                            borderColor: brandPalette.danger,
                             borderWidth: 1,
+                            borderRadius: 4,
                         },
                         {
                             label: "Correct",
                             data: correctData,
-                            backgroundColor: "#22c55e80",
-                            borderColor: "#22c55e",
+                            backgroundColor: brandPalette.successSoft,
+                            borderColor: brandPalette.success,
                             borderWidth: 1,
+                            borderRadius: 4,
                         },
                     ],
                 },
@@ -170,10 +195,12 @@
                             label: "Learners",
                             data: learners,
                             type: "line",
-                            borderColor: "#f59e0b",
-                            backgroundColor: "#f59e0b33",
+                            borderColor: brandPalette.gold,
+                            backgroundColor: brandPalette.goldSoft,
                             borderWidth: 2,
                             pointRadius: 3,
+                            pointBackgroundColor: brandPalette.gold,
+                            tension: 0.3,
                             yAxisID: "y1",
                         },
                     ],
@@ -270,10 +297,12 @@
                                 avgCompletion,
                                 engagement,
                             ],
-                            backgroundColor: "#3b82f633",
-                            borderColor: "#3b82f6",
+                            backgroundColor: brandPalette.navySoft,
+                            borderColor: brandPalette.navy,
                             borderWidth: 2,
-                            pointBackgroundColor: "#3b82f6",
+                            pointBackgroundColor: brandPalette.gold,
+                            pointBorderColor: brandPalette.navy,
+                            pointRadius: 4,
                         },
                     ],
                 },
@@ -319,11 +348,12 @@
                         {
                             label: "Questions",
                             data: counts,
-                            borderColor: "#8b5cf6",
-                            backgroundColor: "#8b5cf633",
+                            borderColor: brandPalette.info,
+                            backgroundColor: brandPalette.infoSoft,
                             fill: true,
                             tension: 0.3,
                             pointRadius: 2,
+                            pointBackgroundColor: brandPalette.info,
                             borderWidth: 2,
                         },
                     ],
@@ -360,66 +390,73 @@
 </svelte:head>
 
 <div class="flex w-full max-w-7xl mx-auto flex-col gap-6">
-    <div class="flex items-center gap-3">
-        <BarChart3 class="size-6 text-primary" />
-        <h1 class="text-2xl font-semibold text-foreground">Analytics</h1>
-    </div>
+    <PageHeader
+        title="Analytics"
+        eyebrow="Academy intelligence"
+        description="Operating signals across documents, courses, the Adaptive Room, and the Gia coach."
+    >
+        {#snippet icon()}
+            <BarChart3 class="size-6 text-primary" />
+        {/snippet}
+    </PageHeader>
 
     <!-- Stat Cards -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div class="rounded-xl border border-border bg-card p-4">
-            <div class="flex items-center gap-2 mb-1">
-                <Users class="size-4 text-blue-500" />
-                <span class="text-xs text-muted-foreground"
-                    >Active Learners</span
-                >
-            </div>
-            <p class="text-2xl font-bold text-foreground">
-                {overview?.active_learners ?? 0}
-            </p>
-            <p class="text-xs text-muted-foreground mt-0.5">
-                of {overview?.total_users ?? 0} total users
-            </p>
+        <div class="motion-rise-in motion-stagger-1">
+            <StatCard
+                label="Active learners"
+                value={overview?.active_learners ?? 0}
+                tone="info"
+                hint={`of ${overview?.total_users ?? 0} total users`}
+            >
+                {#snippet icon()}
+                    <Users class="size-3.5" />
+                {/snippet}
+            </StatCard>
         </div>
-        <div class="rounded-xl border border-border bg-card p-4">
-            <div class="flex items-center gap-2 mb-1">
-                <MessageSquare class="size-4 text-emerald-500" />
-                <span class="text-xs text-muted-foreground">GIA Questions</span>
-            </div>
-            <p class="text-2xl font-bold text-foreground">
-                {overview?.coach_queries ?? 0}
-            </p>
-            <p class="text-xs text-muted-foreground mt-0.5">total asked</p>
+        <div class="motion-rise-in motion-stagger-2">
+            <StatCard
+                label="Gia questions"
+                value={overview?.coach_queries ?? 0}
+                tone="success"
+                hint="total asked"
+            >
+                {#snippet icon()}
+                    <MessageSquare class="size-3.5" />
+                {/snippet}
+            </StatCard>
         </div>
-        <div class="rounded-xl border border-border bg-card p-4">
-            <div class="flex items-center gap-2 mb-1">
-                <Target class="size-4 text-amber-500" />
-                <span class="text-xs text-muted-foreground"
-                    >Avg Proficiency</span
-                >
-            </div>
-            <p class="text-2xl font-bold text-foreground">
-                {overview?.adaptive?.avg_theta?.toFixed(2) ?? "—"}
-            </p>
-            <p class="text-xs text-muted-foreground mt-0.5">theta score</p>
+        <div class="motion-rise-in motion-stagger-3">
+            <StatCard
+                label="Avg proficiency"
+                value={overview?.adaptive?.avg_theta ?? 0}
+                tone="accent"
+                decimals={2}
+                hint="theta score (−3 to +3)"
+            >
+                {#snippet icon()}
+                    <Target class="size-3.5" />
+                {/snippet}
+            </StatCard>
         </div>
-        <div class="rounded-xl border border-border bg-card p-4">
-            <div class="flex items-center gap-2 mb-1">
-                <Zap class="size-4 text-violet-500" />
-                <span class="text-xs text-muted-foreground"
-                    >Knowledge Spread</span
-                >
-            </div>
-            <p class="text-2xl font-bold text-foreground">
-                {overview?.adaptive?.stddev_theta?.toFixed(2) ?? "—"}
-            </p>
-            <p class="text-xs text-muted-foreground mt-0.5">std deviation</p>
+        <div class="motion-rise-in motion-stagger-4">
+            <StatCard
+                label="Knowledge spread"
+                value={overview?.adaptive?.stddev_theta ?? 0}
+                tone="primary"
+                decimals={2}
+                hint="standard deviation"
+            >
+                {#snippet icon()}
+                    <Zap class="size-3.5" />
+                {/snippet}
+            </StatCard>
         </div>
     </div>
 
     <!-- Chart Row 1 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div class="rounded-xl border border-border bg-card p-5">
+        <div class="rounded-2xl border border-border bg-card p-5 lift">
             {#if mostFailed.length > 0}
                 <div class="h-80">
                     <canvas bind:this={failedCanvas}></canvas>
@@ -433,7 +470,7 @@
             {/if}
         </div>
 
-        <div class="rounded-xl border border-border bg-card p-5">
+        <div class="rounded-2xl border border-border bg-card p-5 lift">
             {#if courseEffectiveness.length > 0}
                 <div class="h-80">
                     <canvas bind:this={effectivenessCanvas}></canvas>
@@ -450,7 +487,7 @@
 
     <!-- Chart Row 2 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div class="rounded-xl border border-border bg-card p-5">
+        <div class="rounded-2xl border border-border bg-card p-5 lift">
             {#if overview?.adaptive}
                 <div class="h-80">
                     <canvas bind:this={radarCanvas}></canvas>
@@ -464,7 +501,7 @@
             {/if}
         </div>
 
-        <div class="rounded-xl border border-border bg-card p-5">
+        <div class="rounded-2xl border border-border bg-card p-5 lift">
             {#if coachUsage.length > 0}
                 <div class="h-80">
                     <canvas bind:this={usageCanvas}></canvas>
@@ -472,7 +509,7 @@
             {:else}
                 <div class="flex items-center justify-center h-80">
                     <p class="text-sm text-muted-foreground">
-                        No GIA usage data yet. Ask GIA a question to populate
+                        No Gia usage data yet. Ask Gia a question to populate
                         this chart.
                     </p>
                 </div>
@@ -481,7 +518,7 @@
     </div>
 
     <!-- Audit Log Preview -->
-    <div class="rounded-xl border border-border bg-card p-5">
+    <div class="rounded-2xl border border-border bg-card p-5 lift">
         <div class="flex items-center justify-between mb-4">
             <h3
                 class="text-sm font-semibold text-foreground flex items-center gap-2"

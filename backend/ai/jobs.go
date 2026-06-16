@@ -3,8 +3,8 @@ package ai
 import (
 	"context"
 	"encoding/json"
-	database "fgb-lp/database/queries"
 	"fgb-lp/audit"
+	database "fgb-lp/database/queries"
 	"fgb-lp/embeddings"
 	"fmt"
 	"log"
@@ -280,8 +280,8 @@ func (w *Worker) completeJob(job *GenerationJob, result gin.H, courseID int64) {
 
 	// Audit log the course creation
 	audit.Log(w.queries, nil, "course_created", map[string]any{
-		"course_id":  courseID,
-		"title":      title,
+		"course_id": courseID,
+		"title":     title,
 	})
 	// Notify all users that a new course is ready
 	notifyAll(w.queries,
@@ -314,6 +314,10 @@ func (w *Worker) processJob(job *GenerationJob) {
 	}()
 
 	req := job.Request
+	if req.CreatedBy == 0 {
+		w.failJob(job, "Invalid user session")
+		return
+	}
 
 	// --- Embed ---
 	job.addStep("embedding", "Analyzing your course description...")
@@ -406,7 +410,7 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 	course, err := w.queries.CreateCourse(context.Background(), database.CreateCourseParams{
 		Title:        coursePlan.Title,
 		Description:  coursePlan.Description,
-		CreatedBy:    1,
+		CreatedBy:    req.CreatedBy,
 		SourceDocIds: req.SourceDocIDs,
 		Settings:     settingsJSON,
 	})
@@ -503,7 +507,7 @@ Write exhaustive, faithful teaching content for this section.`,
 Content Summary (full content is %d characters total):
 %s
 
-Based on the concepts covered above, generate exactly ONE meaningful multiple-choice question.`,
+Based on the concepts covered above, generate exactly 8 assessment items as a JSON array, using these formats in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.`,
 			modPlan.Title, modPlan.Description, len(rawContent), contentSummary)
 
 		questionResp, err := w.llm.Chat(questionGenPrompt, questionPrompt)
@@ -514,10 +518,31 @@ Based on the concepts covered above, generate exactly ONE meaningful multiple-ch
 		}
 
 		questionJSON := stripMarkdownFences(questionResp)
-		var questionData json.RawMessage
-		if err := json.Unmarshal([]byte(questionJSON), &questionData); err != nil {
-			log.Printf("[worker] step3 parse question (module %d): %v", mi+1, err)
-			w.failJob(job, fmt.Sprintf("Step 3 failed: bad question JSON for module %d", mi+1))
+		var questions []genItem
+		if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
+			log.Printf("[worker] step3 parse questions (module %d): %v", mi+1, err)
+			repairPrompt := fmt.Sprintf(`The previous response was invalid JSON. Repair it into ONLY a valid JSON array of exactly 8 assessment items using these types in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.
+
+Invalid response:
+%s
+
+Output ONLY the repaired JSON array.`, questionResp)
+			repairedResp, repairErr := w.llm.Chat(questionGenPrompt, repairPrompt)
+			if repairErr != nil {
+				log.Printf("[worker] step3 repair questions (module %d): %v", mi+1, repairErr)
+				w.failJob(job, fmt.Sprintf("Step 3 failed: bad question JSON for module %d", mi+1))
+				return
+			}
+			questionJSON = stripMarkdownFences(repairedResp)
+			if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
+				log.Printf("[worker] step3 repaired JSON still invalid (module %d): %v", mi+1, err)
+				w.failJob(job, fmt.Sprintf("Step 3 failed: bad question JSON for module %d", mi+1))
+				return
+			}
+		}
+		if len(questions) == 0 {
+			log.Printf("[worker] step3 empty question array (module %d)", mi+1)
+			w.failJob(job, fmt.Sprintf("Step 3 failed: no questions for module %d", mi+1))
 			return
 		}
 
@@ -527,8 +552,7 @@ Based on the concepts covered above, generate exactly ONE meaningful multiple-ch
 			return
 		}
 
-		// Store items
-		itemsResult := make([]gin.H, 0, 2)
+		itemsResult := make([]gin.H, 0, 1+len(questions))
 		ciContent, err := w.queries.CreateCourseItem(context.Background(), database.CreateCourseItemParams{
 			CourseID:  courseID,
 			ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
@@ -545,20 +569,35 @@ Based on the concepts covered above, generate exactly ONE meaningful multiple-ch
 			log.Printf("[worker] create content item (module %d): %v", mi+1, err)
 		}
 
-		ciQuestion, err := w.queries.CreateCourseItem(context.Background(), database.CreateCourseItemParams{
-			CourseID:  courseID,
-			ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
-			ItemType:  "mc",
-			SortOrder: 1,
-			Data:      []byte(questionData),
-		})
-		if err == nil {
-			itemsResult = append(itemsResult, gin.H{
-				"id": ciQuestion.ID, "item_type": "mc", "sort_order": 1,
-				"data": questionData,
+		// Allowed item types per the course_items check constraint.
+		allowedTypes := map[string]bool{
+			"mc": true, "ma": true, "tf": true, "fb": true, "sa": true,
+			"matching": true, "drag_sort": true, "hotspot": true,
+			"sequence": true, "scale": true,
+		}
+
+		for qi, q := range questions {
+			qType := strings.ToLower(strings.TrimSpace(q.Type))
+			if !allowedTypes[qType] {
+				log.Printf("[worker] step3 unknown item_type %q (module %d, q %d) — defaulting to mc", q.Type, mi+1, qi+1)
+				qType = "mc"
+			}
+			sort := int32(qi + 1)
+			ci, err := w.queries.CreateCourseItem(context.Background(), database.CreateCourseItemParams{
+				CourseID:  courseID,
+				ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
+				ItemType:  qType,
+				SortOrder: sort,
+				Data:      []byte(q.Data),
 			})
-		} else {
-			log.Printf("[worker] create question item (module %d): %v", mi+1, err)
+			if err != nil {
+				log.Printf("[worker] create question item (module %d, q %d): %v", mi+1, qi+1, err)
+				continue
+			}
+			itemsResult = append(itemsResult, gin.H{
+				"id": ci.ID, "item_type": qType, "sort_order": sort,
+				"data": q.Data,
+			})
 		}
 
 		modResult := gin.H{

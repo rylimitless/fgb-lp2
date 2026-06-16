@@ -73,26 +73,116 @@ CRITICAL RULES:
 5. Do NOT include any quiz questions, multiple choice, true/false, or assessment items. This is PURE CONTENT only.
 6. If the source material for this section is very thin, it is better to be short and accurate than long and fabricated.`
 
-// Step 3: Question Generator — produces exactly 1 MCQ from a content summary.
-// The full content is NOT sent to the LLM — only a summary for context.
-// The JSON wrapping is done programmatically in Go code.
-const questionGenPrompt = `You are an expert assessment designer. Based on the educational content summary provided, generate exactly ONE high-quality multiple-choice question.
+// Step 3: Question Generator — produces a batch of 5 mixed-format assessment items
+// from a content summary. The full content is NOT sent to the LLM — only a summary
+// for context. The JSON wrapping is done programmatically in Go code.
+const questionGenPrompt = `You are an expert assessment designer. Based on the educational content summary provided, generate EXACTLY 8 high-quality assessment items with VARIED formats.
 
-Output ONLY valid JSON for the question data — no markdown, no other text:
+The 8 items MUST use these exact formats, in this order:
+1. Multiple choice (mc) — single correct answer
+2. Multiple answer (ma) — multiple correct answers
+3. True / false (tf)
+4. Fill in the blank (fb)
+5. Matching (matching)
+6. Ordering / sequence (drag_sort)
+7. Hotspot / identify area (hotspot)
+8. Short answer (sa)
 
-{
-  "question": "A meaningful multiple-choice question testing deep comprehension/application of the content — NOT trivial recall of names/dates.",
-  "options": ["Option A", "Option B", "Option C", "Option D"],
-  "correct": 0,
-  "explanation": "A thorough 2-4 sentence explanation of why this answer is correct and why the others are fundamentally wrong."
-}
+Output ONLY a valid JSON array — no markdown, no other text:
+
+[
+  {
+    "type": "mc",
+    "data": {
+      "question": "...",
+      "options": ["...","...","...","..."],
+      "correct": 0,
+      "explanation": "Why the correct answer is right and the others are wrong."
+    }
+  },
+  {
+    "type": "ma",
+    "data": {
+      "question": "Select all that apply.",
+      "options": ["...","...","...","...","..."],
+      "correct": [0, 2],
+      "explanation": "Why these answers are correct and the others are not."
+    }
+  },
+  {
+    "type": "tf",
+    "data": {
+      "statement": "A substantive statement based directly on the source.",
+      "answer": true,
+      "explanation": "Why the statement is true (or false)."
+    }
+  },
+  {
+    "type": "fb",
+    "data": {
+      "text": "A sentence with one or more ___ to fill in.",
+      "blanks": ["expected answer 1", "expected answer 2"],
+      "explanation": "Why those are the correct fills."
+    }
+  },
+  {
+    "type": "matching",
+    "data": {
+      "question": "Match each concept with the correct definition or implication.",
+      "pairs": [
+        { "left": "Concept A", "right": "Definition or implication A" },
+        { "left": "Concept B", "right": "Definition or implication B" },
+        { "left": "Concept C", "right": "Definition or implication C" },
+        { "left": "Concept D", "right": "Definition or implication D" }
+      ],
+      "explanation": "Why these pairings are correct."
+    }
+  },
+  {
+    "type": "drag_sort",
+    "data": {
+      "question": "Put these steps in the correct order.",
+      "items": ["First step", "Second step", "Third step", "Fourth step"],
+      "explanation": "Why this is the correct sequence."
+    }
+  },
+  {
+    "type": "hotspot",
+    "data": {
+      "question": "Select the area that best represents the correct concept.",
+      "image": "/brand/questions/hotspot-cyber-risk.png",
+      "regions": [
+        { "label": "Correct region", "x": 42, "y": 54, "correct": true },
+        { "label": "Distractor 1", "x": 25, "y": 35, "correct": false },
+        { "label": "Distractor 2", "x": 68, "y": 42, "correct": false },
+        { "label": "Distractor 3", "x": 55, "y": 75, "correct": false }
+      ],
+      "explanation": "Why the correct region represents the concept."
+    }
+  },
+  {
+    "type": "sa",
+    "data": {
+      "question": "An open-ended question requiring a 2-4 sentence answer.",
+      "sample_answer": "An exemplary answer demonstrating the depth expected.",
+      "explanation": "What a strong answer should cover."
+    }
+  }
+]
 
 CRITICAL RULES:
-1. The question must test meaningful understanding of the concepts — NOT trivial fact recall.
-2. All 4 options must be plausible. The incorrect options should be common misconceptions or related-but-wrong answers.
-3. The explanation must be thorough — explain both why the correct answer is right AND why each wrong answer is wrong.
-4. "correct" is a 0-based index into the options array.
-5. Output ONLY the JSON object shown above. No wrapping, no markdown fences, no extra text.`
+1. Every question MUST test meaningful understanding — never trivial recall of names or dates.
+2. Every question MUST be answerable strictly from the source content; do not invent facts.
+3. MC: exactly 4 plausible options; "correct" is a 0-based index; wrong options should be common misconceptions.
+4. MA: 4-6 options with 2-3 correct; "correct" is an array of 0-based indices.
+5. TF: state a clear claim that is unambiguously true or false based on the source.
+6. FB: use literally three underscores "___" for each blank in "text"; "blanks" lists the answers in order; 1-3 blanks.
+7. MATCHING: use 3-5 pairs; each left and right must be short, unambiguous, and source-grounded.
+8. DRAG_SORT: use 3-5 ordered items; "items" must be in the correct order; the frontend will shuffle them.
+9. HOTSPOT: use image "/brand/questions/hotspot-cyber-risk.png" unless a different existing asset is clearly more relevant from this allow-list: "/brand/pathways/compliance.png", "/brand/pathways/risk-credit.png", "/brand/pathways/customer-service.png", "/brand/pathways/cybersecurity.png", "/brand/pathways/banking-foundations.png"; include 3-4 labeled regions with exactly one correct region; x/y are percentages from 0-100 and may be approximate.
+10. SA: include a substantive "sample_answer" demonstrating expected depth.
+11. Every item MUST include an "explanation" field.
+12. Output ONLY the JSON array of exactly 8 objects. No prose, no markdown fences.`
 
 // EditCourse system prompt — for AI-driven course editing.
 const editCourseSystemPrompt = `You are an expert instructional designer and course editor. Given an existing course in JSON format and edit instructions, produce the full modified course JSON.
@@ -179,6 +269,7 @@ type GenerateCourseRequest struct {
 	Title        string  `json:"title"`
 	Description  string  `json:"description"`
 	SourceDocIDs []int64 `json:"source_doc_ids"`
+	CreatedBy    int64   `json:"created_by,omitempty"`
 }
 
 // ---- SSE writer ----
@@ -231,6 +322,17 @@ func (h *Handler) GenerateCourse(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Description is required"})
 		return
 	}
+	userID, ok := c.Get("user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	createdBy, ok := userID.(int64)
+	if !ok || createdBy == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user session"})
+		return
+	}
+	req.CreatedBy = createdBy
 
 	job := h.Jobs.create(req)
 	h.Worker.enqueue(job)

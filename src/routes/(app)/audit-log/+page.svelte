@@ -6,6 +6,8 @@
         ChevronRight,
     } from "@lucide/svelte";
     import { goto } from "$app/navigation";
+    import { PageHeader, PremiumTable } from "$lib/components/brand";
+    import * as Button from "$lib/components/ui/button";
 
     let { data } = $props();
     let auditLog = $derived(data.auditLog ?? []);
@@ -53,18 +55,19 @@
 
     let currentOffset = $derived(parseInt(filters.offset) || 0);
 
+    // Action -> semantic token mapping. Collapses the previous 7-color rainbow
+    // into 4 brand-semantic categories: info (sign-in / coach activity),
+    // success (creation / approval), warning (review / pending state),
+    // destructive (failure / deletion). See BRAND.md §4.3.
     function actionBadge(action: string): string {
-        if (action.startsWith("login")) return "bg-blue-500/10 text-blue-500";
-        if (action.includes("failed")) return "bg-red-500/10 text-red-500";
-        if (action.includes("created") || action.includes("uploaded"))
-            return "bg-emerald-500/10 text-emerald-500";
-        if (action.includes("deleted")) return "bg-red-500/10 text-red-500";
-        if (action.includes("reviewed"))
-            return "bg-amber-500/10 text-amber-500";
-        if (action.includes("approved"))
-            return "bg-emerald-500/10 text-emerald-500";
-        if (action.startsWith("gia")) return "bg-violet-500/10 text-violet-500";
-        if (action.includes("user_")) return "bg-cyan-500/10 text-cyan-500";
+        if (action.includes("failed") || action.includes("deleted"))
+            return "bg-destructive/10 text-destructive";
+        if (action.includes("created") || action.includes("uploaded") || action.includes("approved"))
+            return "bg-success/10 text-success";
+        if (action.includes("reviewed") || action.includes("resubmitted"))
+            return "bg-warning/10 text-warning";
+        if (action.startsWith("login") || action.startsWith("logout") || action.startsWith("gia") || action.includes("user_") || action.includes("admin"))
+            return "bg-info/10 text-info";
         return "bg-muted text-muted-foreground";
     }
 
@@ -101,13 +104,18 @@
 <svelte:head><title>Audit Log - FGB</title></svelte:head>
 
 <div class="flex w-full max-w-7xl mx-auto flex-col gap-6">
-    <div class="flex items-center gap-3">
-        <ClipboardList class="size-6 text-primary" />
-        <h1 class="text-2xl font-semibold text-foreground">Audit Log</h1>
-    </div>
+    <PageHeader
+        title="Audit log"
+        eyebrow="Governance"
+        description="Every action across the Academy, timestamped and attributed. Filter, search, and paginate. Read-only by design."
+    >
+        {#snippet icon()}
+            <ClipboardList class="size-6 text-primary" />
+        {/snippet}
+    </PageHeader>
 
     <!-- Filters -->
-    <div class="flex flex-wrap items-center gap-3">
+    <div class="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-3">
         <div class="relative flex-1 min-w-[200px] max-w-xs">
             <Search
                 class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground"
@@ -131,73 +139,39 @@
     </div>
 
     <!-- Table -->
-    <div class="rounded-xl border border-border bg-card overflow-hidden">
-        {#if filtered.length === 0}
-            <p class="text-sm text-muted-foreground py-12 text-center">
-                No audit events found.
-            </p>
-        {:else}
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr
-                            class="text-left text-xs text-muted-foreground border-b border-border bg-muted/30"
-                        >
-                            <th class="py-3 pl-4 pr-3 font-medium">Time</th>
-                            <th class="py-3 pr-3 font-medium">User</th>
-                            <th class="py-3 pr-3 font-medium">Action</th>
-                            <th class="py-3 pr-4 font-medium">Details</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {#each filtered as entry}
-                            <tr
-                                class="border-b border-border/50 hover:bg-muted/20 transition-colors"
-                            >
-                                <td
-                                    class="py-2.5 pl-4 pr-3 text-xs text-muted-foreground whitespace-nowrap"
-                                >
-                                    {new Date(
-                                        entry.created_at,
-                                    ).toLocaleString()}
-                                </td>
-                                <td
-                                    class="py-2.5 pr-3 text-xs whitespace-nowrap"
-                                >
-                                    {#if entry.user_name}
-                                        <span class="text-foreground"
-                                            >{entry.user_name}</span
-                                        >
-                                        <span
-                                            class="text-muted-foreground ml-1"
-                                            >({entry.user_role})</span
-                                        >
-                                    {:else}
-                                        <span class="text-muted-foreground"
-                                            >System</span
-                                        >
-                                    {/if}
-                                </td>
-                                <td class="py-2.5 pr-3 whitespace-nowrap">
-                                    <span
-                                        class="inline-block px-1.5 py-0.5 rounded text-xs font-medium {actionBadge(
-                                            entry.action,
-                                        )}"
-                                    >
-                                        {entry.action}
-                                    </span>
-                                </td>
-                                <td
-                                    class="py-2.5 pr-4 text-xs text-muted-foreground max-w-md truncate"
-                                >
-                                    {formatDetails(entry)}
-                                </td>
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
+    <div class="rounded-2xl border border-border bg-card overflow-hidden lift">
+        <PremiumTable
+            items={filtered}
+            columns={["Time", "User", "Action", "Details"]}
+            title="Audit events"
+            description="Searchable operational record"
+            emptyTitle="No audit events found"
+            emptyDescription="Try a different action filter or clear the search to see the full log."
+        >
+            {#snippet row(entry)}
+                <td class="px-5 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                    {new Date(entry.created_at).toLocaleString()}
+                </td>
+                <td class="px-5 py-3 text-xs whitespace-nowrap">
+                    {#if entry.user_name}
+                        <span class="text-foreground">{entry.user_name}</span>
+                        <span class="text-muted-foreground ml-1">({entry.user_role})</span>
+                    {:else}
+                        <span class="text-muted-foreground">System</span>
+                    {/if}
+                </td>
+                <td class="px-5 py-3 whitespace-nowrap">
+                    <span class="inline-block px-1.5 py-0.5 rounded text-xs font-medium {actionBadge(entry.action)}">
+                        {entry.action}
+                    </span>
+                </td>
+                <td class="px-5 py-3 text-xs text-muted-foreground max-w-md truncate">
+                    {formatDetails(entry)}
+                </td>
+            {/snippet}
+        </PremiumTable>
 
+        {#if filtered.length > 0}
             <!-- Pagination -->
             <div
                 class="flex items-center justify-between px-4 py-3 border-t border-border"
@@ -207,21 +181,23 @@
                         filtered.length}
                 </span>
                 <div class="flex items-center gap-2">
-                    <button
-                        class="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    <Button.Root
+                        variant="outline"
+                        size="sm"
                         disabled={currentOffset === 0}
                         onclick={() => gotoPage(Math.max(0, currentOffset - 50))}
                     >
                         <ChevronLeft class="size-3.5" />
                         Previous
-                    </button>
-                    <button
-                        class="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border hover:bg-muted transition-colors"
+                    </Button.Root>
+                    <Button.Root
+                        variant="outline"
+                        size="sm"
                         onclick={() => gotoPage(currentOffset + 50)}
                     >
                         Next
                         <ChevronRight class="size-3.5" />
-                    </button>
+                    </Button.Root>
                 </div>
             </div>
         {/if}

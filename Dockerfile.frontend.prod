@@ -1,0 +1,26 @@
+FROM node:22-alpine
+
+WORKDIR /app
+
+# Copy dependency configs
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci
+
+# Copy the rest of your application source code
+COPY . .
+
+# Ensure the Vite binaries have execution permissions
+RUN chmod -R +x node_modules/.bin
+
+# Run the SvelteKit build
+RUN npm run build
+
+# Expose the internal port
+EXPOSE 3000
+
+ENV HOST=0.0.0.0
+ENV PORT=3000
+
+# Start the application using Vite's preview or your build entrypoint
+# (If your build folder still acts missing, "npm run preview" is an excellent fallback)
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "3000"]

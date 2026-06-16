@@ -54,7 +54,7 @@ func main() {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3038"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -361,10 +361,10 @@ SELECT 'auditor', id FROM permissions WHERE name IN (
 )
 ON CONFLICT (role, permission_id) DO NOTHING;
 
-	// Migrate existing single-role users into user_roles table
-	INSERT INTO user_roles (user_id, role)
-	SELECT id, role FROM users
-	ON CONFLICT (user_id, role) DO NOTHING;
+-- Migrate existing single-role users into user_roles table
+INSERT INTO user_roles (user_id, role)
+SELECT id, role FROM users
+ON CONFLICT (user_id, role) DO NOTHING;
 		`)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration role_permissions seed: %v\n", err)

@@ -18,7 +18,14 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     hmr: {
-      clientPort: 5173,
+      clientPort: 3038,
+    },
+    // On Windows + Docker Desktop, host file-change events do not propagate
+    // into the Linux container via inotify. Polling makes Vite detect edits
+    // to bind-mounted source so HMR works.
+    watch: {
+      usePolling: true,
+      interval: 300,
     },
     proxy: {
       "/api": {

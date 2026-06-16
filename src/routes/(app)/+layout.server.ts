@@ -1,8 +1,9 @@
 import type { LayoutServerLoad } from "./$types";
+import { apiFetch } from "$lib/server/api";
 
-export const load: LayoutServerLoad = async ({ fetch }) => {
+export const load: LayoutServerLoad = async (event) => {
   try {
-    const res = await fetch("/api/me");
+    const res = await apiFetch(event, "/api/me");
     if (res.ok) {
       const user = await res.json();
       return {

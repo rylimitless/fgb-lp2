@@ -1,12 +1,13 @@
 import type { PageServerLoad } from "./$types";
+import { apiFetch } from "$lib/server/api";
 
-export const load: PageServerLoad = async ({ fetch }) => {
+export const load: PageServerLoad = async (event) => {
   const [docsRes, coursesRes, reviewDocsRes, reviewCoursesRes] =
     await Promise.all([
-      fetch("/api/documents"),
-      fetch("/api/courses"),
-      fetch("/api/review/documents?limit=100"),
-      fetch("/api/review/courses?limit=100"),
+      apiFetch(event, "/api/documents"),
+      apiFetch(event, "/api/courses"),
+      apiFetch(event, "/api/review/documents?limit=100"),
+      apiFetch(event, "/api/review/courses?limit=100"),
     ]);
 
   const docs = docsRes.ok ? await docsRes.json() : [];
@@ -20,7 +21,7 @@ export const load: PageServerLoad = async ({ fetch }) => {
 
   let theta = 0;
   try {
-    const pref = await fetch("/api/adaptive/start?course_id=1");
+    const pref = await apiFetch(event, "/api/adaptive/start?course_id=1");
     if (pref.ok) {
       const data = await pref.json();
       theta = data.theta ?? 0;

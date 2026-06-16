@@ -10,6 +10,7 @@
         CircleAlert,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import { PageHeader } from "$lib/components/brand";
 
     let { data } = $props();
 
@@ -161,13 +162,13 @@
     function statusColor(status: string) {
         switch (status) {
             case "uploaded":
-                return "text-amber-500";
+                return "text-warning";
             case "processing":
-                return "text-blue-500";
+                return "text-info";
             case "ready":
-                return "text-emerald-500";
+                return "text-success";
             case "failed":
-                return "text-red-500";
+                return "text-destructive";
             default:
                 return "text-muted-foreground";
         }
@@ -216,40 +217,47 @@
     );
 </script>
 
-<div class="flex w-full max-w-6xl mx-auto gap-6">
+<div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
+    <PageHeader
+        title="Content Studio"
+        eyebrow="Documents"
+        description="Upload PDFs and policy documents. Gia indexes them automatically and exposes them to learners after approval."
+    >
+        {#snippet icon()}
+            <Upload class="size-6 text-primary" />
+        {/snippet}
+    </PageHeader>
+
+    <div class="flex flex-col md:flex-row gap-6">
     <!-- Left column: Upload -->
-    <section class="w-[380px] shrink-0 flex flex-col gap-4">
+    <section class="md:w-[380px] shrink-0 flex flex-col gap-4">
         <!-- Upload Status Feedback -->
         {#if uploadStatus === "success"}
             <div
-                class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 flex items-start gap-3"
+                role="status"
+                class="rounded-xl border border-success/30 bg-success/10 px-4 py-3 flex items-start gap-3 motion-rise-in"
             >
-                <CheckCircle class="size-4 text-emerald-500 shrink-0 mt-0.5" />
+                <CheckCircle class="size-4 text-success shrink-0 mt-0.5" />
                 <div>
-                    <p
-                        class="text-sm font-medium text-emerald-600 dark:text-emerald-400"
-                    >
+                    <p class="text-sm font-medium text-success">
                         Upload successful
                     </p>
-                    <p
-                        class="text-xs text-emerald-600/70 dark:text-emerald-400/70"
-                    >
+                    <p class="text-xs text-success/80">
                         Processing will begin automatically.
                     </p>
                 </div>
             </div>
         {:else if uploadStatus === "error"}
             <div
-                class="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 flex items-start gap-3"
+                role="alert"
+                class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 flex items-start gap-3 motion-rise-in"
             >
-                <CircleAlert class="size-4 text-red-500 shrink-0 mt-0.5" />
+                <CircleAlert class="size-4 text-destructive shrink-0 mt-0.5" />
                 <div>
-                    <p
-                        class="text-sm font-medium text-red-600 dark:text-red-400"
-                    >
+                    <p class="text-sm font-medium text-destructive">
                         Upload failed
                     </p>
-                    <p class="text-xs text-red-600/70 dark:text-red-400/70">
+                    <p class="text-xs text-destructive/80">
                         {uploadError}
                     </p>
                 </div>
@@ -347,7 +355,7 @@
                 class="text-base font-semibold tracking-tight text-foreground mb-3 flex items-center gap-2"
             >
                 {#if activeDocs.length > 0}
-                    <LoaderCircle class="size-4 text-blue-500 animate-spin" />
+                    <LoaderCircle class="size-4 text-info animate-spin" />
                     Processing
                 {:else}
                     <CheckCircle class="size-4 text-muted-foreground" />
@@ -391,12 +399,12 @@
                                 <div class="flex items-center gap-1.5 shrink-0">
                                     {#if doc.status === "processing"}
                                         <span
-                                            class="text-xs font-medium tabular-nums text-blue-500"
+                                            class="text-xs font-medium tabular-nums text-info"
                                             >{pct}%</span
                                         >
                                     {:else if doc.status === "uploaded"}
                                         <span
-                                            class="text-xs font-medium text-amber-500"
+                                            class="text-xs font-medium text-warning"
                                             >queued</span
                                         >
                                     {/if}
@@ -428,9 +436,9 @@
                                 >
                                     <div
                                         class="h-full rounded-full transition-all duration-500 ease-out"
-                                        class:bg-amber-500={doc.status ===
+                                        class:bg-warning={doc.status ===
                                             "uploaded"}
-                                        class:bg-blue-500={doc.status ===
+                                        class:bg-info={doc.status ===
                                             "processing"}
                                         style="width: {doc.status === 'uploaded'
                                             ? '8%'
@@ -459,7 +467,7 @@
             <h2
                 class="text-base font-semibold tracking-tight text-foreground mb-3 flex items-center gap-2"
             >
-                <CheckCircle class="size-4 text-emerald-500" />
+                <CheckCircle class="size-4 text-success" />
                 Completed
                 <span class="text-xs font-normal text-muted-foreground"
                     >({doneDocs.length})</span
@@ -530,7 +538,7 @@
                                                 >
                                                 {#if doc.status === "failed" && doc.error_message}
                                                     <p
-                                                        class="text-[10px] text-red-600/80 dark:text-red-400/80 mt-0.5 line-clamp-2"
+                                                        class="text-[10px] text-destructive/80 mt-0.5 line-clamp-2"
                                                         title={doc.error_message}
                                                     >
                                                         {doc.error_message}
@@ -569,4 +577,5 @@
             {/if}
         </div>
     </section>
+    </div>
 </div>

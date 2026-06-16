@@ -1,14 +1,19 @@
 <script lang="ts">
     import {
-        Bot,
         User,
         Send,
-        LoaderCircle,
         BookOpen,
-        Sparkles,
         FileText,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import {
+        GiaAvatar,
+        GiaTip,
+        LoadingDots,
+        Spotlight,
+        Markdown,
+        OrbitingInsights,
+    } from "$lib/components/brand";
 
     type Message = {
         role: "user" | "assistant";
@@ -101,9 +106,9 @@
     }
 </script>
 
-<div class="flex w-full max-w-5xl mx-auto gap-6 h-[calc(100vh-8rem)]">
+<div class="flex flex-col md:flex-row w-full max-w-5xl mx-auto gap-4 md:gap-6 md:h-[calc(100vh-8rem)]">
     <!-- Sidebar: Approved Documents -->
-    <aside class="w-[240px] shrink-0 flex flex-col gap-2">
+    <aside class="md:w-[240px] shrink-0 flex flex-col gap-2 max-h-48 md:max-h-none overflow-hidden">
         <div class="flex items-center gap-2 mb-1">
             <BookOpen class="size-4 text-primary" />
             <span class="text-sm font-semibold text-foreground">
@@ -111,9 +116,11 @@
             >
         </div>
         {#if approvedDocs.length === 0}
-            <p class="text-xs text-muted-foreground">
-                No approved documents yet.
-            </p>
+            <GiaTip
+                size="sm"
+                message="No approved documents yet. Once they're reviewed, I'll answer from them."
+                class="self-start"
+            />
         {:else}
             <div class="flex flex-col gap-1 overflow-y-auto flex-1">
                 {#each approvedDocs as doc}
@@ -132,65 +139,73 @@
     <!-- Chat -->
     <div class="flex-1 flex flex-col min-w-0">
         <div class="flex items-center gap-3 mb-4 shrink-0">
-            <div
-                class="size-10 rounded-full bg-primary/10 flex items-center justify-center"
-            >
-                <Bot class="size-5 text-primary" />
-            </div>
+            <GiaAvatar size={44} state={loading ? "thinking" : "idle"} pulse={loading} />
             <div>
                 <h1 class="text-xl font-semibold text-foreground">
-                    Gia — AI Learning Coach
+                    Gia — Growth Intelligence Assistant
                 </h1>
                 <p class="text-xs text-muted-foreground">
-                    Ask questions about your approved documents
+                    Ask Gia about your approved documents. She cites every source.
                 </p>
             </div>
         </div>
 
         <div
-            class="flex-1 overflow-y-auto rounded-xl border border-border bg-card p-4 mb-4"
+            class="relative flex-1 overflow-y-auto rounded-2xl border border-border bg-card p-4 mb-4"
             bind:this={chatContainer}
         >
+            <Spotlight class="h-full w-full" opacity={0.12} />
             {#if messages.length === 0}
                 <div
-                    class="flex flex-col items-center justify-center h-full text-center gap-3 py-12"
+                    class="relative z-10 flex flex-col items-center justify-center h-full text-center gap-4 py-12"
                 >
-                    <Sparkles class="size-10 text-muted-foreground/30" />
-                    <p class="text-sm text-muted-foreground">
-                        Ask me anything about your approved documents.
-                    </p>
-                    <p class="text-xs text-muted-foreground/60">
-                        Or click a document in the sidebar →
-                    </p>
+                    <OrbitingInsights size={220} />
+                    <div class="flex flex-col gap-1.5 max-w-sm">
+                        <p class="text-base font-semibold text-foreground">
+                            What would you like to learn about?
+                        </p>
+                        <p class="text-sm text-muted-foreground leading-relaxed">
+                            Ask anything about your approved documents — Gia will
+                            answer with citations.
+                        </p>
+                    </div>
+                    {#if approvedDocs.length > 0}
+                        <p class="text-[11px] text-muted-foreground/70 uppercase tracking-wider mt-2">
+                            Or pick a document from the sidebar
+                        </p>
+                    {/if}
                 </div>
             {:else}
-                <div class="flex flex-col gap-4">
-                    {#each messages as msg}
+                <div class="relative z-10 flex flex-col gap-4">
+                    {#each messages as msg, i}
                         <div
-                            class="flex gap-3 {msg.role === 'user'
+                            class="flex gap-3 motion-rise-in {msg.role === 'user'
                                 ? 'flex-row-reverse'
                                 : ''}"
+                            style="animation-delay: {Math.min(i * 30, 240)}ms"
                         >
-                            <div
-                                class="size-8 rounded-full flex items-center justify-center shrink-0 {msg.role ===
-                                'user'
-                                    ? 'bg-primary/10'
-                                    : 'bg-emerald-500/10'}"
-                            >
-                                {#if msg.role === "user"}<User
-                                        class="size-4 text-primary"
-                                    />{:else}<Bot
-                                        class="size-4 text-emerald-500"
-                                    />{/if}
-                            </div>
+                            {#if msg.role === "user"}
+                                <div
+                                    class="size-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0"
+                                    aria-hidden="true"
+                                >
+                                    <User class="size-4 text-primary" />
+                                </div>
+                            {:else}
+                                <GiaAvatar size={32} state="idle" />
+                            {/if}
                             <div class="max-w-[80%]">
                                 <div
-                                    class="rounded-xl px-4 py-2.5 text-sm leading-relaxed {msg.role ===
+                                    class="rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm {msg.role ===
                                     'user'
-                                        ? 'bg-primary text-primary-foreground'
-                                        : 'bg-muted text-foreground'} whitespace-pre-line"
+                                        ? 'bg-primary text-primary-foreground whitespace-pre-line'
+                                        : 'bg-muted text-foreground border border-border/60'}"
                                 >
-                                    {msg.content}
+                                    {#if msg.role === "assistant"}
+                                        <Markdown source={msg.content} />
+                                    {:else}
+                                        {msg.content}
+                                    {/if}
                                 </div>
                                 {#if msg.sources && msg.sources.length > 0}
                                     <div
@@ -212,20 +227,14 @@
                     {/each}
 
                     {#if loading}
-                        <div class="flex gap-3">
+                        <div class="flex gap-3 motion-rise-in">
+                            <GiaAvatar size={32} state="thinking" pulse />
                             <div
-                                class="size-8 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0"
+                                class="rounded-2xl px-4 py-3 bg-muted border border-border/60 flex items-center gap-2.5 text-info"
                             >
-                                <Bot class="size-4 text-emerald-500" />
-                            </div>
-                            <div
-                                class="rounded-xl px-4 py-2.5 bg-muted flex items-center gap-2"
-                            >
-                                <LoaderCircle
-                                    class="size-3.5 text-muted-foreground animate-spin"
-                                />
+                                <LoadingDots label="Gia is thinking" />
                                 <span class="text-sm text-muted-foreground"
-                                    >Thinking...</span
+                                    >Reading your sources…</span
                                 >
                             </div>
                         </div>

@@ -15,6 +15,7 @@
         RotateCcw,
         AlertTriangle,
     } from "@lucide/svelte";
+    import { PageHeader } from "$lib/components/brand";
     import * as Button from "$lib/components/ui/button";
 
     type ContentType = "all" | "document" | "course";
@@ -172,22 +173,22 @@
         if (item.content_type === "document") {
             switch (item.status) {
                 case "uploaded":
-                    return "text-amber-500";
+                    return "text-warning";
                 case "processing":
-                    return "text-blue-500";
+                    return "text-info";
                 case "ready":
-                    return "text-emerald-500";
+                    return "text-success";
                 case "failed":
-                    return "text-red-500";
+                    return "text-destructive";
                 default:
                     return "text-muted-foreground";
             }
         } else {
             switch (item.status) {
                 case "published":
-                    return "text-emerald-500";
+                    return "text-success";
                 case "draft":
-                    return "text-amber-500";
+                    return "text-warning";
                 case "archived":
                     return "text-muted-foreground";
                 default:
@@ -230,22 +231,22 @@
             case "approved":
                 return {
                     label: "Approved",
-                    cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+                    cls: "bg-success/10 text-success border border-success/20",
                 };
             case "rejected":
                 return {
                     label: "Rejected",
-                    cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+                    cls: "bg-destructive/10 text-destructive border border-destructive/20",
                 };
             case "pending":
                 return {
                     label: "Pending",
-                    cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+                    cls: "bg-warning/10 text-warning border border-warning/20",
                 };
             case "changes_requested":
                 return {
                     label: "Changes Requested",
-                    cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+                    cls: "bg-info/10 text-info border border-info/20",
                 };
             default:
                 return null;
@@ -275,12 +276,15 @@
 </script>
 
 <div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
-    <div class="flex items-center gap-3">
-        <Library class="size-6 text-primary" />
-        <h1 class="text-2xl font-semibold tracking-tight text-foreground">
-            Content Repository
-        </h1>
-    </div>
+    <PageHeader
+        title="Content repository"
+        eyebrow="Library"
+        description="Every document and course in one searchable index. Filter by type, status, and review state."
+    >
+        {#snippet icon()}
+            <Library class="size-6 text-primary" />
+        {/snippet}
+    </PageHeader>
 
     <div class="grid grid-cols-3 gap-4">
         <button
@@ -477,7 +481,7 @@
                                 {#if item.review_notes}
                                     <button
                                         onclick={() => viewNotes(item)}
-                                        class="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                        class="inline-flex items-center gap-1 text-xs text-info hover:underline"
                                     >
                                         <MessageSquareText class="size-3.5" />
                                         View
@@ -505,7 +509,7 @@
                                             onclick={() => handleResubmit(item)}
                                             disabled={resubmittingId ===
                                                 item.id}
-                                            class="text-blue-600 hover:text-blue-700"
+                                            class="text-info hover:text-info/80"
                                             title="Resubmit for review"
                                         >
                                             {#if resubmittingId === item.id}
@@ -522,7 +526,7 @@
                                         size="icon-sm"
                                         onclick={() => handleDelete(item)}
                                         disabled={deletingId === item.id}
-                                        class="text-muted-foreground hover:text-red-500"
+                                        class="text-muted-foreground hover:text-destructive"
                                     >
                                         {#if deletingId === item.id}
                                             <LoaderCircle

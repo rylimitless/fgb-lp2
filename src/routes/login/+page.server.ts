@@ -1,15 +1,15 @@
 import { redirect } from "@sveltejs/kit";
 import type { PageServerLoad } from "./$types";
+import { apiFetch } from "$lib/server/api";
 
-export const load: PageServerLoad = async ({ fetch, cookies }) => {
-  // Already authenticated — redirect to home
-  const token = cookies.get("session_token");
+export const load: PageServerLoad = async (event) => {
+  const token = event.cookies.get("session_token");
   if (token) {
     throw redirect(307, "/");
   }
 
   try {
-    const res = await fetch("/api/check-first-user");
+    const res = await apiFetch(event, "/api/check-first-user");
     if (!res.ok) return;
     const data = await res.json();
     if (data.first_user) {

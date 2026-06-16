@@ -1,7 +1,8 @@
 import type { PageServerLoad } from "./$types";
+import { apiFetch } from "$lib/server/api";
 
-export const load: PageServerLoad = async ({ fetch }) => {
-  const res = await fetch("/api/documents");
+export const load: PageServerLoad = async (event) => {
+  const res = await apiFetch(event, "/api/documents");
 
   if (!res.ok) {
     return { documents: [] };

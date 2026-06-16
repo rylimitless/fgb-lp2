@@ -1,0 +1,15 @@
+# Use debian-slim instead of alpine for easier library support
+FROM golang:1.26-bookworm
+
+WORKDIR /app
+
+# 2. Copy your Go code and the Python comparison script
+COPY . .
+
+# 3. Tidy and build the binary (better than 'go run' for production)
+RUN go mod tidy
+RUN go build
+EXPOSE 5555
+
+# 4. Run the compiled binary
+CMD ["go","run","main.go"]

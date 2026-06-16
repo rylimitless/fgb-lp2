@@ -1,0 +1,255 @@
+/*
+ * FGB Academy motion system.
+ * Easings, durations, and reusable keyframes used by Svelte transitions
+ * and Tailwind utility classes. All motion respects prefers-reduced-motion.
+ */
+
+:root {
+	/* Easings */
+	--ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+	--ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+	--ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+	--ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+
+	/* Durations */
+	--dur-fast: 120ms;
+	--dur-base: 200ms;
+	--dur-slow: 320ms;
+	--dur-ceremony: 720ms;
+}
+
+/* ---- Keyframes ---- */
+
+@keyframes fgb-rise-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes fgb-fade-in {
+	from { opacity: 0; }
+	to   { opacity: 1; }
+}
+
+@keyframes fgb-streak-bump {
+	0%   { transform: scale(1); }
+	40%  { transform: scale(1.18); }
+	100% { transform: scale(1); }
+}
+
+@keyframes fgb-glow-pulse {
+	0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); }
+	50%      { box-shadow: 0 0 0 8px transparent; }
+}
+
+@keyframes fgb-border-beam {
+	to { offset-distance: 100%; }
+}
+
+@keyframes fgb-spin-slow {
+	to { transform: rotate(360deg); }
+}
+
+@keyframes fgb-shimmer {
+	from { background-position: -200% 0; }
+	to   { background-position: 200% 0; }
+}
+
+@keyframes fgb-confetti-fall {
+	0% {
+		transform: translate3d(var(--x, 0), -10vh, 0) rotate(0deg);
+		opacity: 1;
+	}
+	100% {
+		transform: translate3d(calc(var(--x, 0) + var(--drift, 0px)), 110vh, 0) rotate(var(--spin, 540deg));
+		opacity: 0.85;
+	}
+}
+
+@keyframes fgb-ticker {
+	from { transform: translateY(100%); opacity: 0; }
+	to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ---- Utility classes ---- */
+
+.motion-rise-in {
+	animation: fgb-rise-in var(--dur-slow) var(--ease-out-quart) both;
+}
+.motion-fade-in {
+	animation: fgb-fade-in var(--dur-slow) var(--ease-out-quart) both;
+}
+.motion-bump {
+	animation: fgb-streak-bump var(--dur-slow) var(--ease-spring);
+}
+.motion-glow {
+	animation: fgb-glow-pulse 2.4s var(--ease-emphasized) infinite;
+}
+.motion-spin-slow {
+	animation: fgb-spin-slow 14s linear infinite;
+}
+.motion-shimmer {
+	background: linear-gradient(
+		110deg,
+		transparent 30%,
+		oklch(1 0 0 / 0.32) 50%,
+		transparent 70%
+	);
+	background-size: 200% 100%;
+	animation: fgb-shimmer 2.4s linear infinite;
+}
+
+/* Aurora text — animated gold/navy gradient sweep on a headline span.
+   Inspired by Magic UI aurora-text / animated-gradient-text, native CSS. */
+.text-aurora {
+	/* gold-only shimmer — legible on deep navy hero/banner surfaces */
+	background-image: linear-gradient(
+		110deg,
+		oklch(0.74 0.09 86) 0%,
+		oklch(0.92 0.06 92) 30%,
+		var(--accent) 50%,
+		oklch(0.92 0.06 92) 70%,
+		oklch(0.74 0.09 86) 100%
+	);
+	background-size: 220% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	animation: fgb-aurora 6s linear infinite;
+}
+@keyframes fgb-aurora {
+	to {
+		background-position: 220% 0;
+	}
+}
+
+/* Slow float — for hero orbs / avatars */
+@keyframes fgb-float {
+	0%, 100% { transform: translateY(0); }
+	50%      { transform: translateY(-10px); }
+}
+.motion-float {
+	animation: fgb-float 6s var(--ease-emphasized) infinite;
+}
+
+/* Scroll-cue bounce */
+@keyframes fgb-scroll-cue {
+	0%, 100% { transform: translateY(0); opacity: 0.6; }
+	50%      { transform: translateY(6px); opacity: 1; }
+}
+.motion-scroll-cue {
+	animation: fgb-scroll-cue 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.text-aurora { animation: none; }
+	.motion-float { animation: none; }
+	.motion-scroll-cue { animation: none; }
+}
+
+/* Stagger helpers — combine with motion-rise-in */
+.motion-stagger-1 { animation-delay: 40ms; }
+.motion-stagger-2 { animation-delay: 80ms; }
+.motion-stagger-3 { animation-delay: 120ms; }
+.motion-stagger-4 { animation-delay: 160ms; }
+.motion-stagger-5 { animation-delay: 200ms; }
+.motion-stagger-6 { animation-delay: 240ms; }
+
+/* Premium card lift on hover */
+.lift {
+	transition:
+		transform var(--dur-base) var(--ease-out-quart),
+		box-shadow var(--dur-base) var(--ease-out-quart),
+		border-color var(--dur-base) var(--ease-out-quart);
+}
+.lift:hover {
+	transform: translateY(-2px);
+	box-shadow: var(--shadow-lg);
+}
+
+/* Subtle press feedback for clickable cards */
+.press {
+	transition: transform var(--dur-fast) var(--ease-out-quart);
+}
+.press:active {
+	transform: translateY(1px) scale(0.998);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.motion-rise-in,
+	.motion-fade-in,
+	.motion-bump,
+	.motion-glow,
+	.motion-spin-slow,
+	.motion-shimmer {
+		animation: none !important;
+	}
+	.lift:hover {
+		transform: none;
+	}
+	.press:active {
+		transform: none;
+	}
+}
+
+/* ---- Print helpers ---- */
+
+/* Surfaces with `print-only` are hidden in screen view and shown for print
+   (used for the ceremony certificate footer date line). */
+.print-only {
+	display: none;
+}
+
+@media print {
+	/* Hide app chrome and elements explicitly marked as non-print. */
+	.no-print,
+	header,
+	nav,
+	.ceremony-actions {
+		display: none !important;
+	}
+	.print-only {
+		display: block !important;
+	}
+	/* Force readable colours and respect designer intent on paper. */
+	body {
+		background: #fff !important;
+		color: #000 !important;
+	}
+	/* Allow the gradient brand surface to print as a soft background. */
+	.brand-gradient {
+		background: linear-gradient(135deg, #f4f7fb 0%, #e9e2c4 100%) !important;
+		color: #00548e !important;
+	}
+	.certificate-print-card {
+		background-image:
+			linear-gradient(rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.72)),
+			url('/brand/certificates/certificate-base.png') !important;
+		background-size: cover !important;
+		background-position: center !important;
+		color: #00548e !important;
+		min-height: 6.5in;
+	}
+	.brand-gradient * {
+		color: #00548e !important;
+	}
+	.text-accent {
+		color: #8a7634 !important;
+	}
+	/* Disable animations that don't serve a printed page. */
+	*,
+	*::before,
+	*::after {
+		animation: none !important;
+		transition: none !important;
+		box-shadow: none !important;
+	}
+	a[href]::after {
+		content: none !important;
+	}
+}

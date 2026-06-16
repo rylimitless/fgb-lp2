@@ -39,7 +39,7 @@ services:
       dockerfile: Dockerfile.frontend
     container_name: fgb-frontend
     ports:
-      - "5173:5173"
+      - "3038:3000"
     volumes:
       - ./src:/app/src
       - ./static:/app/static

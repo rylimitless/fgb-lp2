@@ -12,6 +12,7 @@
         Eye,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import { PageHeader } from "$lib/components/brand";
 
     type TabType = "documents" | "courses";
 
@@ -183,12 +184,15 @@
 </script>
 
 <div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
-    <div class="flex items-center gap-3">
-        <ClipboardCheck class="size-6 text-primary" />
-        <h1 class="text-2xl font-semibold tracking-tight text-foreground">
-            Review & Approval Queue
-        </h1>
-    </div>
+    <PageHeader
+        title="Review queue"
+        eyebrow="Approvals"
+        description="Approve, reject, or request changes for newly submitted documents and courses. Every decision is recorded."
+    >
+        {#snippet icon()}
+            <ClipboardCheck class="size-6 text-primary" />
+        {/snippet}
+    </PageHeader>
 
     <div class="flex gap-1 rounded-lg bg-muted p-1 w-fit">
         <button
@@ -276,7 +280,7 @@
                                             variant="outline"
                                             size="sm"
                                             onclick={() => viewDocument(doc)}
-                                            class="text-sky-600 border-sky-500/20 hover:bg-sky-500/10"
+                                            class="text-info border-info/20 hover:bg-info/10"
                                         >
                                             <Eye class="size-3.5 mr-1.5" />
                                             View
@@ -290,7 +294,7 @@
                                                     "document",
                                                     "approved",
                                                 )}
-                                            class="text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/10"
+                                            class="text-success border-success/20 hover:bg-success/10"
                                         >
                                             <CheckCircle
                                                 class="size-3.5 mr-1.5"
@@ -302,7 +306,7 @@
                                             size="sm"
                                             onclick={() =>
                                                 openReview(doc, "document")}
-                                            class="text-blue-600 border-blue-500/20 hover:bg-blue-500/10"
+                                            class="text-info border-info/20 hover:bg-info/10"
                                         >
                                             <RotateCcw
                                                 class="size-3.5 mr-1.5"
@@ -314,7 +318,7 @@
                                             size="sm"
                                             onclick={() =>
                                                 openReview(doc, "document")}
-                                            class="text-red-600 border-red-500/20 hover:bg-red-500/10"
+                                            class="text-destructive border-destructive/20 hover:bg-destructive/10"
                                         >
                                             <XCircle class="size-3.5 mr-1.5" />
                                             Reject
@@ -360,7 +364,7 @@
                                                     `/lesson-player?preview=${course.id}`,
                                                     "_blank",
                                                 )}
-                                            class="text-sky-600 border-sky-500/20 hover:bg-sky-500/10"
+                                            class="text-info border-info/20 hover:bg-info/10"
                                         >
                                             <Eye class="size-3.5 mr-1.5" />
                                             View
@@ -374,7 +378,7 @@
                                                     "course",
                                                     "approved",
                                                 )}
-                                            class="text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/10"
+                                            class="text-success border-success/20 hover:bg-success/10"
                                         >
                                             <CheckCircle
                                                 class="size-3.5 mr-1.5"
@@ -386,7 +390,7 @@
                                             size="sm"
                                             onclick={() =>
                                                 openReview(course, "course")}
-                                            class="text-blue-600 border-blue-500/20 hover:bg-blue-500/10"
+                                            class="text-info border-info/20 hover:bg-info/10"
                                         >
                                             <RotateCcw
                                                 class="size-3.5 mr-1.5"
@@ -398,7 +402,7 @@
                                             size="sm"
                                             onclick={() =>
                                                 openReview(course, "course")}
-                                            class="text-red-600 border-red-500/20 hover:bg-red-500/10"
+                                            class="text-destructive border-destructive/20 hover:bg-destructive/10"
                                         >
                                             <XCircle class="size-3.5 mr-1.5" />
                                             Reject
@@ -481,7 +485,7 @@
                     variant="ghost"
                     size="sm"
                     onclick={() => submitReview("changes_requested")}
-                    class="text-blue-600"
+                    class="text-info"
                 >
                     <RotateCcw class="size-4 mr-1.5" />
                     Request Changes
@@ -490,7 +494,7 @@
                     variant="ghost"
                     size="sm"
                     onclick={() => submitReview("rejected")}
-                    class="text-red-600"
+                    class="text-destructive"
                 >
                     <XCircle class="size-4 mr-1.5" />
                     Reject

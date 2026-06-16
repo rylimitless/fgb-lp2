@@ -20,12 +20,42 @@
     let { data } = $props();
 
     let courses = $state<any[]>([]);
-    let approvedDocs = $state<any[]>([]);
+    let allDocs = $state<any[]>([]);
+    let approvedDocs = $derived(
+        allDocs.filter((d: any) => d.approved && d.status === "ready"),
+    );
+    let processingDocs = $derived(
+        allDocs.filter(
+            (d: any) =>
+                d.status === "uploaded" || d.status === "processing",
+        ),
+    );
+
     $effect(() => {
         courses = data.courses ?? [];
-        approvedDocs = (data.documents ?? []).filter(
-            (d: any) => d.approved && d.status === "ready",
-        );
+        allDocs = data.documents ?? [];
+    });
+
+    async function refreshDocs() {
+        try {
+            const res = await fetch("/api/documents", {
+                credentials: "include",
+            });
+            if (res.ok) {
+                allDocs = await res.json();
+            }
+        } catch {
+            // ignore transient errors; next tick will retry
+        }
+    }
+
+    $effect(() => {
+        const interval = setInterval(() => {
+            if (processingDocs.length > 0) {
+                refreshDocs();
+            }
+        }, 3000);
+        return () => clearInterval(interval);
     });
 
     // ---- Form state ----
@@ -344,10 +374,12 @@
                     ></textarea>
                 </div>
 
-                {#if approvedDocs.length > 0}
+                {#if approvedDocs.length > 0 || processingDocs.length > 0}
                     <div class="flex flex-col gap-1.5">
                         <p class="text-xs font-medium text-muted-foreground">
-                            Source documents ({approvedDocs.length} approved)
+                            Source documents ({approvedDocs.length} approved{processingDocs.length
+                                ? `, ${processingDocs.length} processing`
+                                : ""})
                         </p>
                         <div
                             class="flex flex-col gap-1 max-h-32 overflow-y-auto"
@@ -376,16 +408,37 @@
                                     <span class="truncate">{doc.title}</span>
                                 </button>
                             {/each}
+                            {#each processingDocs as doc}
+                                <div
+                                    class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground/70"
+                                    title="Document is still being processed"
+                                >
+                                    <LoaderCircle
+                                        class="size-3 animate-spin shrink-0"
+                                    />
+                                    <FileText class="size-3 shrink-0" />
+                                    <span class="truncate">{doc.title}</span>
+                                    {#if doc.total_chunks > 0}
+                                        <span class="ml-auto text-[10px] shrink-0">
+                                            {doc.chunks_done}/{doc.total_chunks}
+                                        </span>
+                                    {:else}
+                                        <span class="ml-auto text-[10px] shrink-0">
+                                            {doc.status}
+                                        </span>
+                                    {/if}
+                                </div>
+                            {/each}
                         </div>
                     </div>
                 {/if}
 
                 {#if genError}
                     <div
-                        class="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 flex items-center gap-2"
+                        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 flex items-center gap-2"
                     >
-                        <XCircle class="size-4 text-red-500 shrink-0" />
-                        <p class="text-xs text-red-600 dark:text-red-400">
+                        <XCircle class="size-4 text-destructive shrink-0" />
+                        <p class="text-xs text-destructive">
                             {genError}
                         </p>
                     </div>
@@ -472,8 +525,8 @@
                                     class="size-3.5 rounded-full shrink-0 flex items-center justify-center {globalIdx <
                                         generationSteps.length - 1 ||
                                     generationDone
-                                        ? 'bg-emerald-500/20 text-emerald-400'
-                                        : 'bg-blue-500/20 text-blue-400'}"
+                                        ? 'bg-success/20 text-success'
+                                        : 'bg-info/20 text-info'}"
                                 >
                                     {#if globalIdx < generationSteps.length - 1 || generationDone}
                                         <CheckCircle class="size-2" />
@@ -512,18 +565,18 @@
                 <!-- Error display -->
                 {#if genError}
                     <div
-                        class="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 mb-3 flex items-start gap-2"
+                        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 mb-3 flex items-start gap-2"
                     >
                         <XCircle
-                            class="size-3.5 text-red-500 shrink-0 mt-0.5"
+                            class="size-3.5 text-destructive shrink-0 mt-0.5"
                         />
                         <div>
                             <p
-                                class="text-xs font-medium text-red-600 dark:text-red-400"
+                                class="text-xs font-medium text-destructive"
                             >
                                 Generation failed
                             </p>
-                            <p class="text-xs text-red-500/80 mt-0.5">
+                            <p class="text-xs text-destructive/80 mt-0.5">
                                 {genError}
                             </p>
                         </div>
@@ -541,9 +594,9 @@
                         <div class="flex flex-col gap-1.5">
                             {#each streamedModules as mod, mi}
                                 {#if mi === streamedModules.length - 1}
-                                    <div class="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                                    <div class="rounded-lg border border-success/20 bg-success/5 px-3 py-2">
                                         <div class="flex items-center gap-2 mb-1">
-                                            <CheckCircle class="size-3 text-emerald-500 shrink-0" />
+                                            <CheckCircle class="size-3 text-success shrink-0" />
                                             <p class="text-xs font-semibold text-foreground">
                                                 Module {mi + 1}: {mod.title}
                                             </p>
@@ -552,7 +605,7 @@
                                     </div>
                                 {:else}
                                     <div class="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-                                        <CheckCircle class="size-2.5 text-emerald-500/60 shrink-0" />
+                                        <CheckCircle class="size-2.5 text-success/60 shrink-0" />
                                         <span class="truncate">Module {mi + 1}: {mod.title}</span>
                                     </div>
                                 {/if}
@@ -602,9 +655,9 @@
                     <span
                         class="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-0.5 text-xs font-medium {viewingCourse.status ===
                         'published'
-                            ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                            ? 'bg-success/10 text-success border-success/20'
                             : viewingCourse.status === 'draft'
-                              ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                              ? 'bg-warning/10 text-warning border-warning/20'
                               : 'bg-muted text-muted-foreground'}"
                     >
                         {#if viewingCourse.status === "published"}
@@ -633,7 +686,7 @@
                         href="/lesson-player?preview={viewingCourse.id}"
                         target="_blank"
                         rel="noopener noreferrer"
-                        class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors border-blue-500/20 bg-blue-500/5 text-blue-500 hover:bg-blue-500/10"
+                        class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors border-info/20 bg-info/5 text-info hover:bg-info/10"
                     >
                         <Play class="size-2.5" />
                         Preview as Student
@@ -703,10 +756,10 @@
 
             {#if editError}
                 <div
-                    class="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 mb-6 flex items-center gap-2"
+                    class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 mb-6 flex items-center gap-2"
                 >
-                    <XCircle class="size-4 text-red-500 shrink-0" />
-                    <p class="text-xs text-red-600 dark:text-red-400">
+                    <XCircle class="size-4 text-destructive shrink-0" />
+                    <p class="text-xs text-destructive">
                         {editError}
                     </p>
                 </div>

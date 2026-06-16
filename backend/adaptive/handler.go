@@ -97,21 +97,28 @@ func (h *Handler) StartSession(c *gin.Context) {
 		return
 	}
 
+	userID := c.GetInt64("user_id")
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
 	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), courseID)
 	if len(items) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No items in this course"})
 		return
 	}
 
-	// Get or init student profile
-	pref, _ := h.Queries.GetLearningPreference(c.Request.Context(), 1)
+	pref, _ := h.Queries.GetLearningPreference(c.Request.Context(), userID)
 	theta := pref.Theta
 
+	totalAssessable := 0
 	pool := make([]itemIRT, 0)
 	for _, item := range items {
 		if item.ItemType == "content" {
 			continue
 		}
+		totalAssessable++
 		beta, alpha := extractIRTParams(json.RawMessage(item.Data))
 		pool = append(pool, itemIRT{
 			Item: gin.H{
@@ -126,7 +133,7 @@ func (h *Handler) StartSession(c *gin.Context) {
 		})
 	}
 
-	if len(pool) == 0 {
+	if totalAssessable == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No assessable items in this course"})
 		return
 	}
@@ -140,15 +147,16 @@ func (h *Handler) StartSession(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"theta": round2(theta),
 		"item":  *next,
-		"total": len(pool),
+		"total": totalAssessable,
 	})
 }
 
 func (h *Handler) SubmitAnswer(c *gin.Context) {
 	var body struct {
-		CourseID int64 `json:"course_id"`
-		ItemID   int64 `json:"item_id"`
-		Outcome  int   `json:"outcome"`
+		CourseID        int64   `json:"course_id"`
+		ItemID          int64   `json:"item_id"`
+		Outcome         int     `json:"outcome"`
+		AnsweredItemIds []int64 `json:"answered_item_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -159,9 +167,20 @@ func (h *Handler) SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	// Get student theta
-	pref, _ := h.Queries.GetLearningPreference(c.Request.Context(), 1)
+	userID := c.GetInt64("user_id")
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	pref, _ := h.Queries.GetLearningPreference(c.Request.Context(), userID)
 	theta := pref.Theta
+
+	answeredSet := make(map[int64]struct{}, len(body.AnsweredItemIds)+1)
+	answeredSet[body.ItemID] = struct{}{}
+	for _, id := range body.AnsweredItemIds {
+		answeredSet[id] = struct{}{}
+	}
 
 	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), body.CourseID)
 	pool := make([]itemIRT, 0)
@@ -171,7 +190,13 @@ func (h *Handler) SubmitAnswer(c *gin.Context) {
 			continue
 		}
 		beta, alpha := extractIRTParams(json.RawMessage(item.Data))
-		it := itemIRT{
+		if item.ID == body.ItemID {
+			submittedBeta, submittedAlpha = beta, alpha
+		}
+		if _, done := answeredSet[item.ID]; done {
+			continue
+		}
+		pool = append(pool, itemIRT{
 			Item: gin.H{
 				"id":        item.ID,
 				"item_type": item.ItemType,
@@ -181,40 +206,26 @@ func (h *Handler) SubmitAnswer(c *gin.Context) {
 			},
 			Beta:  beta,
 			Alpha: alpha,
-		}
-		if item.ID == body.ItemID {
-			submittedBeta, submittedAlpha = beta, alpha
-		}
-		pool = append(pool, it)
+		})
 	}
 
-	// Update theta
 	p := probability(theta, submittedBeta, submittedAlpha)
 	newTheta := updateTheta(theta, submittedAlpha, body.Outcome, p)
 	newTheta = clamp(newTheta, -3.0, 3.0)
 
-	// Save theta
 	h.Queries.UpsertLearningPreference(c.Request.Context(), database.UpsertLearningPreferenceParams{
-		UserID: 1,
+		UserID: userID,
 		Theta:  newTheta,
 	})
 
-	// Select next item (exclude the one just answered)
-	filteredPool := make([]itemIRT, 0)
-	for _, it := range pool {
-		if id, _ := it.Item["id"].(int64); id != body.ItemID {
-			filteredPool = append(filteredPool, it)
-		}
-	}
-
-	next := selectNextItem(newTheta, filteredPool)
+	next := selectNextItem(newTheta, pool)
 
 	c.JSON(http.StatusOK, gin.H{
 		"theta":       round2(newTheta),
 		"delta":       round2(newTheta - theta),
 		"probability": round2(p),
 		"next_item":   next,
-		"remaining":   len(filteredPool),
+		"remaining":   len(pool),
 	})
 }
 

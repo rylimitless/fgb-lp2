@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FGB Academy">
+  <title>FGB Academy  App Icon</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a6aa5" />
+      <stop offset="100%" stop-color="#00548e" />
+    </linearGradient>
+    <radialGradient id="shine" cx="30%" cy="20%" r="80%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18" />
+      <stop offset="60%" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)" />
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#shine)" />
+  <path d="M 116 408 L 256 112 L 396 408"
+        fill="none"
+        stroke="#ffffff"
+        stroke-width="56"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+  <circle cx="256" cy="304" r="36" fill="#d6c47e" />
+</svg>

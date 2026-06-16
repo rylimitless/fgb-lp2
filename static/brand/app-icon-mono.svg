@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FGB Academy">
+  <title>FGB Academy  App Icon (monochrome)</title>
+  <!-- Monochrome version: currentColor everywhere so the OS / theme picks the tint
+       (used for iOS dark mode mask, Android adaptive icon foreground, OS tray etc.) -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="none" />
+  <path d="M 116 408 L 256 112 L 396 408"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="56"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+  <circle cx="256" cy="304" r="36" fill="currentColor" />
+</svg>

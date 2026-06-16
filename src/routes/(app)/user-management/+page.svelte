@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { PageHeader, StatCard, PremiumTable, showToast } from "$lib/components/brand";
     import {
         Users,
         Plus,
@@ -87,7 +88,12 @@
             users = users.map((u) =>
                 u.id === userId ? { ...u, roles: editRoles } : u,
             );
+            const savedName = editingUser?.name ?? "User";
             closeEdit();
+            showToast(`Roles updated for ${savedName}.`, {
+                title: "Saved",
+                variant: "success",
+            });
         } catch {
             editError = "Network error";
         } finally {
@@ -122,6 +128,10 @@
                 return;
             }
             await refreshUsers();
+            showToast(`${formName || formEmail} added to the Academy.`, {
+                title: "User created",
+                variant: "success",
+            });
             showForm = false;
             formEmail = "";
             formPassword = "";
@@ -148,6 +158,10 @@
                 return;
             }
             users = users.filter((u) => u.id !== id);
+            showToast(`${name} removed.`, {
+                title: "User deleted",
+                variant: "default",
+            });
         } catch {
             deleteError = "Network error";
         }
@@ -161,17 +175,20 @@
     }
 
     function roleBadgeClass(role: string): string {
+        // Role -> brand semantic token. 4-token hierarchy per BRAND.md §4.3:
+        // admin -> primary (strongest), manager -> accent (leadership gold),
+        // approver -> warning (gatekeeping), auditor -> info (oversight),
+        // content creator -> info (productive), default -> neutral.
         switch (role) {
             case "admin":
-                return "bg-rose-500/10 text-rose-500 border-rose-500/20";
-            case "content creator":
-                return "bg-blue-500/10 text-blue-500 border-blue-500/20";
-            case "approver":
-                return "bg-amber-500/10 text-amber-500 border-amber-500/20";
+                return "bg-primary/10 text-primary border-primary/30";
             case "manager":
-                return "bg-violet-500/10 text-violet-500 border-violet-500/20";
+                return "bg-accent-soft text-accent-foreground border-accent/40";
+            case "approver":
+                return "bg-warning/10 text-warning border-warning/30";
             case "auditor":
-                return "bg-cyan-500/10 text-cyan-500 border-cyan-500/20";
+            case "content creator":
+                return "bg-info/10 text-info border-info/30";
             default:
                 return "bg-muted text-muted-foreground border-border";
         }
@@ -179,25 +196,68 @@
 </script>
 
 <div class="flex w-full max-w-4xl mx-auto flex-col gap-6">
-    <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
+    <PageHeader
+        title="User management"
+        eyebrow="Governance"
+        description="Manage Academy accounts, assign roles, and remove access. Every change is written to the audit log."
+    >
+        {#snippet icon()}
             <Users class="size-6 text-primary" />
-            <h1 class="text-2xl font-semibold text-foreground">
-                User Management
-            </h1>
+        {/snippet}
+        {#snippet actions()}
+            <Button.Root
+                variant={showForm ? "outline" : "default"}
+                size="sm"
+                onclick={() => (showForm = !showForm)}
+            >
+                {#if showForm}
+                    Cancel
+                {:else}
+                    <Plus class="size-3.5" />
+                    <span>Add user</span>
+                {/if}
+            </Button.Root>
+        {/snippet}
+    </PageHeader>
+
+    <!-- User count stat row -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="motion-rise-in motion-stagger-1">
+            <StatCard
+                label="Total users"
+                value={data.users?.length ?? 0}
+                tone="neutral"
+                hint="all roles"
+            >
+                {#snippet icon()}
+                    <Users class="size-3.5" />
+                {/snippet}
+            </StatCard>
         </div>
-        <Button.Root
-            variant={showForm ? "outline" : "default"}
-            size="sm"
-            onclick={() => (showForm = !showForm)}
-        >
-            {#if showForm}
-                Cancel
-            {:else}
-                <Plus class="size-3.5" />
-                <span>Add User</span>
-            {/if}
-        </Button.Root>
+        <div class="motion-rise-in motion-stagger-2">
+            <StatCard
+                label="Administrators"
+                value={data.users?.filter((u: any) => (u.roles ?? [u.role]).includes("admin")).length ?? 0}
+                tone="primary"
+                hint="root access"
+            />
+        </div>
+        <div class="motion-rise-in motion-stagger-3">
+            <StatCard
+                label="Content creators"
+                value={data.users?.filter((u: any) => (u.roles ?? [u.role]).includes("content creator")).length ?? 0}
+                tone="info"
+                hint="can author courses"
+            />
+        </div>
+        <div class="motion-rise-in motion-stagger-4">
+            <StatCard
+                label="Approvers"
+                value={data.users?.filter((u: any) => (u.roles ?? [u.role]).includes("approver")).length ?? 0}
+                tone="warning"
+                hint="can publish content"
+            />
+        </div>
     </div>
 
     <!-- Create User Form -->
@@ -208,7 +268,7 @@
             </h2>
             {#if formError}
                 <div
-                    class="mb-4 flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500"
+                    class="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
                 >
                     <AlertCircle class="size-3.5 shrink-0" />
                     <span>{formError}</span>
@@ -313,7 +373,7 @@
     <!-- Error message -->
     {#if deleteError}
         <div
-            class="flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500"
+            class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
         >
             <AlertCircle class="size-3.5 shrink-0" />
             <span>{deleteError}</span>
@@ -321,108 +381,57 @@
     {/if}
 
     <!-- Users Table -->
-    <div class="rounded-xl border border-border bg-card overflow-hidden">
-        {#if users.length === 0}
-            <div class="p-8 text-center">
-                <Users class="size-8 text-muted-foreground/40 mx-auto mb-3" />
-                <p class="text-sm text-muted-foreground">No users found.</p>
-            </div>
-        {:else}
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-border bg-muted/50">
-                            <th
-                                class="text-left px-5 py-3 text-xs font-medium text-muted-foreground"
-                            >
-                                Name
-                            </th>
-                            <th
-                                class="text-left px-5 py-3 text-xs font-medium text-muted-foreground"
-                            >
-                                Email
-                            </th>
-                            <th
-                                class="text-left px-5 py-3 text-xs font-medium text-muted-foreground"
-                            >
-                                Roles
-                            </th>
-                            <th
-                                class="text-left px-5 py-3 text-xs font-medium text-muted-foreground"
-                            >
-                                Created
-                            </th>
-                            <th
-                                class="text-right px-5 py-3 text-xs font-medium text-muted-foreground"
-                            >
-                                Actions
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {#each users as user}
-                            <tr
-                                class="border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors"
-                            >
-                                <td
-                                    class="px-5 py-3 font-medium text-foreground"
-                                >
-                                    {user.name}
-                                </td>
-                                <td class="px-5 py-3 text-muted-foreground"
-                                    >{user.email}</td
-                                >
-                                <td class="px-5 py-3">
-                                    <div class="flex flex-wrap gap-1">
-                                        {#each user.roles && user.roles.length > 0 ? user.roles : [user.role] as r}
-                                            <span
-                                                class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium {roleBadgeClass(
-                                                    r,
-                                                )}"
-                                            >
-                                                {r}
-                                            </span>
-                                        {/each}
-                                    </div>
-                                </td>
-                                <td
-                                    class="px-5 py-3 text-muted-foreground text-xs"
-                                >
-                                    {user.created_at}
-                                </td>
-                                <td class="px-5 py-3 text-right">
-                                    <div
-                                        class="flex items-center justify-end gap-1"
-                                    >
-                                        <Button.Root
-                                            variant="ghost"
-                                            size="icon"
-                                            class="size-8 text-muted-foreground hover:text-primary"
-                                            onclick={() => openEdit(user)}
-                                        >
-                                            <Pencil class="size-3.5" />
-                                        </Button.Root>
-                                        <Button.Root
-                                            variant="ghost"
-                                            size="icon"
-                                            class="size-8 text-muted-foreground hover:text-rose-500"
-                                            onclick={() =>
-                                                handleDelete(
-                                                    user.id,
-                                                    user.name,
-                                                )}
-                                        >
-                                            <Trash2 class="size-3.5" />
-                                        </Button.Root>
-                                    </div>
-                                </td>
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
-        {/if}
-    </div>
+    <PremiumTable
+        items={users}
+        columns={["Name", "Email", "Roles", "Created", "Actions"]}
+        title="Academy accounts"
+        description="Roles, access, and provisioning history"
+        emptyTitle="No users found"
+        emptyDescription="Create the first account to start provisioning Academy access."
+    >
+        {#snippet row(user)}
+            <td class="px-5 py-3 font-medium text-foreground">
+                {user.name}
+            </td>
+            <td class="px-5 py-3 text-muted-foreground">{user.email}</td>
+            <td class="px-5 py-3">
+                <div class="flex flex-wrap gap-1">
+                    {#each user.roles && user.roles.length > 0 ? user.roles : [user.role] as r}
+                        <span
+                            class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium {roleBadgeClass(
+                                r,
+                            )}"
+                        >
+                            {r}
+                        </span>
+                    {/each}
+                </div>
+            </td>
+            <td class="px-5 py-3 text-muted-foreground text-xs">
+                {user.created_at}
+            </td>
+            <td class="px-5 py-3 text-right">
+                <div class="flex items-center justify-end gap-1">
+                    <Button.Root
+                        variant="ghost"
+                        size="icon"
+                        class="size-8 text-muted-foreground hover:text-primary"
+                        onclick={() => openEdit(user)}
+                    >
+                        <Pencil class="size-3.5" />
+                    </Button.Root>
+                    <Button.Root
+                        variant="ghost"
+                        size="icon"
+                        class="size-8 text-muted-foreground hover:text-destructive"
+                        onclick={() => handleDelete(user.id, user.name)}
+                    >
+                        <Trash2 class="size-3.5" />
+                    </Button.Root>
+                </div>
+            </td>
+        {/snippet}
+    </PremiumTable>
 </div>
 
 <!-- Edit Roles Dialog -->
@@ -464,7 +473,7 @@
             <div class="px-6 py-4 flex flex-col gap-4">
                 {#if editError}
                     <div
-                        class="flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500"
+                        class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
                     >
                         <AlertCircle class="size-3.5 shrink-0" />
                         <span>{editError}</span>
