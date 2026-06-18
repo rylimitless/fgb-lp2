@@ -89,7 +89,7 @@ create table document_chunks (
   page_number int,
   source_label text,
 
-  embedding vector(4096), -- depends on embedding model
+  embedding vector(384), -- 384-dim (all-MiniLM-L6-v2 via local fastembed service)
 
   created_at timestamptz not null default now(),
 

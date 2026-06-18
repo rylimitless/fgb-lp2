@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/pgvector/pgvector-go"
+	"golang.org/x/sync/errgroup"
 )
 
 // ---- Job types ----
@@ -319,7 +320,7 @@ func (w *Worker) processJob(job *GenerationJob) {
 		return
 	}
 
-	// --- Embed ---
+	// --- Embed the course description (used for broad outline retrieval) ---
 	job.addStep("embedding", "Analyzing your course description...")
 	embeddings, err := w.emb.Embed([]string{req.Description})
 	if err != nil {
@@ -329,11 +330,11 @@ func (w *Worker) processJob(job *GenerationJob) {
 	}
 	promptVec := pgvector.NewVector(float64ToFloat32(embeddings[0]))
 
-	// --- Search ---
+	// --- Broad retrieval so the outline sees the document's full scope ---
 	job.addStep("searching", "Searching approved documents for relevant content...")
 	chunks, err := w.queries.SearchDocumentChunks(context.Background(), database.SearchDocumentChunksParams{
 		Embedding: promptVec,
-		Limit:     40,
+		Limit:     outlineChunkLimit,
 	})
 	if err != nil {
 		log.Printf("[worker] search: %v", err)
@@ -344,12 +345,7 @@ func (w *Worker) processJob(job *GenerationJob) {
 		job.addStep("searching", "No approved documents found. Using general knowledge...")
 	}
 
-	var contextBuilder strings.Builder
-	for i, ch := range chunks {
-		contextBuilder.WriteString(fmt.Sprintf("\n--- Source: %s (chunk %d) ---\n%s\n",
-			ch.DocumentTitle, i+1, ch.Content))
-	}
-	sourceContext := contextBuilder.String()
+	sourceContext := buildChunkContext(chunks)
 
 	// =====================================================================
 	// STEP 1: COURSE OUTLINER
@@ -385,7 +381,7 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 	}
 	log.Printf("[worker] job %s step1: %d modules", job.ID, len(coursePlan.Modules))
 
-	// --- Build source refs ---
+	// --- Build source refs (course-level, from broad retrieval) ---
 	sourceRefs := make([]gin.H, 0, len(chunks))
 	for _, ch := range chunks {
 		excerpt := ch.Content
@@ -422,193 +418,33 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 	courseID := course.ID
 
 	// =====================================================================
-	// For each module: STEP 2a → 2b → 3
+	// STEP 2/3: Generate each module IN PARALLEL.
+	// Each module retrieves its OWN source chunks (per-module retrieval), so
+	// a large document is actually covered instead of every module rewriting
+	// the same handful of chunks. modulesResult is indexed by module position
+	// so final ordering is preserved regardless of completion order.
 	// =====================================================================
-	modulesResult := make([]gin.H, 0, len(coursePlan.Modules))
+	totalModules := len(coursePlan.Modules)
+	modulesResult := make([]gin.H, totalModules)
+
+	g, gctx := errgroup.WithContext(context.Background())
+	g.SetLimit(moduleConcurrency)
 
 	for mi, modPlan := range coursePlan.Modules {
-		module, err := w.queries.CreateModule(context.Background(), database.CreateModuleParams{
-			CourseID:    courseID,
-			Title:       modPlan.Title,
-			Description: modPlan.Description,
-			SortOrder:   int32(mi),
-		})
-		if err != nil {
-			log.Printf("[worker] create module %d: %v", mi+1, err)
-			w.failJob(job, fmt.Sprintf("Failed to create module %d", mi+1))
-			return
-		}
-
-		// --- STEP 2a: Section Lister ---
-		job.addStep("writing", fmt.Sprintf("Step 2/3: Analyzing structure for Module %d/%d — %s...",
-			mi+1, len(coursePlan.Modules), modPlan.Title))
-
-		sectionPrompt := fmt.Sprintf(`Course: %s — %s
-Module: "%s" — %s
-Source Material (use only parts relevant to this module):
-%s
-List 3-5 key sections that comprehensively break down this module's content.`,
-			coursePlan.Title, coursePlan.Description, modPlan.Title, modPlan.Description, sourceContext)
-
-		sectionResp, err := w.llm.Chat(moduleSectionListerPrompt, sectionPrompt)
-		if err != nil {
-			log.Printf("[worker] step2a (module %d): %v", mi+1, err)
-			w.failJob(job, fmt.Sprintf("Step 2a failed for module %d", mi+1))
-			return
-		}
-
-		sectionJSON := stripMarkdownFences(sectionResp)
-		var sectionTitles []string
-		if err := json.Unmarshal([]byte(sectionJSON), &sectionTitles); err != nil || len(sectionTitles) == 0 {
-			sectionTitles = []string{modPlan.Title}
-		}
-
-		// --- STEP 2b: Per-section content writer ---
-		var allContent strings.Builder
-		for si, secTitle := range sectionTitles {
-			job.addStep("writing", fmt.Sprintf("Step 2/3: Writing section %d/%d of Module %d/%d — %s...",
-				si+1, len(sectionTitles), mi+1, len(coursePlan.Modules), secTitle))
-
-			contentPrompt := fmt.Sprintf(`Course: %s — %s
-Module: "%s" — %s
-Section: "%s"
-Source Material (use only parts relevant to this section):
-%s
-Write exhaustive, faithful teaching content for this section.`,
-				coursePlan.Title, coursePlan.Description, modPlan.Title, modPlan.Description, secTitle, sourceContext)
-
-			secContent, err := w.llm.Chat(moduleSectionWriterPrompt, contentPrompt)
+		mi, modPlan := mi, modPlan
+		g.Go(func() error {
+			modResult, err := w.generateModule(gctx, job, courseID, coursePlan, mi, modPlan, totalModules)
 			if err != nil {
-				log.Printf("[worker] step2b (m%d s%d): %v", mi+1, si+1, err)
-				w.failJob(job, fmt.Sprintf("Step 2b failed for module %d section %d", mi+1, si+1))
-				return
+				return err
 			}
-
-			if len(sectionTitles) > 1 {
-				allContent.WriteString(fmt.Sprintf("\n### %s\n\n", secTitle))
-			}
-			allContent.WriteString(strings.TrimSpace(secContent))
-			allContent.WriteString("\n\n")
-		}
-		rawContent := strings.TrimSpace(allContent.String())
-
-		// --- STEP 3: Question generator ---
-		job.addStep("packaging", fmt.Sprintf("Step 3/3: Generating assessment for Module %d/%d...",
-			mi+1, len(coursePlan.Modules)))
-
-		contentSummary := rawContent
-		if len(contentSummary) > 2500 {
-			contentSummary = contentSummary[:2500] + "\n\n[... content continues for " +
-				fmt.Sprintf("%d", len(rawContent)-2500) + " more characters ...]"
-		}
-
-		questionPrompt := fmt.Sprintf(`Module: "%s" — %s
-
-Content Summary (full content is %d characters total):
-%s
-
-Based on the concepts covered above, generate exactly 8 assessment items as a JSON array, using these formats in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.`,
-			modPlan.Title, modPlan.Description, len(rawContent), contentSummary)
-
-		questionResp, err := w.llm.Chat(questionGenPrompt, questionPrompt)
-		if err != nil {
-			log.Printf("[worker] step3 (module %d): %v", mi+1, err)
-			w.failJob(job, fmt.Sprintf("Step 3 failed for module %d", mi+1))
-			return
-		}
-
-		questionJSON := stripMarkdownFences(questionResp)
-		var questions []genItem
-		if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
-			log.Printf("[worker] step3 parse questions (module %d): %v", mi+1, err)
-			repairPrompt := fmt.Sprintf(`The previous response was invalid JSON. Repair it into ONLY a valid JSON array of exactly 8 assessment items using these types in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.
-
-Invalid response:
-%s
-
-Output ONLY the repaired JSON array.`, questionResp)
-			repairedResp, repairErr := w.llm.Chat(questionGenPrompt, repairPrompt)
-			if repairErr != nil {
-				log.Printf("[worker] step3 repair questions (module %d): %v", mi+1, repairErr)
-				w.failJob(job, fmt.Sprintf("Step 3 failed: bad question JSON for module %d", mi+1))
-				return
-			}
-			questionJSON = stripMarkdownFences(repairedResp)
-			if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
-				log.Printf("[worker] step3 repaired JSON still invalid (module %d): %v", mi+1, err)
-				w.failJob(job, fmt.Sprintf("Step 3 failed: bad question JSON for module %d", mi+1))
-				return
-			}
-		}
-		if len(questions) == 0 {
-			log.Printf("[worker] step3 empty question array (module %d)", mi+1)
-			w.failJob(job, fmt.Sprintf("Step 3 failed: no questions for module %d", mi+1))
-			return
-		}
-
-		contentData, err := json.Marshal(map[string]string{"body": rawContent})
-		if err != nil {
-			w.failJob(job, fmt.Sprintf("Content encoding error for module %d", mi+1))
-			return
-		}
-
-		itemsResult := make([]gin.H, 0, 1+len(questions))
-		ciContent, err := w.queries.CreateCourseItem(context.Background(), database.CreateCourseItemParams{
-			CourseID:  courseID,
-			ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
-			ItemType:  "content",
-			SortOrder: 0,
-			Data:      []byte(contentData),
+			modulesResult[mi] = modResult
+			return nil
 		})
-		if err == nil {
-			itemsResult = append(itemsResult, gin.H{
-				"id": ciContent.ID, "item_type": "content", "sort_order": 0,
-				"data": json.RawMessage(contentData),
-			})
-		} else {
-			log.Printf("[worker] create content item (module %d): %v", mi+1, err)
-		}
+	}
 
-		// Allowed item types per the course_items check constraint.
-		allowedTypes := map[string]bool{
-			"mc": true, "ma": true, "tf": true, "fb": true, "sa": true,
-			"matching": true, "drag_sort": true, "hotspot": true,
-			"sequence": true, "scale": true,
-		}
-
-		for qi, q := range questions {
-			qType := strings.ToLower(strings.TrimSpace(q.Type))
-			if !allowedTypes[qType] {
-				log.Printf("[worker] step3 unknown item_type %q (module %d, q %d) — defaulting to mc", q.Type, mi+1, qi+1)
-				qType = "mc"
-			}
-			sort := int32(qi + 1)
-			ci, err := w.queries.CreateCourseItem(context.Background(), database.CreateCourseItemParams{
-				CourseID:  courseID,
-				ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
-				ItemType:  qType,
-				SortOrder: sort,
-				Data:      []byte(q.Data),
-			})
-			if err != nil {
-				log.Printf("[worker] create question item (module %d, q %d): %v", mi+1, qi+1, err)
-				continue
-			}
-			itemsResult = append(itemsResult, gin.H{
-				"id": ci.ID, "item_type": qType, "sort_order": sort,
-				"data": q.Data,
-			})
-		}
-
-		modResult := gin.H{
-			"id":          module.ID,
-			"title":       modPlan.Title,
-			"description": modPlan.Description,
-			"sort_order":  module.SortOrder,
-			"items":       itemsResult,
-		}
-		modulesResult = append(modulesResult, modResult)
-		job.addModule(modResult, fmt.Sprintf("%d/%d", mi+1, len(coursePlan.Modules)))
+	if err := g.Wait(); err != nil {
+		w.failJob(job, err.Error())
+		return
 	}
 
 	result := gin.H{
@@ -621,6 +457,221 @@ Output ONLY the repaired JSON array.`, questionResp)
 		"modules":        modulesResult,
 	}
 	w.completeJob(job, result, courseID)
+}
+
+// --- Course generation tuning constants ---
+const (
+	outlineChunkLimit = 200 // broad retrieval so the outline reflects the full document scope
+	moduleChunkLimit  = 60  // focused per-module retrieval
+	moduleConcurrency = 3   // parallel module generation (bounded to respect LLM rate limits)
+)
+
+// buildChunkContext renders retrieved chunks into a single source-material string for an LLM prompt.
+func buildChunkContext(chunks []database.SearchDocumentChunksRow) string {
+	var b strings.Builder
+	for i, ch := range chunks {
+		b.WriteString(fmt.Sprintf("\n--- Source: %s (chunk %d) ---\n%s\n",
+			ch.DocumentTitle, i+1, ch.Content))
+	}
+	return b.String()
+}
+
+// generateModule runs the per-module pipeline (retrieval → sections → content → questions)
+// for a single module. Designed to run concurrently across modules via errgroup.
+func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, mi int, modPlan planModule, totalModules int) (gin.H, error) {
+	moduleLabel := fmt.Sprintf("%d/%d", mi+1, totalModules)
+
+	// --- Per-module retrieval: embed this module's title + description ---
+	job.addStep("retrieving", fmt.Sprintf("Finding source material for Module %s — %s...", moduleLabel, modPlan.Title))
+	modEmb, err := w.emb.Embed([]string{modPlan.Title + ". " + modPlan.Description})
+	if err != nil {
+		log.Printf("[worker] module %s embed: %v", moduleLabel, err)
+		return nil, fmt.Errorf("Failed to retrieve material for module %d", mi+1)
+	}
+	modVec := pgvector.NewVector(float64ToFloat32(modEmb[0]))
+
+	modChunks, err := w.queries.SearchDocumentChunks(ctx, database.SearchDocumentChunksParams{
+		Embedding: modVec,
+		Limit:     moduleChunkLimit,
+	})
+	if err != nil {
+		log.Printf("[worker] module %s search: %v", moduleLabel, err)
+		return nil, fmt.Errorf("Failed to retrieve material for module %d", mi+1)
+	}
+	moduleContext := buildChunkContext(modChunks)
+
+	module, err := w.queries.CreateModule(ctx, database.CreateModuleParams{
+		CourseID:    courseID,
+		Title:       modPlan.Title,
+		Description: modPlan.Description,
+		SortOrder:   int32(mi),
+	})
+	if err != nil {
+		log.Printf("[worker] create module %d: %v", mi+1, err)
+		return nil, fmt.Errorf("Failed to create module %d", mi+1)
+	}
+
+	// --- STEP 2a: Section Lister ---
+	job.addStep("writing", fmt.Sprintf("Step 2/3: Analyzing structure for Module %s — %s...", moduleLabel, modPlan.Title))
+
+	sectionPrompt := fmt.Sprintf(`Course: %s — %s
+Module: "%s" — %s
+Source Material (use only parts relevant to this module):
+%s
+List 3-5 key sections that comprehensively break down this module's content.`,
+		coursePlan.Title, coursePlan.Description, modPlan.Title, modPlan.Description, moduleContext)
+
+	sectionResp, err := w.llm.Chat(moduleSectionListerPrompt, sectionPrompt)
+	if err != nil {
+		log.Printf("[worker] step2a (module %d): %v", mi+1, err)
+		return nil, fmt.Errorf("Step 2a failed for module %d", mi+1)
+	}
+
+	sectionJSON := stripMarkdownFences(sectionResp)
+	var sectionTitles []string
+	if err := json.Unmarshal([]byte(sectionJSON), &sectionTitles); err != nil || len(sectionTitles) == 0 {
+		sectionTitles = []string{modPlan.Title}
+	}
+
+	// --- STEP 2b: Per-section content writer ---
+	var allContent strings.Builder
+	for si, secTitle := range sectionTitles {
+		job.addStep("writing", fmt.Sprintf("Step 2/3: Writing section %d/%d of Module %s — %s...",
+			si+1, len(sectionTitles), moduleLabel, secTitle))
+
+		contentPrompt := fmt.Sprintf(`Course: %s — %s
+Module: "%s" — %s
+Section: "%s"
+Source Material (use only parts relevant to this section):
+%s
+Write exhaustive, faithful teaching content for this section.`,
+			coursePlan.Title, coursePlan.Description, modPlan.Title, modPlan.Description, secTitle, moduleContext)
+
+		secContent, err := w.llm.Chat(moduleSectionWriterPrompt, contentPrompt)
+		if err != nil {
+			log.Printf("[worker] step2b (m%d s%d): %v", mi+1, si+1, err)
+			return nil, fmt.Errorf("Step 2b failed for module %d section %d", mi+1, si+1)
+		}
+
+		if len(sectionTitles) > 1 {
+			allContent.WriteString(fmt.Sprintf("\n### %s\n\n", secTitle))
+		}
+		allContent.WriteString(strings.TrimSpace(secContent))
+		allContent.WriteString("\n\n")
+	}
+	rawContent := strings.TrimSpace(allContent.String())
+
+	// --- STEP 3: Question generator ---
+	job.addStep("packaging", fmt.Sprintf("Step 3/3: Generating assessment for Module %s...", moduleLabel))
+
+	contentSummary := rawContent
+	if len(contentSummary) > 2500 {
+		contentSummary = contentSummary[:2500] + "\n\n[... content continues for " +
+			fmt.Sprintf("%d", len(rawContent)-2500) + " more characters ...]"
+	}
+
+	questionPrompt := fmt.Sprintf(`Module: "%s" — %s
+
+Content Summary (full content is %d characters total):
+%s
+
+Based on the concepts covered above, generate exactly 8 assessment items as a JSON array, using these formats in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.`,
+		modPlan.Title, modPlan.Description, len(rawContent), contentSummary)
+
+	questionResp, err := w.llm.Chat(questionGenPrompt, questionPrompt)
+	if err != nil {
+		log.Printf("[worker] step3 (module %d): %v", mi+1, err)
+		return nil, fmt.Errorf("Step 3 failed for module %d", mi+1)
+	}
+
+	questionJSON := stripMarkdownFences(questionResp)
+	var questions []genItem
+	if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
+		log.Printf("[worker] step3 parse questions (module %d): %v", mi+1, err)
+		repairPrompt := fmt.Sprintf(`The previous response was invalid JSON. Repair it into ONLY a valid JSON array of exactly 8 assessment items using these types in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.
+
+Invalid response:
+%s
+
+Output ONLY the repaired JSON array.`, questionResp)
+		repairedResp, repairErr := w.llm.Chat(questionGenPrompt, repairPrompt)
+		if repairErr != nil {
+			log.Printf("[worker] step3 repair questions (module %d): %v", mi+1, repairErr)
+			return nil, fmt.Errorf("Step 3 failed: bad question JSON for module %d", mi+1)
+		}
+		questionJSON = stripMarkdownFences(repairedResp)
+		if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
+			log.Printf("[worker] step3 repaired JSON still invalid (module %d): %v", mi+1, err)
+			return nil, fmt.Errorf("Step 3 failed: bad question JSON for module %d", mi+1)
+		}
+	}
+	if len(questions) == 0 {
+		log.Printf("[worker] step3 empty question array (module %d)", mi+1)
+		return nil, fmt.Errorf("Step 3 failed: no questions for module %d", mi+1)
+	}
+
+	contentData, err := json.Marshal(map[string]string{"body": rawContent})
+	if err != nil {
+		return nil, fmt.Errorf("Content encoding error for module %d", mi+1)
+	}
+
+	itemsResult := make([]gin.H, 0, 1+len(questions))
+	ciContent, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
+		CourseID:  courseID,
+		ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
+		ItemType:  "content",
+		SortOrder: 0,
+		Data:      []byte(contentData),
+	})
+	if err == nil {
+		itemsResult = append(itemsResult, gin.H{
+			"id": ciContent.ID, "item_type": "content", "sort_order": 0,
+			"data": json.RawMessage(contentData),
+		})
+	} else {
+		log.Printf("[worker] create content item (module %d): %v", mi+1, err)
+	}
+
+	// Allowed item types per the course_items check constraint.
+	allowedTypes := map[string]bool{
+		"mc": true, "ma": true, "tf": true, "fb": true, "sa": true,
+		"matching": true, "drag_sort": true, "hotspot": true,
+		"sequence": true, "scale": true,
+	}
+
+	for qi, q := range questions {
+		qType := strings.ToLower(strings.TrimSpace(q.Type))
+		if !allowedTypes[qType] {
+			log.Printf("[worker] step3 unknown item_type %q (module %d, q %d) — defaulting to mc", q.Type, mi+1, qi+1)
+			qType = "mc"
+		}
+		sort := int32(qi + 1)
+		ci, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
+			CourseID:  courseID,
+			ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
+			ItemType:  qType,
+			SortOrder: sort,
+			Data:      []byte(q.Data),
+		})
+		if err != nil {
+			log.Printf("[worker] create question item (module %d, q %d): %v", mi+1, qi+1, err)
+			continue
+		}
+		itemsResult = append(itemsResult, gin.H{
+			"id": ci.ID, "item_type": qType, "sort_order": sort,
+			"data": q.Data,
+		})
+	}
+
+	modResult := gin.H{
+		"id":          module.ID,
+		"title":       modPlan.Title,
+		"description": modPlan.Description,
+		"sort_order":  module.SortOrder,
+		"items":       itemsResult,
+	}
+	job.addModule(modResult, moduleLabel)
+	return modResult, nil
 }
 
 func float64ToFloat32Job(in []float64) []float32 {

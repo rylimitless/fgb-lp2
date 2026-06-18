@@ -5,16 +5,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"time"
 )
 
-const openrouterURL = "https://openrouter.ai/api/v1/embeddings"
+// Client calls the local embeddings service (Flask + fastembed, all-MiniLM-L6-v2, 384-dim).
+// Replaces the previous OpenRouter-backed client.
+type Client struct {
+	url        string
+	httpClient *http.Client
+}
+
+func NewClient() *Client {
+	url := os.Getenv("EMBEDDINGS_URL")
+	if url == "" {
+		url = "http://embeddings:7100/embeddings"
+	}
+	return &Client{
+		url:        url,
+		httpClient: &http.Client{Timeout: 60 * time.Second},
+	}
+}
 
 type embedRequest struct {
-	Model string   `json:"model"`
 	Input []string `json:"input"`
 }
 
@@ -25,47 +39,23 @@ type embedResponse struct {
 	} `json:"data"`
 }
 
-type Client struct {
-	apiKey     string
-	httpClient *http.Client
-}
-
-func NewClient() *Client {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		log.Println("[embeddings] WARNING: OPENROUTER_API_KEY not set — embedding calls will fail")
-	}
-	return &Client{
-		apiKey: apiKey,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
-	}
-}
-
-// Embed generates embeddings for a batch of text chunks using qwen3-embedding-8b.
-// Returns a slice of float64 slices, one per input chunk, each of dimension 4096.
+// Embed generates embeddings for a batch of text chunks.
+// Returns one 384-dim float64 slice per input, in input order.
 func (c *Client) Embed(inputs []string) ([][]float64, error) {
-	reqBody := embedRequest{
-		Model: "qwen/qwen3-embedding-8b",
-		Input: inputs,
-	}
-
-	bodyBytes, err := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(embedRequest{Input: inputs})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", openrouterURL, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequest("POST", c.url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, fmt.Errorf("embeddings request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -75,7 +65,7 @@ func (c *Client) Embed(inputs []string) ([][]float64, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openrouter returned %d: %s", resp.StatusCode, string(respBytes))
+		return nil, fmt.Errorf("embeddings service returned %d: %s", resp.StatusCode, string(respBytes))
 	}
 
 	var result embedResponse

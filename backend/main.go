@@ -90,7 +90,7 @@ func main() {
 			return
 		}
 
-		c.SetCookie("session_token", token, 86400, "/", "", false, true)
+		setSessionCookie(c, token, 86400)
 		c.JSON(http.StatusCreated, gin.H{"message": "admin created"})
 	})
 
@@ -110,7 +110,7 @@ func main() {
 			return
 		}
 
-		c.SetCookie("session_token", token, 86400, "/", "", false, true)
+		setSessionCookie(c, token, 86400)
 		c.JSON(http.StatusOK, gin.H{"message": "logged in"})
 	})
 
@@ -128,7 +128,7 @@ func main() {
 	r.POST("/api/logout", func(c *gin.Context) {
 		token, _ := c.Cookie("session_token")
 		_ = app.Logout(c.Request.Context(), token)
-		c.SetCookie("session_token", "", -1, "/", "", false, true)
+		setSessionCookie(c, "", -1)
 		c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 	})
 
@@ -211,12 +211,53 @@ func main() {
 	r.Run(":5555")
 }
 
+// setSessionCookie writes (or clears) the session cookie with attributes that
+// survive both the Vite dev proxy and the production Caddy reverse proxy.
+//
+// Cookie attributes here are the root cause of "logged out after a few seconds"
+// symptoms: the backend previously set Secure=false with no explicit SameSite.
+// Browsers default that to SameSite=Lax and, in strict/HTTPS contexts, evict or
+// refuse the cookie once the response is relayed through a reverse proxy.
+//
+// We set SameSite=Lax explicitly and derive Secure from the effective request
+// scheme (X-Forwarded-Proto is set by Caddy in prod; the Vite dev proxy runs
+// over HTTP so Secure stays false, which is correct for localhost).
+func setSessionCookie(c *gin.Context, value string, maxAge int) {
+	secure := c.GetHeader("X-Forwarded-Proto") == "https" || c.Request.TLS != nil
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("session_token", value, maxAge, "/", "", secure, true)
+}
+
 // runMigrations applies schema changes that haven't been applied via docker-entrypoint.
 func runMigrations(pool *pgxpool.Pool) {
 	ctx := context.Background()
 
-	// Fix course_items constraint to allow 'content' type
+	// Migrate document_chunks.embedding from vector(4096) (OpenRouter qwen3-embedding-8b)
+	// to vector(384) (local all-MiniLM-L6-v2 via fastembed). Dimensions are incompatible,
+	// so existing embeddings are cleared (NULL) — re-ingest documents to repopulate them.
 	_, err := pool.Exec(ctx, `
+DO $$
+DECLARE
+  col_type text;
+BEGIN
+  SELECT format_type(a.atttypid, a.atttypmod)
+  INTO col_type
+  FROM pg_attribute a
+  WHERE a.attrelid = 'document_chunks'::regclass
+    AND a.attname = 'embedding';
+
+  IF col_type = 'vector(4096)' THEN
+    UPDATE document_chunks SET embedding = NULL;
+    ALTER TABLE document_chunks ALTER COLUMN embedding TYPE vector(384);
+  END IF;
+END $$;
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration document_chunks embedding dimension: %v\n", err)
+	}
+
+	// Fix course_items constraint to allow 'content' type
+	_, err = pool.Exec(ctx, `
 DO $$
 DECLARE
   constraint_name text;

@@ -23,13 +23,14 @@ const coursePlanSystemPrompt = `You are an expert instructional designer. Given 
 
 CRITICAL RULES:
 1. Structure your output EXACTLY like the Markdown example below. Do NOT use JSON, and do not write any introductory or concluding conversational filler.
-2. The number of modules MUST be proportional to the source material's actual size and depth. Use this hard cap:
-   - Under 1,000 chars of source → at most 1 module
-   - 1,000–3,000 chars → at most 2 modules
-   - 3,000–8,000 chars → at most 3 modules
-   - 8,000–15,000 chars → at most 4 modules
-   - Over 15,000 chars → at most 6 modules
-   Do NOT split thin content into multiple modules. A single focused module is correct for short source material.
+2. The number of modules MUST be proportional to the source material's actual size and depth. Use this scale:
+   - Under 1,000 chars of source → 1 module
+   - 1,000–8,000 chars → 2-3 modules
+   - 8,000–30,000 chars → 4-6 modules
+   - 30,000–80,000 chars → 7-12 modules
+   - 80,000–200,000 chars → 13-20 modules
+   - Over 200,000 chars → up to 25 modules
+   Each module should target ~2,000-4,000 words of finished teaching content (~1-2 hours of learner effort). Do NOT split thin content into multiple modules, and do NOT cram a large source into a handful of overstuffed modules — if the source is large, more focused modules is correct.
 3. Order modules logically — build from foundational concepts to advanced applications.
 4. Base ALL module topics strictly on the provided source material. Every topic must be directly traceable to the source. If there isn't enough material to justify a distinct module, don't create one.
 5. Make titles and descriptions specific, academic, and substantive — not generic.

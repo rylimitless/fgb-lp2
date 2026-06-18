@@ -18,6 +18,27 @@ services:
       interval: 3s
       retries: 10
 
+  embeddings:
+    build:
+      context: ./backend/embeddings
+      dockerfile: Dockerfile
+    container_name: fgb-embeddings
+    ports:
+      - "7100:7100"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:7100/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   backend:
     build:
       context: ./backend

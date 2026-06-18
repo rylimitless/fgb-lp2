@@ -85,23 +85,23 @@
             />
         </div>
 
-        <div
-            class="relative z-10 flex max-w-md flex-col gap-6 motion-rise-in"
-        >
+        <div class="relative z-10 flex max-w-md flex-col gap-6 motion-rise-in">
             <p
                 class="text-[11px] font-semibold uppercase tracking-[0.22em] text-accent"
             >
                 Welcome to the Academy
             </p>
-            <h2 class="text-display-lg font-semibold leading-tight tracking-tight">
+            <h2
+                class="text-display-lg font-semibold leading-tight tracking-tight"
+            >
                 Learning the bank can <em class="not-italic text-accent"
                     >stake its reputation on.</em
                 >
             </h2>
             <p class="text-sm leading-relaxed text-primary-foreground/80">
                 FGB Academy is the institutional learning ecosystem for the FGB
-                community — premium, intelligent, and grounded in the
-                documents your team already trusts.
+                community — premium, intelligent, and grounded in the documents
+                your team already trusts.
             </p>
 
             <ul class="flex flex-col gap-4 mt-2">
@@ -116,10 +116,14 @@
                             <ArrowRight class="size-3" />
                         </span>
                         <div>
-                            <p class="text-sm font-semibold text-primary-foreground">
+                            <p
+                                class="text-sm font-semibold text-primary-foreground"
+                            >
                                 {p.label}
                             </p>
-                            <p class="text-xs text-primary-foreground/70 leading-relaxed mt-0.5">
+                            <p
+                                class="text-xs text-primary-foreground/70 leading-relaxed mt-0.5"
+                            >
                                 {p.desc}
                             </p>
                         </div>
@@ -137,25 +141,23 @@
 
     <!-- Form panel -->
     <main class="relative flex items-center justify-center p-6 sm:p-10">
-        <div
-            class="w-full max-w-sm motion-rise-in"
-        >
+        <div class="w-full max-w-sm motion-rise-in">
             <!-- Mobile brand mark -->
             <div class="mb-8 flex items-center justify-center lg:hidden">
-                <BrandLogo
-                    variant="lockup"
-                    size={32}
-                    class="text-primary"
-                />
+                <BrandLogo variant="lockup" size={32} class="text-primary" />
             </div>
 
-            <div class="mb-8 flex flex-col items-center text-center lg:items-start lg:text-left">
+            <div
+                class="mb-8 flex flex-col items-center text-center lg:items-start lg:text-left"
+            >
                 <span
                     class="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
                 >
                     Sign in
                 </span>
-                <h1 class="mt-1 text-2xl font-semibold tracking-tight text-foreground">
+                <h1
+                    class="mt-1 text-2xl font-semibold tracking-tight text-foreground"
+                >
                     Welcome back
                 </h1>
                 <p class="mt-2 text-sm text-muted-foreground">
@@ -261,7 +263,9 @@
                 </Button.Root>
             </form>
 
-            <p class="mt-8 text-[11px] text-center lg:text-left text-muted-foreground tracking-wide">
+            <p
+                class="mt-8 text-[11px] text-center lg:text-left text-muted-foreground tracking-wide"
+            >
                 Protected by FGB enterprise authentication.
             </p>
         </div>
