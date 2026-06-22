@@ -1,102 +1,86 @@
 package ai
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 )
 
-const chatURL = "https://openrouter.ai/api/v1/chat/completions"
+const defaultModel = "deepseek-chat"
 
-// OpenRouter client for chat completions (DeepSeek).
+// LLMClient wraps the OpenAI-compatible client for DeepSeek chat completions.
 type LLMClient struct {
-	apiKey     string
-	httpClient *http.Client
+	client *openai.Client
+	model  string
 }
 
+// NewLLMClient creates a client pre-configured for DeepSeek.
+//
+// It reads these environment variables:
+//   - DEEPSEEK_API_KEY (required) — fallback is OPENAI_API_KEY
+//   - DEEPSEEK_BASE_URL (optional, defaults to https://api.deepseek.com)
+//   - MODEL (optional, defaults to deepseek-chat)
+//
+// You can also set OPENAI_API_KEY and OPENAI_BASE_URL for a generic setup.
 func NewLLMClient() *LLMClient {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
 	if apiKey == "" {
-		log.Println("[llm] WARNING: OPENROUTER_API_KEY not set — AI calls will fail")
+		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
+	if apiKey == "" {
+		log.Println("[llm] WARNING: neither DEEPSEEK_API_KEY nor OPENAI_API_KEY set — AI calls will fail")
+	}
+
+	baseURL := os.Getenv("DEEPSEEK_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com"
+	}
+
+	model := os.Getenv("MODEL")
+	if model == "" {
+		model = defaultModel
+	}
+
+	client := openai.NewClient(
+		option.WithBaseURL(baseURL),
+		option.WithAPIKey(apiKey),
+		// Allow up to 5 minutes for a response (DeepSeek can be slow on free tier)
+		option.WithHTTPClient(&http.Client{Timeout: 5 * time.Minute}),
+	)
+
 	return &LLMClient{
-		apiKey: apiKey,
-		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
-		},
+		client: &client,
+		model:  model,
 	}
 }
 
-type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type chatRequest struct {
-	Model     string        `json:"model"`
-	Messages  []chatMessage `json:"messages"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
-}
-
-type chatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-}
-
-// Chat sends a prompt to the LLM and returns the response text.
+// Chat sends a system + user prompt to DeepSeek (Chat Completions) and returns
+// the response text. This preserves the existing interface so all callers
+// (jobs.go, coach/handler.go, ai/handler.go) continue working unchanged.
 func (c *LLMClient) Chat(systemPrompt, userPrompt string) (string, error) {
-	reqBody := chatRequest{
-		Model: "deepseek/deepseek-chat",
-		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(systemPrompt),
+			openai.UserMessage(userPrompt),
 		},
-		MaxTokens: 16000,
-	}
-
-	bodyBytes, err := json.Marshal(reqBody)
+		Model: openai.ChatModel(c.model),
+	})
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return "", fmt.Errorf("deepseek chat completion: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", chatURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("deepseek returned no choices")
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openrouter returned %d: %s", resp.StatusCode, string(respBytes))
-	}
-
-	var result chatResponse
-	if err := json.Unmarshal(respBytes, &result); err != nil {
-		return "", fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("no choices in response")
-	}
-
-	return result.Choices[0].Message.Content, nil
+	return resp.Choices[0].Message.Content, nil
 }

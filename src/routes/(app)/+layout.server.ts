@@ -2,22 +2,39 @@ import type { LayoutServerLoad } from "./$types";
 import { apiFetch } from "$lib/server/api";
 
 export const load: LayoutServerLoad = async (event) => {
+  let user = null;
+  let streakDays = 0;
+  let totalScore = 0;
+
   try {
-    const res = await apiFetch(event, "/api/me");
-    if (res.ok) {
-      const user = await res.json();
-      return {
-        user: {
-          id: user.id as number,
-          email: user.email as string,
-          name: user.name as string,
-          role: user.role as string,
-          roles: (user.roles ?? [user.role]) as string[],
-        },
+    const [meRes, streakRes, scoreRes] = await Promise.all([
+      apiFetch(event, "/api/me"),
+      apiFetch(event, "/api/gamification/streak"),
+      apiFetch(event, "/api/gamification/score"),
+    ]);
+
+    if (meRes.ok) {
+      const userData = await meRes.json();
+      user = {
+        id: userData.id as number,
+        email: userData.email as string,
+        name: userData.name as string,
+        role: userData.role as string,
+        roles: (userData.roles ?? [userData.role]) as string[],
       };
+    }
+
+    if (streakRes.ok) {
+      const sData = await streakRes.json();
+      streakDays = sData.streak_days ?? 0;
+    }
+
+    if (scoreRes.ok) {
+      const scData = await scoreRes.json();
+      totalScore = scData.total_score ?? 0;
     }
   } catch {
     // User not authenticated or fetch failed — hooks.server will redirect to login
   }
-  return { user: null };
+  return { user, gamification: { streakDays, totalScore } };
 };

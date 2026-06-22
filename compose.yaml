@@ -44,7 +44,8 @@ services:
     container_name: fgb-backend
     environment:
       DATABASE_URL: postgres://postgres:password@db:5432/example_db
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com
       EMBEDDINGS_URL: http://embeddings:7100/embeddings
     ports:
       - "5555:5555"

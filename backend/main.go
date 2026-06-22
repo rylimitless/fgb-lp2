@@ -10,6 +10,7 @@ import (
 	"fgb-lp/content_repository"
 	database "fgb-lp/database/queries"
 	"fgb-lp/documents"
+	"fgb-lp/gamification"
 	"fgb-lp/lessons"
 	"fgb-lp/middlewares"
 	"fgb-lp/notifications"
@@ -186,6 +187,9 @@ func main() {
 
 	lessonHandler := lessons.NewHandler(queries)
 	lessonHandler.RegisterRoutes(protected)
+
+	gamificationHandler := gamification.NewHandler(queries)
+	gamificationHandler.RegisterRoutes(protected)
 
 	coachHandler := coach.NewHandler(queries)
 	coachHandler.RegisterRoutes(protected)
@@ -431,5 +435,35 @@ ON CONFLICT (user_id, role) DO NOTHING;
 		`)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration audit_log table: %v\n", err)
+	}
+
+	// Create user_streaks table for daily engagement tracking
+	_, err = pool.Exec(ctx, `
+	CREATE TABLE IF NOT EXISTS user_streaks (
+	  user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	  streak_date date NOT NULL,
+	  created_at timestamptz NOT NULL DEFAULT now(),
+	  PRIMARY KEY (user_id, streak_date)
+	);
+	CREATE INDEX IF NOT EXISTS idx_user_streaks_user_date ON user_streaks(user_id, streak_date desc);
+		`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration user_streaks table: %v\n", err)
+	}
+
+	// Create course_scores table for leaderboard scoring
+	_, err = pool.Exec(ctx, `
+	CREATE TABLE IF NOT EXISTS course_scores (
+	  user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	  course_id bigint NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+	  score int NOT NULL DEFAULT 0,
+	  completed_at timestamptz,
+	  PRIMARY KEY (user_id, course_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_course_scores_score ON course_scores(score desc);
+	CREATE INDEX IF NOT EXISTS idx_course_scores_course ON course_scores(course_id);
+		`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration course_scores table: %v\n", err)
 	}
 }

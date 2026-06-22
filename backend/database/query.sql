@@ -300,3 +300,48 @@ delete from user_roles where user_id = $1;
 
 -- name: UpdateUserPrimaryRole :exec
 update users set role = $2, updated_at = now() where id = $1;
+
+-- Streaks & Leaderboard --
+
+-- name: RecordStreak :exec
+insert into user_streaks (user_id, streak_date)
+values ($1, current_date)
+on conflict (user_id, streak_date) do nothing;
+
+-- name: GetUserStreak :one
+with dates as (
+  select streak_date,
+    streak_date - (row_number() over (order by streak_date desc))::int as grp
+  from user_streaks
+  where user_id = $1
+    and streak_date <= current_date
+),
+consecutive as (
+  select count(*) as cnt
+  from dates
+  where grp = (
+    select grp from dates where streak_date = (select max(streak_date) from dates)
+  )
+)
+select coalesce((select cnt from consecutive), 0) as streak_days;
+
+-- name: UpsertCourseScore :one
+insert into course_scores (user_id, course_id, score, completed_at)
+values ($1, $2, $3, case when $4 then now() else null end)
+on conflict (user_id, course_id)
+do update set score = course_scores.score + $3,
+  completed_at = case when $4 then now() else course_scores.completed_at end
+returning *;
+
+-- name: GetLeaderboard :many
+select u.id as user_id, u.name as user_name, coalesce(sum(cs.score), 0)::int as total_score
+from users u
+left join course_scores cs on cs.user_id = u.id
+group by u.id, u.name
+order by total_score desc
+limit $1;
+
+-- name: GetUserTotalScore :one
+select coalesce(sum(score), 0)::int as total_score
+from course_scores
+where user_id = $1;

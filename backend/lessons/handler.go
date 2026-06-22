@@ -90,6 +90,10 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 		return
 	}
 	userID := c.GetInt64("user_id")
+
+	// Record streak engagement (silent, best-effort)
+	_ = h.Queries.RecordStreak(c.Request.Context(), userID)
+
 	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
@@ -150,6 +154,10 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 		return
 	}
 	userID := c.GetInt64("user_id")
+
+	// Record streak engagement (silent, best-effort)
+	_ = h.Queries.RecordStreak(c.Request.Context(), userID)
+
 	pct := pgtype.Numeric{}
 	pct.Scan(body.ScorePct)
 

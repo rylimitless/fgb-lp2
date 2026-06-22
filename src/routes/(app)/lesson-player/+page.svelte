@@ -126,6 +126,21 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
+
+            // When course is completed, award leaderboard score
+            if (completed) {
+                const courseScore = Math.min(100, score.correct);
+                await fetch("/api/gamification/score", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        course_id: enrolledCourse.id,
+                        score: courseScore,
+                        completed: true,
+                    }),
+                }).catch(() => {});
+            }
         } catch {
             /* ignore */
         }
@@ -252,13 +267,19 @@
                 return answer === d.answer;
             case "matching": {
                 const pairs = d.pairs ?? [];
-                if (!pairs.length || !answer || typeof answer !== "object") return false;
-                return pairs.every((_p: any, index: number) => answer[String(index)] === index);
+                if (!pairs.length || !answer || typeof answer !== "object")
+                    return false;
+                return pairs.every(
+                    (_p: any, index: number) => answer[String(index)] === index,
+                );
             }
             case "drag_sort": {
                 const items = d.items ?? [];
                 if (!items.length || !Array.isArray(answer)) return false;
-                return answer.length === items.length && answer.every((v: number, i: number) => v === i);
+                return (
+                    answer.length === items.length &&
+                    answer.every((v: number, i: number) => v === i)
+                );
             }
             case "hotspot": {
                 const regions = d.regions ?? [];
@@ -277,7 +298,10 @@
                 return d.options?.[d.correct] ?? "";
             case "ma":
                 return Array.isArray(d.correct)
-                    ? d.correct.map((i: number) => d.options?.[i]).filter(Boolean).join(", ")
+                    ? d.correct
+                          .map((i: number) => d.options?.[i])
+                          .filter(Boolean)
+                          .join(", ")
                     : "";
             case "tf":
                 return d.answer === true ? "True" : "False";
@@ -288,7 +312,9 @@
             case "drag_sort":
                 return (d.items ?? []).join(" → ");
             case "hotspot":
-                return (d.regions ?? []).find((r: any) => r.correct)?.label ?? "";
+                return (
+                    (d.regions ?? []).find((r: any) => r.correct)?.label ?? ""
+                );
             default:
                 return "";
         }
@@ -447,7 +473,9 @@
         </PageHeader>
 
         {#if loading}
-            <div class="flex flex-col items-center gap-3 py-16 text-muted-foreground">
+            <div
+                class="flex flex-col items-center gap-3 py-16 text-muted-foreground"
+            >
                 <LoadingDots label="Loading courses" />
             </div>
         {:else if courses.length === 0}
@@ -489,12 +517,7 @@
                     role="tablist"
                     aria-label="Filter by status"
                 >
-                    {#each [
-                        { key: "all", label: "All" },
-                        { key: "in_progress", label: "In progress" },
-                        { key: "new", label: "Not started" },
-                        { key: "completed", label: "Completed" },
-                    ] as f}
+                    {#each [{ key: "all", label: "All" }, { key: "in_progress", label: "In progress" }, { key: "new", label: "Not started" }, { key: "completed", label: "Completed" }] as f}
                         <button
                             type="button"
                             role="tab"
@@ -525,7 +548,9 @@
                                 <Play class="size-4 text-accent" />
                                 Continue learning
                             </h2>
-                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground tabular">
+                            <span
+                                class="text-[10px] uppercase tracking-wider text-muted-foreground tabular"
+                            >
                                 {continueCourses.length}
                             </span>
                         </div>
@@ -536,7 +561,10 @@
                             {#each continueCourses as course, i (course.id)}
                                 <div
                                     class="snap-start motion-rise-in"
-                                    style="animation-delay: {Math.min(i * 30, 200)}ms"
+                                    style="animation-delay: {Math.min(
+                                        i * 30,
+                                        200,
+                                    )}ms"
                                     role="listitem"
                                 >
                                     <CourseCard
@@ -560,7 +588,9 @@
                                 <Sparkles class="size-4 text-accent" />
                                 Recommended for you
                             </h2>
-                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground tabular">
+                            <span
+                                class="text-[10px] uppercase tracking-wider text-muted-foreground tabular"
+                            >
                                 {newCourses.length}
                             </span>
                         </div>
@@ -571,7 +601,10 @@
                             {#each newCourses as course, i (course.id)}
                                 <div
                                     class="snap-start motion-rise-in"
-                                    style="animation-delay: {Math.min(i * 30, 200)}ms"
+                                    style="animation-delay: {Math.min(
+                                        i * 30,
+                                        200,
+                                    )}ms"
                                     role="listitem"
                                 >
                                     <CourseCard
@@ -595,7 +628,9 @@
                                 <CheckCircle class="size-4 text-success" />
                                 Completed
                             </h2>
-                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground tabular">
+                            <span
+                                class="text-[10px] uppercase tracking-wider text-muted-foreground tabular"
+                            >
                                 {completedCourses.length}
                             </span>
                         </div>
@@ -606,13 +641,13 @@
                             {#each completedCourses as course, i (course.id)}
                                 <div
                                     class="motion-rise-in"
-                                    style="animation-delay: {Math.min(i * 30, 200)}ms"
+                                    style="animation-delay: {Math.min(
+                                        i * 30,
+                                        200,
+                                    )}ms"
                                     role="listitem"
                                 >
-                                    <CourseCard
-                                        {course}
-                                        onenroll={enroll}
-                                    />
+                                    <CourseCard {course} onenroll={enroll} />
                                 </div>
                             {/each}
                         </div>
@@ -662,7 +697,9 @@
             />
             <Spotlight class="h-full w-full" opacity={0.7} />
 
-            <div class="relative z-10 flex flex-col items-center text-center gap-6">
+            <div
+                class="relative z-10 flex flex-col items-center text-center gap-6"
+            >
                 <span
                     class="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent"
                 >
@@ -674,7 +711,9 @@
 
                 <div class="flex flex-col items-center gap-2 max-w-lg">
                     <GiaAvatar state="celebrating" size={56} />
-                    <h1 class="text-display-lg font-bold tracking-tight text-primary-foreground">
+                    <h1
+                        class="text-display-lg font-bold tracking-tight text-primary-foreground"
+                    >
                         {headline}
                     </h1>
                     <p class="text-sm text-primary-foreground/80">
@@ -724,8 +763,13 @@
                     Your progress has been saved.
                 </p>
                 <!-- Print-only certificate footer; hidden in screen view -->
-                <p class="print-only text-[10px] text-primary-foreground/60 mt-2 tabular">
-                    Issued by FGB Academy · {new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
+                <p
+                    class="print-only text-[10px] text-primary-foreground/60 mt-2 tabular"
+                >
+                    Issued by FGB Academy · {new Date().toLocaleDateString(
+                        undefined,
+                        { year: "numeric", month: "long", day: "numeric" },
+                    )}
                 </p>
             </div>
         </section>
@@ -782,521 +826,640 @@
             </div>
         {/if}
         <div class="flex flex-col md:flex-row w-full gap-4 md:gap-6">
-        <!-- Module Sidebar - collapses to horizontal scroll on mobile -->
-        <aside class="md:w-[240px] shrink-0 flex flex-col gap-2 md:sticky md:top-20 md:self-start">
-            <button
-                class="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors press w-fit"
-                onclick={goHome}
+            <!-- Module Sidebar - collapses to horizontal scroll on mobile -->
+            <aside
+                class="md:w-[240px] shrink-0 flex flex-col gap-2 md:sticky md:top-20 md:self-start"
             >
-                <ChevronLeft class="size-3.5" /> All courses
-            </button>
-            <div class="rounded-2xl border border-border bg-card p-3 flex flex-col gap-1">
-                <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-2 pt-1 pb-2">
-                    Modules
-                </h3>
-                <p class="text-sm font-semibold text-foreground px-2 line-clamp-2 leading-snug mb-1">
-                    {enrolledCourse.title}
-                </p>
-                {#each enrolledCourse.modules as mod, mi}
-                    {@const mp = moduleProgress(mod)}
-                    {@const isLast = mi === enrolledCourse.modules.length - 1}
-                    {@const isCurrent = mi === currentModuleIdx}
-                    <button
-                        class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors {isCurrent ? 'bg-primary/10 text-foreground font-medium' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-                        onclick={() => (currentModuleIdx = mi)}
+                <button
+                    class="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors press w-fit"
+                    onclick={goHome}
+                >
+                    <ChevronLeft class="size-3.5" /> All courses
+                </button>
+                <div
+                    class="rounded-2xl border border-border bg-card p-3 flex flex-col gap-1"
+                >
+                    <h3
+                        class="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-2 pt-1 pb-2"
                     >
-                        {#if mp.pct === 100 && isLast}
-                            <span class="shrink-0" aria-hidden="true">
-                                <BadgeMedal tier="gold" size={24} />
-                            </span>
-                        {:else if mp.total > 0}
-                            <span class="shrink-0" aria-hidden="true">
-                                <XpRing
-                                    value={mp.pct}
-                                    size={24}
-                                    stroke={3}
-                                    ring={mp.pct === 100 ? "success" : "primary"}
+                        Modules
+                    </h3>
+                    <p
+                        class="text-sm font-semibold text-foreground px-2 line-clamp-2 leading-snug mb-1"
+                    >
+                        {enrolledCourse.title}
+                    </p>
+                    {#each enrolledCourse.modules as mod, mi}
+                        {@const mp = moduleProgress(mod)}
+                        {@const isLast =
+                            mi === enrolledCourse.modules.length - 1}
+                        {@const isCurrent = mi === currentModuleIdx}
+                        <button
+                            class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors {isCurrent
+                                ? 'bg-primary/10 text-foreground font-medium'
+                                : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+                            onclick={() => (currentModuleIdx = mi)}
+                        >
+                            {#if mp.pct === 100 && isLast}
+                                <span class="shrink-0" aria-hidden="true">
+                                    <BadgeMedal tier="gold" size={24} />
+                                </span>
+                            {:else if mp.total > 0}
+                                <span class="shrink-0" aria-hidden="true">
+                                    <XpRing
+                                        value={mp.pct}
+                                        size={24}
+                                        stroke={3}
+                                        ring={mp.pct === 100
+                                            ? "success"
+                                            : "primary"}
+                                    >
+                                        {#snippet center()}
+                                            {#if mp.pct === 100}
+                                                <CheckCircle
+                                                    class="size-3 text-success"
+                                                />
+                                            {:else}
+                                                <span
+                                                    class="text-[9px] font-bold tabular text-muted-foreground"
+                                                >
+                                                    {mi + 1}
+                                                </span>
+                                            {/if}
+                                        {/snippet}
+                                    </XpRing>
+                                </span>
+                            {:else}
+                                <span
+                                    class="size-6 rounded-full border border-border flex items-center justify-center shrink-0 text-[10px] font-bold {isCurrent
+                                        ? 'border-primary text-primary'
+                                        : 'text-muted-foreground'}"
                                 >
-                                    {#snippet center()}
-                                        {#if mp.pct === 100}
-                                            <CheckCircle class="size-3 text-success" />
-                                        {:else}
-                                            <span class="text-[9px] font-bold tabular text-muted-foreground">
-                                                {mi + 1}
-                                            </span>
-                                        {/if}
-                                    {/snippet}
-                                </XpRing>
-                            </span>
-                        {:else}
-                            <span
-                                class="size-6 rounded-full border border-border flex items-center justify-center shrink-0 text-[10px] font-bold {isCurrent ? 'border-primary text-primary' : 'text-muted-foreground'}"
-                            >
-                                {mi + 1}
-                            </span>
-                        {/if}
-                        <span class="truncate text-xs">{mod.title}</span>
-                    </button>
-                {/each}
-            </div>
-        </aside>
-
-        <!-- Main Content -->
-        <main class="flex-1 min-w-0">
-            {#if currentModule}
-                {@const mp = moduleProgress(currentModule)}
-                <div class="rounded-2xl border border-border bg-card p-6 mb-4 lift">
-                    <div class="flex items-start justify-between gap-4">
-                        <div class="min-w-0">
-                            <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                                Module {currentModuleIdx + 1} of {enrolledCourse.modules.length}
-                            </span>
-                            <h2 class="text-xl font-semibold text-foreground mt-1 leading-tight">
-                                {currentModule.title}
-                            </h2>
-                            {#if currentModule.description}
-                                <p class="text-sm text-muted-foreground mt-1.5 leading-relaxed">
-                                    {currentModule.description}
-                                </p>
+                                    {mi + 1}
+                                </span>
                             {/if}
-                        </div>
-                        {#if mp.total > 0}
-                            <span class="shrink-0" aria-label={`${mp.done} of ${mp.total} questions answered`}>
-                                <XpRing
-                                    value={mp.pct}
-                                    size={56}
-                                    stroke={5}
-                                    ring={mp.pct === 100 ? "success" : "primary"}
-                                >
-                                    {#snippet center()}
-                                        <span class="text-[10px] font-bold tabular text-foreground">
-                                            {mp.done}/{mp.total}
-                                        </span>
-                                    {/snippet}
-                                </XpRing>
-                            </span>
-                        {/if}
-                    </div>
-                    <div class="mt-4 flex items-center gap-2">
-                        <div
-                            class="h-1.5 flex-1 rounded-full bg-muted overflow-hidden"
-                        >
-                            <div
-                                class="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-500"
-                                style="width: {mp.pct}%"
-                            ></div>
-                        </div>
-                        <span class="text-xs text-muted-foreground shrink-0 tabular"
-                            >{mp.done}/{mp.total}</span
-                        >
-                    </div>
+                            <span class="truncate text-xs">{mod.title}</span>
+                        </button>
+                    {/each}
                 </div>
+            </aside>
 
-                {#if assessmentMix.length > 0}
-                    <div class="mb-4 rounded-2xl border border-border bg-card p-4 lift">
-                        <div class="mb-3 flex items-center justify-between">
-                            <h3 class="text-sm font-semibold text-foreground">
-                                Assessment mix
-                            </h3>
-                            <span class="text-[10px] uppercase tracking-wider text-muted-foreground">
-                                {assessmentMix.reduce((sum, item) => sum + item.count, 0)} items
-                            </span>
-                        </div>
-                        <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-                            {#each assessmentMix.slice(0, 8) as item}
-                                <div class="rounded-xl border border-border bg-surface-1 p-3">
-                                    <div class="flex items-center justify-between gap-2">
-                                        <span class="truncate text-xs font-medium text-foreground">
-                                            {item.label}
-                                        </span>
-                                        <span class="text-xs font-semibold tabular text-primary">
-                                            {item.count}
-                                        </span>
-                                    </div>
-                                    <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                                        <div
-                                            class="h-full rounded-full bg-gradient-to-r from-primary to-accent"
-                                            style:width="{item.pct}%"
-                                        ></div>
-                                    </div>
-                                </div>
-                            {/each}
-                        </div>
-                    </div>
-                {/if}
-
-                <div class="flex flex-col gap-4">
-                    {#each currentModule.items as item, ii}
-                        {#if item.item_type === "content"}
-                            <article
-                                class="rounded-2xl border border-border bg-card p-6 md:p-8 motion-rise-in"
-                                style="animation-delay: {Math.min(ii * 30, 200)}ms"
-                            >
+            <!-- Main Content -->
+            <main class="flex-1 min-w-0">
+                {#if currentModule}
+                    {@const mp = moduleProgress(currentModule)}
+                    <div
+                        class="rounded-2xl border border-border bg-card p-6 mb-4 lift"
+                    >
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="min-w-0">
                                 <span
                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
                                 >
-                                    Learning material
+                                    Module {currentModuleIdx + 1} of {enrolledCourse
+                                        .modules.length}
                                 </span>
-                                <Markdown
-                                    source={item.data?.body ?? ""}
-                                    class="mt-3 max-w-prose text-[15px]"
-                                />
-                            </article>
-                        {:else if item.item_type === "mc"}
-                            <div
-                                class="rounded-xl border border-border bg-card p-5"
-                            >
-                                <p
-                                    class="text-sm font-medium text-foreground mb-3"
+                                <h2
+                                    class="text-xl font-semibold text-foreground mt-1 leading-tight"
                                 >
-                                    {ii + 1}. {item.data?.question ?? ""}
-                                </p>
-                                <div class="flex flex-col gap-2">
-                                    {#each item.data?.options ?? [] as opt, oi}
-                                        <label
-                                            class="flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 cursor-pointer transition-colors {answers[
-                                                item.id
-                                            ] === oi
-                                                ? 'border-primary bg-primary/5'
-                                                : 'border-border hover:border-muted-foreground/30'}"
-                                        >
-                                            <input
-                                                type="radio"
-                                                name="mc-{item.id}"
-                                                checked={answers[item.id] ===
-                                                    oi}
-                                                onchange={() =>
-                                                    setAnswer(item.id, oi)}
-                                                class="sr-only"
-                                            />
-                                            <div
-                                                class="size-4 rounded-full border-2 flex items-center justify-center shrink-0 {answers[
-                                                    item.id
-                                                ] === oi
-                                                    ? 'border-primary'
-                                                    : 'border-muted-foreground/30'}"
-                                            >
-                                                {#if answers[item.id] === oi}<div
-                                                        class="size-2 rounded-full bg-primary"
-                                                    ></div>{/if}
-                                            </div>
-                                            <span
-                                                class="text-sm text-foreground"
-                                                >{opt}</span
-                                            >
-                                        </label>
-                                    {/each}
-                                </div>
-                                {#if showResults}
-                                    <AnswerFeedback
-                                        status={answers[item.id] === undefined
-                                            ? "unanswered"
-                                            : isCorrect(item, answers[item.id])
-                                              ? "correct"
-                                              : "incorrect"}
-                                        correctAnswer={correctAnswerLabel(item)}
-                                    >
-                                        {#snippet explanation()}
-                                            {#if item.data?.explanation}
-                                                {item.data.explanation}
-                                            {/if}
-                                        {/snippet}
-                                    </AnswerFeedback>
-                                {/if}
-                            </div>
-                        {:else if item.item_type === "ma"}
-                            <div
-                                class="rounded-xl border border-border bg-card p-5"
-                            >
-                                <p
-                                    class="text-sm font-medium text-foreground mb-3"
-                                >
-                                    {ii + 1}. {item.data?.question ?? ""}
-                                    <span class="text-xs text-muted-foreground"
-                                        >(select all that apply)</span
-                                    >
-                                </p>
-                                <div class="flex flex-col gap-2">
-                                    {#each item.data?.options ?? [] as opt, oi}
-                                        <label
-                                            class="flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 cursor-pointer transition-colors {(
-                                                answers[item.id] ?? []
-                                            ).includes(oi)
-                                                ? 'border-primary bg-primary/5'
-                                                : 'border-border hover:border-muted-foreground/30'}"
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={(
-                                                    answers[item.id] ?? []
-                                                ).includes(oi)}
-                                                onchange={(e) => {
-                                                    const cur =
-                                                        answers[item.id] ?? [];
-                                                    const target =
-                                                        e.target as HTMLInputElement;
-                                                    setAnswer(
-                                                        item.id,
-                                                        target.checked
-                                                            ? [...cur, oi]
-                                                            : cur.filter(
-                                                                  (v: number) =>
-                                                                      v !== oi,
-                                                              ),
-                                                    );
-                                                }}
-                                                class="sr-only"
-                                            />
-                                            <div
-                                                class="size-4 rounded border-2 flex items-center justify-center shrink-0 {(
-                                                    answers[item.id] ?? []
-                                                ).includes(oi)
-                                                    ? 'bg-primary border-primary text-primary-foreground'
-                                                    : 'border-muted-foreground/30'}"
-                                            >
-                                                {#if (answers[item.id] ?? []).includes(oi)}<CheckCircle
-                                                        class="size-3"
-                                                    />{/if}
-                                            </div>
-                                            <span
-                                                class="text-sm text-foreground"
-                                                >{opt}</span
-                                            >
-                                        </label>
-                                    {/each}
-                                </div>
-                                {#if showResults}
-                                    <AnswerFeedback
-                                        status={answers[item.id] === undefined
-                                            ? "unanswered"
-                                            : isCorrect(item, answers[item.id])
-                                              ? "correct"
-                                              : "incorrect"}
-                                        correctAnswer={correctAnswerLabel(item)}
-                                    />
-                                {/if}
-                            </div>
-                        {:else if item.item_type === "tf"}
-                            <div
-                                class="rounded-xl border border-border bg-card p-5"
-                            >
-                                <p
-                                    class="text-sm font-medium text-foreground mb-3"
-                                >
-                                    {ii + 1}. {item.data?.statement ?? ""}
-                                </p>
-                                <div class="flex gap-3">
-                                    {#each [true, false] as val}
-                                        <button
-                                            class="flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors {answers[
-                                                item.id
-                                            ] === val
-                                                ? 'border-primary bg-primary/5 text-primary'
-                                                : 'border-border text-muted-foreground hover:border-muted-foreground/30'}"
-                                            onclick={() =>
-                                                setAnswer(item.id, val)}
-                                        >
-                                            {val ? "True" : "False"}
-                                        </button>
-                                    {/each}
-                                </div>
-                                {#if showResults}
-                                    <AnswerFeedback
-                                        status={answers[item.id] === undefined
-                                            ? "unanswered"
-                                            : isCorrect(item, answers[item.id])
-                                              ? "correct"
-                                              : "incorrect"}
-                                        correctAnswer={correctAnswerLabel(item)}
-                                    />
-                                {/if}
-                            </div>
-                        {:else if item.item_type === "fb"}
-                            <div
-                                class="rounded-xl border border-border bg-card p-5"
-                            >
-                                <p
-                                    class="text-sm font-medium text-foreground mb-3"
-                                >
-                                    {ii + 1}. Fill in the blanks:
-                                </p>
-                                <p
-                                    class="text-sm text-foreground leading-relaxed mb-3 whitespace-pre-line"
-                                >
-                                    {item.data?.text ?? ""}
-                                </p>
-                                <div class="flex flex-col gap-2">
-                                    {#each item.data?.blanks ?? [] as blank, bi}
-                                        <input
-                                            type="text"
-                                            placeholder="Answer {bi + 1}"
-                                            value={answers[item.id]?.[bi] ?? ""}
-                                            oninput={(e) => {
-                                                const cur = [
-                                                    ...(answers[item.id] ?? []),
-                                                ];
-                                                cur[bi] = (
-                                                    e.target as HTMLInputElement
-                                                ).value;
-                                                setAnswer(item.id, cur);
-                                            }}
-                                            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                                        />
-                                    {/each}
-                                </div>
-                            </div>
-                        {:else if item.item_type === "sa"}
-                            <div
-                                class="rounded-xl border border-border bg-card p-5"
-                            >
-                                <p
-                                    class="text-sm font-medium text-foreground mb-3"
-                                >
-                                    {ii + 1}. {item.data?.question ?? ""}
-                                </p>
-                                <textarea
-                                    rows={3}
-                                    value={answers[item.id] ?? ""}
-                                    oninput={(e) =>
-                                        setAnswer(
-                                            item.id,
-                                            (e.target as HTMLTextAreaElement)
-                                                .value,
-                                        )}
-                                    placeholder="Type your answer..."
-                                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-                                ></textarea>
-                                {#if showResults && item.data?.sample_answer}
+                                    {currentModule.title}
+                                </h2>
+                                {#if currentModule.description}
                                     <p
-                                        class="mt-2 text-xs text-muted-foreground"
+                                        class="text-sm text-muted-foreground mt-1.5 leading-relaxed"
                                     >
-                                        Sample answer: {item.data.sample_answer}
+                                        {currentModule.description}
                                     </p>
                                 {/if}
                             </div>
-                        {:else if item.item_type === "matching"}
-                            <div class="rounded-xl border border-border bg-card p-5">
-                                <p class="mb-3 text-sm font-medium text-foreground">
-                                    {ii + 1}. {item.data?.question ?? "Match each item with its definition."}
-                                </p>
-                                <QuestionMatching
-                                    data={item.data}
-                                    value={answers[item.id]}
-                                    reveal={showResults}
-                                    onChange={(v) => setAnswer(item.id, v)}
-                                />
-                                {#if showResults}
-                                    <AnswerFeedback
-                                        status={answers[item.id] === undefined
-                                            ? "unanswered"
-                                            : isCorrect(item, answers[item.id])
-                                              ? "correct"
-                                              : "incorrect"}
-                                        correctAnswer={correctAnswerLabel(item)}
+                            {#if mp.total > 0}
+                                <span
+                                    class="shrink-0"
+                                    aria-label={`${mp.done} of ${mp.total} questions answered`}
+                                >
+                                    <XpRing
+                                        value={mp.pct}
+                                        size={56}
+                                        stroke={5}
+                                        ring={mp.pct === 100
+                                            ? "success"
+                                            : "primary"}
                                     >
-                                        {#snippet explanation()}
-                                            {#if item.data?.explanation}
-                                                {item.data.explanation}
-                                            {/if}
+                                        {#snippet center()}
+                                            <span
+                                                class="text-[10px] font-bold tabular text-foreground"
+                                            >
+                                                {mp.done}/{mp.total}
+                                            </span>
                                         {/snippet}
-                                    </AnswerFeedback>
-                                {/if}
-                            </div>
-                        {:else if item.item_type === "drag_sort"}
-                            <div class="rounded-xl border border-border bg-card p-5">
-                                <p class="mb-3 text-sm font-medium text-foreground">
-                                    {ii + 1}. {item.data?.question ?? "Put these items in the correct order."}
-                                </p>
-                                <QuestionOrdering
-                                    data={item.data}
-                                    value={answers[item.id]}
-                                    reveal={showResults}
-                                    onChange={(v) => setAnswer(item.id, v)}
-                                />
-                                {#if showResults}
-                                    <AnswerFeedback
-                                        status={answers[item.id] === undefined
-                                            ? "unanswered"
-                                            : isCorrect(item, answers[item.id])
-                                              ? "correct"
-                                              : "incorrect"}
-                                        correctAnswer={correctAnswerLabel(item)}
-                                    >
-                                        {#snippet explanation()}
-                                            {#if item.data?.explanation}
-                                                {item.data.explanation}
-                                            {/if}
-                                        {/snippet}
-                                    </AnswerFeedback>
-                                {/if}
-                            </div>
-                        {:else if item.item_type === "hotspot"}
-                            <div class="rounded-xl border border-border bg-card p-5">
-                                <p class="mb-3 text-sm font-medium text-foreground">
-                                    {ii + 1}. {item.data?.question ?? "Select the correct hotspot."}
-                                </p>
-                                <QuestionHotspot
-                                    data={item.data}
-                                    value={answers[item.id]}
-                                    reveal={showResults}
-                                    onChange={(v) => setAnswer(item.id, v)}
-                                />
-                                {#if showResults}
-                                    <AnswerFeedback
-                                        status={answers[item.id] === undefined
-                                            ? "unanswered"
-                                            : isCorrect(item, answers[item.id])
-                                              ? "correct"
-                                              : "incorrect"}
-                                        correctAnswer={correctAnswerLabel(item)}
-                                    >
-                                        {#snippet explanation()}
-                                            {#if item.data?.explanation}
-                                                {item.data.explanation}
-                                            {/if}
-                                        {/snippet}
-                                    </AnswerFeedback>
-                                {/if}
-                            </div>
-                        {:else}
+                                    </XpRing>
+                                </span>
+                            {/if}
+                        </div>
+                        <div class="mt-4 flex items-center gap-2">
                             <div
-                                class="rounded-xl border border-border bg-card p-5"
+                                class="h-1.5 flex-1 rounded-full bg-muted overflow-hidden"
                             >
-                                <p class="text-xs text-muted-foreground">
-                                    {item.item_type} — interactive component coming
-                                    soon
-                                </p>
+                                <div
+                                    class="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-500"
+                                    style="width: {mp.pct}%"
+                                ></div>
                             </div>
-                        {/if}
-                    {/each}
-                </div>
+                            <span
+                                class="text-xs text-muted-foreground shrink-0 tabular"
+                                >{mp.done}/{mp.total}</span
+                            >
+                        </div>
+                    </div>
 
-                <!-- Navigation -->
-                <div class="flex items-center justify-between mt-6">
-                    <Button.Root
-                        variant="ghost"
-                        size="sm"
-                        disabled={currentModuleIdx === 0}
-                        onclick={prevModule}
-                    >
-                        <ChevronLeft class="size-4 mr-1" /> Previous
-                    </Button.Root>
-                    <span class="text-xs text-muted-foreground"
-                        >Module {currentModuleIdx + 1} of {enrolledCourse
-                            .modules?.length ?? 0}</span
-                    >
-                    {#if currentModuleIdx < (enrolledCourse.modules?.length ?? 0) - 1}
-                        <Button.Root size="sm" onclick={nextModule}>
-                            Next <ChevronRight class="size-4 ml-1" />
-                        </Button.Root>
-                    {:else}
-                        <Button.Root size="sm" onclick={finishCourse}>
-                            <Trophy class="size-4 mr-1.5" /> Finish
-                        </Button.Root>
+                    {#if assessmentMix.length > 0}
+                        <div
+                            class="mb-4 rounded-2xl border border-border bg-card p-4 lift"
+                        >
+                            <div class="mb-3 flex items-center justify-between">
+                                <h3
+                                    class="text-sm font-semibold text-foreground"
+                                >
+                                    Assessment mix
+                                </h3>
+                                <span
+                                    class="text-[10px] uppercase tracking-wider text-muted-foreground"
+                                >
+                                    {assessmentMix.reduce(
+                                        (sum, item) => sum + item.count,
+                                        0,
+                                    )} items
+                                </span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+                                {#each assessmentMix.slice(0, 8) as item}
+                                    <div
+                                        class="rounded-xl border border-border bg-surface-1 p-3"
+                                    >
+                                        <div
+                                            class="flex items-center justify-between gap-2"
+                                        >
+                                            <span
+                                                class="truncate text-xs font-medium text-foreground"
+                                            >
+                                                {item.label}
+                                            </span>
+                                            <span
+                                                class="text-xs font-semibold tabular text-primary"
+                                            >
+                                                {item.count}
+                                            </span>
+                                        </div>
+                                        <div
+                                            class="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+                                        >
+                                            <div
+                                                class="h-full rounded-full bg-gradient-to-r from-primary to-accent"
+                                                style:width="{item.pct}%"
+                                            ></div>
+                                        </div>
+                                    </div>
+                                {/each}
+                            </div>
+                        </div>
                     {/if}
-                </div>
-            {/if}
-        </main>
+
+                    <div class="flex flex-col gap-4">
+                        {#each currentModule.items as item, ii}
+                            {#if item.item_type === "content"}
+                                <article
+                                    class="rounded-2xl border border-border bg-card p-6 md:p-8 motion-rise-in"
+                                    style="animation-delay: {Math.min(
+                                        ii * 30,
+                                        200,
+                                    )}ms"
+                                >
+                                    <span
+                                        class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
+                                    >
+                                        Learning material
+                                    </span>
+                                    <Markdown
+                                        source={item.data?.body ?? ""}
+                                        class="mt-3 max-w-prose text-[15px]"
+                                    />
+                                </article>
+                            {:else if item.item_type === "mc"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="text-sm font-medium text-foreground mb-3"
+                                    >
+                                        {ii + 1}. {item.data?.question ?? ""}
+                                    </p>
+                                    <div class="flex flex-col gap-2">
+                                        {#each item.data?.options ?? [] as opt, oi}
+                                            <label
+                                                class="flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 cursor-pointer transition-colors {answers[
+                                                    item.id
+                                                ] === oi
+                                                    ? 'border-primary bg-primary/5'
+                                                    : 'border-border hover:border-muted-foreground/30'}"
+                                            >
+                                                <input
+                                                    type="radio"
+                                                    name="mc-{item.id}"
+                                                    checked={answers[
+                                                        item.id
+                                                    ] === oi}
+                                                    onchange={() =>
+                                                        setAnswer(item.id, oi)}
+                                                    class="sr-only"
+                                                />
+                                                <div
+                                                    class="size-4 rounded-full border-2 flex items-center justify-center shrink-0 {answers[
+                                                        item.id
+                                                    ] === oi
+                                                        ? 'border-primary'
+                                                        : 'border-muted-foreground/30'}"
+                                                >
+                                                    {#if answers[item.id] === oi}<div
+                                                            class="size-2 rounded-full bg-primary"
+                                                        ></div>{/if}
+                                                </div>
+                                                <span
+                                                    class="text-sm text-foreground"
+                                                    >{opt}</span
+                                                >
+                                            </label>
+                                        {/each}
+                                    </div>
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                    {/if}
+                                </div>
+                            {:else if item.item_type === "ma"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="text-sm font-medium text-foreground mb-3"
+                                    >
+                                        {ii + 1}. {item.data?.question ?? ""}
+                                        <span
+                                            class="text-xs text-muted-foreground"
+                                            >(select all that apply)</span
+                                        >
+                                    </p>
+                                    <div class="flex flex-col gap-2">
+                                        {#each item.data?.options ?? [] as opt, oi}
+                                            <label
+                                                class="flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 cursor-pointer transition-colors {(
+                                                    answers[item.id] ?? []
+                                                ).includes(oi)
+                                                    ? 'border-primary bg-primary/5'
+                                                    : 'border-border hover:border-muted-foreground/30'}"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={(
+                                                        answers[item.id] ?? []
+                                                    ).includes(oi)}
+                                                    onchange={(e) => {
+                                                        const cur =
+                                                            answers[item.id] ??
+                                                            [];
+                                                        const target =
+                                                            e.target as HTMLInputElement;
+                                                        setAnswer(
+                                                            item.id,
+                                                            target.checked
+                                                                ? [...cur, oi]
+                                                                : cur.filter(
+                                                                      (
+                                                                          v: number,
+                                                                      ) =>
+                                                                          v !==
+                                                                          oi,
+                                                                  ),
+                                                        );
+                                                    }}
+                                                    class="sr-only"
+                                                />
+                                                <div
+                                                    class="size-4 rounded border-2 flex items-center justify-center shrink-0 {(
+                                                        answers[item.id] ?? []
+                                                    ).includes(oi)
+                                                        ? 'bg-primary border-primary text-primary-foreground'
+                                                        : 'border-muted-foreground/30'}"
+                                                >
+                                                    {#if (answers[item.id] ?? []).includes(oi)}<CheckCircle
+                                                            class="size-3"
+                                                        />{/if}
+                                                </div>
+                                                <span
+                                                    class="text-sm text-foreground"
+                                                    >{opt}</span
+                                                >
+                                            </label>
+                                        {/each}
+                                    </div>
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                        />
+                                    {/if}
+                                </div>
+                            {:else if item.item_type === "tf"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="text-sm font-medium text-foreground mb-3"
+                                    >
+                                        {ii + 1}. {item.data?.statement ?? ""}
+                                    </p>
+                                    <div class="flex gap-3">
+                                        {#each [true, false] as val}
+                                            <button
+                                                class="flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors {answers[
+                                                    item.id
+                                                ] === val
+                                                    ? 'border-primary bg-primary/5 text-primary'
+                                                    : 'border-border text-muted-foreground hover:border-muted-foreground/30'}"
+                                                onclick={() =>
+                                                    setAnswer(item.id, val)}
+                                            >
+                                                {val ? "True" : "False"}
+                                            </button>
+                                        {/each}
+                                    </div>
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                        />
+                                    {/if}
+                                </div>
+                            {:else if item.item_type === "fb"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="text-sm font-medium text-foreground mb-3"
+                                    >
+                                        {ii + 1}. Fill in the blanks:
+                                    </p>
+                                    <p
+                                        class="text-sm text-foreground leading-relaxed mb-3 whitespace-pre-line"
+                                    >
+                                        {item.data?.text ?? ""}
+                                    </p>
+                                    <div class="flex flex-col gap-2">
+                                        {#each item.data?.blanks ?? [] as blank, bi}
+                                            <input
+                                                type="text"
+                                                placeholder="Answer {bi + 1}"
+                                                value={answers[item.id]?.[bi] ??
+                                                    ""}
+                                                oninput={(e) => {
+                                                    const cur = [
+                                                        ...(answers[item.id] ??
+                                                            []),
+                                                    ];
+                                                    cur[bi] = (
+                                                        e.target as HTMLInputElement
+                                                    ).value;
+                                                    setAnswer(item.id, cur);
+                                                }}
+                                                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                            />
+                                        {/each}
+                                    </div>
+                                </div>
+                            {:else if item.item_type === "sa"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="text-sm font-medium text-foreground mb-3"
+                                    >
+                                        {ii + 1}. {item.data?.question ?? ""}
+                                    </p>
+                                    <textarea
+                                        rows={3}
+                                        value={answers[item.id] ?? ""}
+                                        oninput={(e) =>
+                                            setAnswer(
+                                                item.id,
+                                                (
+                                                    e.target as HTMLTextAreaElement
+                                                ).value,
+                                            )}
+                                        placeholder="Type your answer..."
+                                        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                                    ></textarea>
+                                    {#if showResults && item.data?.sample_answer}
+                                        <p
+                                            class="mt-2 text-xs text-muted-foreground"
+                                        >
+                                            Sample answer: {item.data
+                                                .sample_answer}
+                                        </p>
+                                    {/if}
+                                </div>
+                            {:else if item.item_type === "matching"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="mb-3 text-sm font-medium text-foreground"
+                                    >
+                                        {ii + 1}. {item.data?.question ??
+                                            "Match each item with its definition."}
+                                    </p>
+                                    <QuestionMatching
+                                        data={item.data}
+                                        value={answers[item.id]}
+                                        reveal={showResults}
+                                        onChange={(v) => setAnswer(item.id, v)}
+                                    />
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                    {/if}
+                                </div>
+                            {:else if item.item_type === "drag_sort"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="mb-3 text-sm font-medium text-foreground"
+                                    >
+                                        {ii + 1}. {item.data?.question ??
+                                            "Put these items in the correct order."}
+                                    </p>
+                                    <QuestionOrdering
+                                        data={item.data}
+                                        value={answers[item.id]}
+                                        reveal={showResults}
+                                        onChange={(v) => setAnswer(item.id, v)}
+                                    />
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                    {/if}
+                                </div>
+                            {:else if item.item_type === "hotspot"}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p
+                                        class="mb-3 text-sm font-medium text-foreground"
+                                    >
+                                        {ii + 1}. {item.data?.question ??
+                                            "Select the correct hotspot."}
+                                    </p>
+                                    <QuestionHotspot
+                                        data={item.data}
+                                        value={answers[item.id]}
+                                        reveal={showResults}
+                                        onChange={(v) => setAnswer(item.id, v)}
+                                    />
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                    {/if}
+                                </div>
+                            {:else}
+                                <div
+                                    class="rounded-xl border border-border bg-card p-5"
+                                >
+                                    <p class="text-xs text-muted-foreground">
+                                        {item.item_type} — interactive component coming
+                                        soon
+                                    </p>
+                                </div>
+                            {/if}
+                        {/each}
+                    </div>
+
+                    <!-- Navigation -->
+                    <div class="flex items-center justify-between mt-6">
+                        <Button.Root
+                            variant="ghost"
+                            size="sm"
+                            disabled={currentModuleIdx === 0}
+                            onclick={prevModule}
+                        >
+                            <ChevronLeft class="size-4 mr-1" /> Previous
+                        </Button.Root>
+                        <span class="text-xs text-muted-foreground"
+                            >Module {currentModuleIdx + 1} of {enrolledCourse
+                                .modules?.length ?? 0}</span
+                        >
+                        {#if currentModuleIdx < (enrolledCourse.modules?.length ?? 0) - 1}
+                            <Button.Root size="sm" onclick={nextModule}>
+                                Next <ChevronRight class="size-4 ml-1" />
+                            </Button.Root>
+                        {:else}
+                            <Button.Root size="sm" onclick={finishCourse}>
+                                <Trophy class="size-4 mr-1.5" /> Finish
+                            </Button.Root>
+                        {/if}
+                    </div>
+                {/if}
+            </main>
         </div>
     </div>
 {/if}

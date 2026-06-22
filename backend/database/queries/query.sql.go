@@ -911,6 +911,41 @@ func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
 	return items, nil
 }
 
+const getLeaderboard = `-- name: GetLeaderboard :many
+select u.id as user_id, u.name as user_name, coalesce(sum(cs.score), 0)::int as total_score
+from users u
+left join course_scores cs on cs.user_id = u.id
+group by u.id, u.name
+order by total_score desc
+limit $1
+`
+
+type GetLeaderboardRow struct {
+	UserID     int64  `json:"user_id"`
+	UserName   string `json:"user_name"`
+	TotalScore int32  `json:"total_score"`
+}
+
+func (q *Queries) GetLeaderboard(ctx context.Context, limit int32) ([]GetLeaderboardRow, error) {
+	rows, err := q.db.Query(ctx, getLeaderboard, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetLeaderboardRow
+	for rows.Next() {
+		var i GetLeaderboardRow
+		if err := rows.Scan(&i.UserID, &i.UserName, &i.TotalScore); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getLearningPreference = `-- name: GetLearningPreference :one
 select user_id, learning_style, difficulty_level, preferred_topics, theta, created_at, updated_at from learning_preferences where user_id = $1
 `
@@ -1309,6 +1344,44 @@ func (q *Queries) GetUserRoles(ctx context.Context, userID int64) ([]string, err
 	return items, nil
 }
 
+const getUserStreak = `-- name: GetUserStreak :one
+with dates as (
+  select streak_date,
+    streak_date - (row_number() over (order by streak_date desc))::int as grp
+  from user_streaks
+  where user_id = $1
+    and streak_date <= current_date
+),
+consecutive as (
+  select count(*) as cnt
+  from dates
+  where grp = (
+    select grp from dates where streak_date = (select max(streak_date) from dates)
+  )
+)
+select coalesce((select cnt from consecutive), 0) as streak_days
+`
+
+func (q *Queries) GetUserStreak(ctx context.Context, userID int64) (interface{}, error) {
+	row := q.db.QueryRow(ctx, getUserStreak, userID)
+	var streak_days interface{}
+	err := row.Scan(&streak_days)
+	return streak_days, err
+}
+
+const getUserTotalScore = `-- name: GetUserTotalScore :one
+select coalesce(sum(score), 0)::int as total_score
+from course_scores
+where user_id = $1
+`
+
+func (q *Queries) GetUserTotalScore(ctx context.Context, userID int64) (int32, error) {
+	row := q.db.QueryRow(ctx, getUserTotalScore, userID)
+	var total_score int32
+	err := row.Scan(&total_score)
+	return total_score, err
+}
+
 const insertAuditLog = `-- name: InsertAuditLog :one
 insert into audit_log (user_id, action, details)
 values ($1, $2, $3)
@@ -1458,6 +1531,19 @@ func (q *Queries) MarkNotificationRead(ctx context.Context, id int64) (Notificat
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const recordStreak = `-- name: RecordStreak :exec
+
+insert into user_streaks (user_id, streak_date)
+values ($1, current_date)
+on conflict (user_id, streak_date) do nothing
+`
+
+// Streaks & Leaderboard --
+func (q *Queries) RecordStreak(ctx context.Context, userID int64) error {
+	_, err := q.db.Exec(ctx, recordStreak, userID)
+	return err
 }
 
 const searchDocumentChunks = `-- name: SearchDocumentChunks :many
@@ -1798,6 +1884,39 @@ type UpdateUserPrimaryRoleParams struct {
 func (q *Queries) UpdateUserPrimaryRole(ctx context.Context, arg UpdateUserPrimaryRoleParams) error {
 	_, err := q.db.Exec(ctx, updateUserPrimaryRole, arg.ID, arg.Role)
 	return err
+}
+
+const upsertCourseScore = `-- name: UpsertCourseScore :one
+insert into course_scores (user_id, course_id, score, completed_at)
+values ($1, $2, $3, case when $4 then now() else null end)
+on conflict (user_id, course_id)
+do update set score = course_scores.score + $3,
+  completed_at = case when $4 then now() else course_scores.completed_at end
+returning user_id, course_id, score, completed_at
+`
+
+type UpsertCourseScoreParams struct {
+	UserID   int64       `json:"user_id"`
+	CourseID int64       `json:"course_id"`
+	Score    int32       `json:"score"`
+	Column4  interface{} `json:"column_4"`
+}
+
+func (q *Queries) UpsertCourseScore(ctx context.Context, arg UpsertCourseScoreParams) (CourseScore, error) {
+	row := q.db.QueryRow(ctx, upsertCourseScore,
+		arg.UserID,
+		arg.CourseID,
+		arg.Score,
+		arg.Column4,
+	)
+	var i CourseScore
+	err := row.Scan(
+		&i.UserID,
+		&i.CourseID,
+		&i.Score,
+		&i.CompletedAt,
+	)
+	return i, err
 }
 
 const upsertLearningPreference = `-- name: UpsertLearningPreference :one

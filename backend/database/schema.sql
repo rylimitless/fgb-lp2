@@ -249,3 +249,23 @@ create table if not exists audit_log (
 create index if not exists idx_audit_log_created_at on audit_log(created_at desc);
 create index if not exists idx_audit_log_user_id on audit_log(user_id);
 create index if not exists idx_audit_log_action on audit_log(action);
+
+-- Streaks: daily engagement tracking for gamification
+create table if not exists user_streaks (
+  user_id bigint not null references users(id) on delete cascade,
+  streak_date date not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, streak_date)
+);
+create index if not exists idx_user_streaks_user_date on user_streaks(user_id, streak_date desc);
+
+-- Leaderboard: per-user per-course scores
+create table if not exists course_scores (
+  user_id bigint not null references users(id) on delete cascade,
+  course_id bigint not null references courses(id) on delete cascade,
+  score int not null default 0,
+  completed_at timestamptz,
+  primary key (user_id, course_id)
+);
+create index if not exists idx_course_scores_score on course_scores(score desc);
+create index if not exists idx_course_scores_course on course_scores(course_id);

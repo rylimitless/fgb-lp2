@@ -231,7 +231,14 @@
 
     async function handleLogout() {
         loggingOut = true;
-        try { await fetch("/api/logout", { method: "POST", credentials: "include" }); } catch { /* ignore */ }
+        try {
+            await fetch("/api/logout", {
+                method: "POST",
+                credentials: "include",
+            });
+        } catch {
+            /* ignore */
+        }
         await goto("/login");
     }
 
@@ -240,9 +247,9 @@
         goto(href);
     }
 
-    // Gamification chrome (presentational showcase values per reference)
-    let xpPoints = 2450;
-    let streakDays = 7;
+    // Gamification values from server
+    let xpPoints = $derived((data as any)?.gamification?.totalScore ?? 0);
+    let streakDays = $derived((data as any)?.gamification?.streakDays ?? 0);
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>

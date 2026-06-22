@@ -2,13 +2,21 @@ import type { PageServerLoad } from "./$types";
 import { apiFetch } from "$lib/server/api";
 
 export const load: PageServerLoad = async (event) => {
-  const [docsRes, coursesRes, reviewDocsRes, reviewCoursesRes] =
-    await Promise.all([
-      apiFetch(event, "/api/documents"),
-      apiFetch(event, "/api/courses"),
-      apiFetch(event, "/api/review/documents?limit=100"),
-      apiFetch(event, "/api/review/courses?limit=100"),
-    ]);
+  const [
+    docsRes,
+    coursesRes,
+    reviewDocsRes,
+    reviewCoursesRes,
+    streakRes,
+    scoreRes,
+  ] = await Promise.all([
+    apiFetch(event, "/api/documents"),
+    apiFetch(event, "/api/courses"),
+    apiFetch(event, "/api/review/documents?limit=100"),
+    apiFetch(event, "/api/review/courses?limit=100"),
+    apiFetch(event, "/api/gamification/streak"),
+    apiFetch(event, "/api/gamification/score"),
+  ]);
 
   const docs = docsRes.ok ? await docsRes.json() : [];
   const courses = coursesRes.ok ? await coursesRes.json() : [];
@@ -18,6 +26,25 @@ export const load: PageServerLoad = async (event) => {
   const reviewCoursesData = reviewCoursesRes.ok
     ? await reviewCoursesRes.json()
     : { items: [], total: 0 };
+
+  let streakDays = 0;
+  let totalScore = 0;
+  try {
+    if (streakRes.ok) {
+      const sData = await streakRes.json();
+      streakDays = sData.streak_days ?? 0;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (scoreRes.ok) {
+      const scData = await scoreRes.json();
+      totalScore = scData.total_score ?? 0;
+    }
+  } catch {
+    /* ignore */
+  }
 
   let theta = 0;
   try {
@@ -46,5 +73,9 @@ export const load: PageServerLoad = async (event) => {
     },
     recentDocs: docs.slice(0, 5),
     recentCourses: courses.slice(0, 5),
+    gamification: {
+      streakDays,
+      totalScore,
+    },
   };
 };

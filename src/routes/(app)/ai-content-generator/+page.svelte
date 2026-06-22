@@ -4,7 +4,9 @@
         BookOpen,
         LoaderCircle,
         ChevronDown,
+        ChevronLeft,
         ChevronRight,
+        ChevronUp,
         FileText,
         CheckCircle,
         XCircle,
@@ -16,6 +18,7 @@
         Play,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import Markdown from "$lib/components/brand/Markdown.svelte";
 
     let { data } = $props();
 
@@ -26,8 +29,7 @@
     );
     let processingDocs = $derived(
         allDocs.filter(
-            (d: any) =>
-                d.status === "uploaded" || d.status === "processing",
+            (d: any) => d.status === "uploaded" || d.status === "processing",
         ),
     );
 
@@ -84,6 +86,8 @@
     // ---- AI Edit ----
     let editInstructions = $state("");
     let editing = $state(false);
+    let sidebarCollapsed = $state(false);
+    let generateCollapsed = $state(false);
     let editError = $state("");
 
     function toggleModule(id: number) {
@@ -293,7 +297,7 @@
         }
     }
 
-    function itemPreview(item: any): string {
+    function itemData(item: any): any {
         let d: any = {};
         try {
             d =
@@ -303,6 +307,11 @@
         } catch {
             d = item.data ?? {};
         }
+        return d ?? {};
+    }
+
+    function itemPreview(item: any): string {
+        const d = itemData(item);
         switch (item.item_type) {
             case "content":
                 return d.body ?? "";
@@ -332,132 +341,171 @@
 </script>
 
 <div class="flex w-full max-w-7xl mx-auto gap-6">
-    <!-- Left: Form + Course List -->
-    <section class="w-[400px] shrink-0 flex flex-col gap-4">
-        <!-- Generate Form -->
-        <div class="rounded-xl border border-border bg-card p-6">
-            <h3
-                class="text-sm font-semibold tracking-tight text-foreground mb-4 flex items-center gap-2"
-            >
-                <Sparkles class="size-4 text-primary" />
-                Generate Course
-            </h3>
-            <div class="flex flex-col gap-4">
-                <div class="flex flex-col gap-1.5">
-                    <label
-                        for="course-title"
-                        class="text-xs font-medium text-muted-foreground"
-                    >
-                        Title (optional)
-                    </label>
-                    <input
-                        id="course-title"
-                        type="text"
-                        bind:value={title}
-                        placeholder="e.g., Introduction to Machine Learning"
-                        class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
-                </div>
-                <div class="flex flex-col gap-1.5">
-                    <label
-                        for="course-desc"
-                        class="text-xs font-medium text-muted-foreground"
-                    >
-                        Description or content to base the course on
-                    </label>
-                    <textarea
-                        id="course-desc"
-                        bind:value={description}
-                        rows={4}
-                        placeholder="Paste paper text, article content, or describe what the course should cover..."
-                        class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-                    ></textarea>
-                </div>
+    <!-- Collapse toggle button -->
+    <button
+        class="mt-2 size-6 rounded-md border border-border bg-card flex items-center justify-center shrink-0 hover:bg-muted transition-colors press"
+        onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
+        title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+    >
+        {#if sidebarCollapsed}
+            <ChevronRight class="size-3.5 text-muted-foreground" />
+        {:else}
+            <ChevronLeft class="size-3.5 text-muted-foreground" />
+        {/if}
+    </button>
 
-                {#if approvedDocs.length > 0 || processingDocs.length > 0}
+    <!-- Left: Form + Course List -->
+    <section
+        class="flex flex-col gap-4 transition-all duration-200 ease-in-out overflow-hidden {sidebarCollapsed
+            ? 'w-0 min-w-0 opacity-0 p-0 m-0'
+            : 'w-[400px] shrink-0'}"
+    >
+        <!-- Generate Form -->
+        <div
+            class="rounded-xl border border-border bg-card p-6 whitespace-nowrap"
+        >
+            <button
+                class="w-full flex items-center justify-between gap-2 text-sm font-semibold tracking-tight text-foreground mb-0"
+                onclick={() => (generateCollapsed = !generateCollapsed)}
+            >
+                <span class="flex items-center gap-2">
+                    <Sparkles class="size-4 text-primary" />
+                    Generate Course
+                </span>
+                {#if generateCollapsed}
+                    <ChevronDown
+                        class="size-4 text-muted-foreground shrink-0"
+                    />
+                {:else}
+                    <ChevronUp class="size-4 text-muted-foreground shrink-0" />
+                {/if}
+            </button>
+            {#if !generateCollapsed}
+                <div class="flex flex-col gap-4 mt-4">
                     <div class="flex flex-col gap-1.5">
-                        <p class="text-xs font-medium text-muted-foreground">
-                            Source documents ({approvedDocs.length} approved{processingDocs.length
-                                ? `, ${processingDocs.length} processing`
-                                : ""})
-                        </p>
-                        <div
-                            class="flex flex-col gap-1 max-h-32 overflow-y-auto"
+                        <label
+                            for="course-title"
+                            class="text-xs font-medium text-muted-foreground"
                         >
-                            {#each approvedDocs as doc}
-                                <button
-                                    class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs transition-colors {selectedDocIds.includes(
-                                        doc.id,
-                                    )
-                                        ? 'bg-primary/10 text-foreground'
-                                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-                                    onclick={() => toggleDoc(doc.id)}
-                                >
-                                    <div
-                                        class="size-3.5 rounded border flex items-center justify-center shrink-0 {selectedDocIds.includes(
+                            Title (optional)
+                        </label>
+                        <input
+                            id="course-title"
+                            type="text"
+                            bind:value={title}
+                            placeholder="e.g., Introduction to Machine Learning"
+                            class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label
+                            for="course-desc"
+                            class="text-xs font-medium text-muted-foreground"
+                        >
+                            Description or content to base the course on
+                        </label>
+                        <textarea
+                            id="course-desc"
+                            bind:value={description}
+                            rows={4}
+                            placeholder="Paste paper text, article content, or describe what the course should cover..."
+                            class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                        ></textarea>
+                    </div>
+
+                    {#if approvedDocs.length > 0 || processingDocs.length > 0}
+                        <div class="flex flex-col gap-1.5">
+                            <p
+                                class="text-xs font-medium text-muted-foreground"
+                            >
+                                Source documents ({approvedDocs.length} approved{processingDocs.length
+                                    ? `, ${processingDocs.length} processing`
+                                    : ""})
+                            </p>
+                            <div
+                                class="flex flex-col gap-1 max-h-32 overflow-y-auto"
+                            >
+                                {#each approvedDocs as doc}
+                                    <button
+                                        class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs transition-colors {selectedDocIds.includes(
                                             doc.id,
                                         )
-                                            ? 'bg-primary border-primary text-primary-foreground'
-                                            : 'border-border'}"
+                                            ? 'bg-primary/10 text-foreground'
+                                            : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+                                        onclick={() => toggleDoc(doc.id)}
                                     >
-                                        {#if selectedDocIds.includes(doc.id)}
-                                            <CheckCircle class="size-2.5" />
+                                        <div
+                                            class="size-3.5 rounded border flex items-center justify-center shrink-0 {selectedDocIds.includes(
+                                                doc.id,
+                                            )
+                                                ? 'bg-primary border-primary text-primary-foreground'
+                                                : 'border-border'}"
+                                        >
+                                            {#if selectedDocIds.includes(doc.id)}
+                                                <CheckCircle class="size-2.5" />
+                                            {/if}
+                                        </div>
+                                        <FileText class="size-3 shrink-0" />
+                                        <span class="truncate">{doc.title}</span
+                                        >
+                                    </button>
+                                {/each}
+                                {#each processingDocs as doc}
+                                    <div
+                                        class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground/70"
+                                        title="Document is still being processed"
+                                    >
+                                        <LoaderCircle
+                                            class="size-3 animate-spin shrink-0"
+                                        />
+                                        <FileText class="size-3 shrink-0" />
+                                        <span class="truncate">{doc.title}</span
+                                        >
+                                        {#if doc.total_chunks > 0}
+                                            <span
+                                                class="ml-auto text-[10px] shrink-0"
+                                            >
+                                                {doc.chunks_done}/{doc.total_chunks}
+                                            </span>
+                                        {:else}
+                                            <span
+                                                class="ml-auto text-[10px] shrink-0"
+                                            >
+                                                {doc.status}
+                                            </span>
                                         {/if}
                                     </div>
-                                    <FileText class="size-3 shrink-0" />
-                                    <span class="truncate">{doc.title}</span>
-                                </button>
-                            {/each}
-                            {#each processingDocs as doc}
-                                <div
-                                    class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground/70"
-                                    title="Document is still being processed"
-                                >
-                                    <LoaderCircle
-                                        class="size-3 animate-spin shrink-0"
-                                    />
-                                    <FileText class="size-3 shrink-0" />
-                                    <span class="truncate">{doc.title}</span>
-                                    {#if doc.total_chunks > 0}
-                                        <span class="ml-auto text-[10px] shrink-0">
-                                            {doc.chunks_done}/{doc.total_chunks}
-                                        </span>
-                                    {:else}
-                                        <span class="ml-auto text-[10px] shrink-0">
-                                            {doc.status}
-                                        </span>
-                                    {/if}
-                                </div>
-                            {/each}
+                                {/each}
+                            </div>
                         </div>
-                    </div>
-                {/if}
-
-                {#if genError}
-                    <div
-                        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 flex items-center gap-2"
-                    >
-                        <XCircle class="size-4 text-destructive shrink-0" />
-                        <p class="text-xs text-destructive">
-                            {genError}
-                        </p>
-                    </div>
-                {/if}
-
-                <Button.Root
-                    class="w-full"
-                    disabled={generating || !description.trim()}
-                    onclick={handleGenerate}
-                >
-                    {#if generating}
-                        <LoaderCircle class="size-4 mr-2 animate-spin" />
-                        Generating course…
-                    {:else}
-                        <Sparkles class="size-4 mr-2" />
-                        Generate Course
                     {/if}
-                </Button.Root>
-            </div>
+
+                    {#if genError}
+                        <div
+                            class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 flex items-center gap-2"
+                        >
+                            <XCircle class="size-4 text-destructive shrink-0" />
+                            <p class="text-xs text-destructive">
+                                {genError}
+                            </p>
+                        </div>
+                    {/if}
+
+                    <Button.Root
+                        class="w-full"
+                        disabled={generating || !description.trim()}
+                        onclick={handleGenerate}
+                    >
+                        {#if generating}
+                            <LoaderCircle class="size-4 mr-2 animate-spin" />
+                            Generating course…
+                        {:else}
+                            <Sparkles class="size-4 mr-2" />
+                            Generate Course
+                        {/if}
+                    </Button.Root>
+                </div>
+            {/if}
         </div>
 
         <!-- Course List -->
@@ -571,9 +619,7 @@
                             class="size-3.5 text-destructive shrink-0 mt-0.5"
                         />
                         <div>
-                            <p
-                                class="text-xs font-medium text-destructive"
-                            >
+                            <p class="text-xs font-medium text-destructive">
                                 Generation failed
                             </p>
                             <p class="text-xs text-destructive/80 mt-0.5">
@@ -594,19 +640,37 @@
                         <div class="flex flex-col gap-1.5">
                             {#each streamedModules as mod, mi}
                                 {#if mi === streamedModules.length - 1}
-                                    <div class="rounded-lg border border-success/20 bg-success/5 px-3 py-2">
-                                        <div class="flex items-center gap-2 mb-1">
-                                            <CheckCircle class="size-3 text-success shrink-0" />
-                                            <p class="text-xs font-semibold text-foreground">
+                                    <div
+                                        class="rounded-lg border border-success/20 bg-success/5 px-3 py-2"
+                                    >
+                                        <div
+                                            class="flex items-center gap-2 mb-1"
+                                        >
+                                            <CheckCircle
+                                                class="size-3 text-success shrink-0"
+                                            />
+                                            <p
+                                                class="text-xs font-semibold text-foreground"
+                                            >
                                                 Module {mi + 1}: {mod.title}
                                             </p>
                                         </div>
-                                        <p class="text-xs text-muted-foreground/80">{mod.description}</p>
+                                        <p
+                                            class="text-xs text-muted-foreground/80"
+                                        >
+                                            {mod.description}
+                                        </p>
                                     </div>
                                 {:else}
-                                    <div class="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-                                        <CheckCircle class="size-2.5 text-success/60 shrink-0" />
-                                        <span class="truncate">Module {mi + 1}: {mod.title}</span>
+                                    <div
+                                        class="flex items-center gap-1.5 text-xs text-muted-foreground/60"
+                                    >
+                                        <CheckCircle
+                                            class="size-2.5 text-success/60 shrink-0"
+                                        />
+                                        <span class="truncate"
+                                            >Module {mi + 1}: {mod.title}</span
+                                        >
                                     </div>
                                 {/if}
                             {/each}
@@ -807,68 +871,362 @@
                                 <p class="text-xs text-muted-foreground mb-3">
                                     {mod.description}
                                 </p>
-                                <div class="flex flex-col gap-2">
+                                <div class="flex flex-col gap-4">
                                     {#each mod.items ?? [] as item, ii}
+                                        {@const d = itemData(item)}
                                         {#if item.item_type === "content"}
-                                            <div
-                                                class="rounded-lg bg-muted/10 px-4 py-3"
+                                            <article
+                                                class="rounded-2xl border border-border bg-card p-6 md:p-8"
                                             >
-                                                <p
-                                                    class="text-xs font-semibold uppercase text-muted-foreground mb-2"
+                                                <span
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
                                                 >
-                                                    Learning Material
-                                                </p>
-                                                <div
-                                                    class="prose prose-sm max-w-none text-foreground/90 text-xs leading-relaxed"
-                                                >
-                                                    {#if itemPreview(item)}
-                                                        {itemPreview(item)}
-                                                    {:else}
-                                                        <span
-                                                            class="text-muted-foreground italic"
-                                                            >Empty content</span
-                                                        >
-                                                    {/if}
-                                                </div>
-                                            </div>
+                                                    Learning material
+                                                </span>
+                                                {#if d.body}
+                                                    <Markdown
+                                                        source={d.body}
+                                                        class="mt-3 max-w-prose text-[15px]"
+                                                    />
+                                                {:else}
+                                                    <p
+                                                        class="mt-3 text-sm italic text-muted-foreground"
+                                                    >
+                                                        Empty content
+                                                    </p>
+                                                {/if}
+                                            </article>
                                         {:else if item.item_type === "mc"}
                                             <div
-                                                class="rounded-lg bg-muted/10 px-4 py-3"
+                                                class="rounded-xl border border-border bg-card p-5"
                                             >
                                                 <p
-                                                    class="text-xs font-semibold uppercase text-muted-foreground mb-2"
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
                                                     Multiple Choice
                                                 </p>
-                                                {#if itemPreview(item)}
-                                                    <p class="text-xs">
-                                                        {itemPreview(item)}
-                                                    </p>
-                                                {:else}
-                                                    <span
-                                                        class="text-muted-foreground italic"
-                                                        >Empty question</span
+                                                <p
+                                                    class="text-sm font-medium text-foreground mb-3"
+                                                >
+                                                    {ii + 1}. {d.question ?? ""}
+                                                </p>
+                                                <div
+                                                    class="flex flex-col gap-2"
+                                                >
+                                                    {#each d.options ?? [] as opt, oi}
+                                                        <div
+                                                            class="flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 {oi ===
+                                                            d.correct
+                                                                ? 'border-primary bg-primary/5'
+                                                                : 'border-border'}"
+                                                        >
+                                                            <div
+                                                                class="size-4 rounded-full border-2 flex items-center justify-center shrink-0 {oi ===
+                                                                d.correct
+                                                                    ? 'border-primary'
+                                                                    : 'border-muted-foreground/30'}"
+                                                            >
+                                                                {#if oi === d.correct}
+                                                                    <div
+                                                                        class="size-2 rounded-full bg-primary"
+                                                                    ></div>
+                                                                {/if}
+                                                            </div>
+                                                            <span
+                                                                class="text-sm text-foreground"
+                                                                >{opt}</span
+                                                            >
+                                                        </div>
+                                                    {/each}
+                                                </div>
+                                                {#if !d.options?.length}
+                                                    <p
+                                                        class="text-sm italic text-muted-foreground"
                                                     >
+                                                        Empty question
+                                                    </p>
+                                                {/if}
+                                            </div>
+                                        {:else if item.item_type === "ma"}
+                                            <div
+                                                class="rounded-xl border border-border bg-card p-5"
+                                            >
+                                                <p
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
+                                                >
+                                                    Multiple Answer
+                                                </p>
+                                                <p
+                                                    class="text-sm font-medium text-foreground mb-3"
+                                                >
+                                                    {ii + 1}. {d.question ?? ""}
+                                                    <span
+                                                        class="text-xs text-muted-foreground"
+                                                        >(select all that apply)</span
+                                                    >
+                                                </p>
+                                                <div
+                                                    class="flex flex-col gap-2"
+                                                >
+                                                    {#each d.options ?? [] as opt, oi}
+                                                        <div
+                                                            class="flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 {(
+                                                                d.correct ?? []
+                                                            ).includes(oi)
+                                                                ? 'border-primary bg-primary/5'
+                                                                : 'border-border'}"
+                                                        >
+                                                            <div
+                                                                class="size-4 rounded border-2 flex items-center justify-center shrink-0 {(
+                                                                    d.correct ??
+                                                                    []
+                                                                ).includes(oi)
+                                                                    ? 'bg-primary border-primary text-primary-foreground'
+                                                                    : 'border-muted-foreground/30'}"
+                                                            >
+                                                                {#if (d.correct ?? []).includes(oi)}
+                                                                    <CheckCircle
+                                                                        class="size-3"
+                                                                    />
+                                                                {/if}
+                                                            </div>
+                                                            <span
+                                                                class="text-sm text-foreground"
+                                                                >{opt}</span
+                                                            >
+                                                        </div>
+                                                    {/each}
+                                                </div>
+                                                {#if !d.options?.length}
+                                                    <p
+                                                        class="text-sm italic text-muted-foreground"
+                                                    >
+                                                        Empty question
+                                                    </p>
+                                                {/if}
+                                            </div>
+                                        {:else if item.item_type === "tf"}
+                                            <div
+                                                class="rounded-xl border border-border bg-card p-5"
+                                            >
+                                                <p
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
+                                                >
+                                                    True / False
+                                                </p>
+                                                <p
+                                                    class="text-sm font-medium text-foreground mb-3"
+                                                >
+                                                    {ii + 1}. {d.statement ??
+                                                        ""}
+                                                </p>
+                                                <div class="flex gap-3">
+                                                    {#each [true, false] as val}
+                                                        <div
+                                                            class="flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium {val ===
+                                                            d.answer
+                                                                ? 'border-primary bg-primary/5 text-primary'
+                                                                : 'border-border text-muted-foreground'}"
+                                                        >
+                                                            {val
+                                                                ? "True"
+                                                                : "False"}
+                                                        </div>
+                                                    {/each}
+                                                </div>
+                                            </div>
+                                        {:else if item.item_type === "fb"}
+                                            <div
+                                                class="rounded-xl border border-border bg-card p-5"
+                                            >
+                                                <p
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
+                                                >
+                                                    Fill in the Blanks
+                                                </p>
+                                                <p
+                                                    class="text-sm font-medium text-foreground mb-3"
+                                                >
+                                                    {ii + 1}. Fill in the
+                                                    blanks:
+                                                </p>
+                                                <p
+                                                    class="text-sm text-foreground leading-relaxed mb-3 whitespace-pre-line"
+                                                >
+                                                    {d.text ?? ""}
+                                                </p>
+                                                {#if d.blanks?.length}
+                                                    <div
+                                                        class="flex flex-col gap-1.5"
+                                                    >
+                                                        {#each d.blanks as blank, bi}
+                                                            <p
+                                                                class="text-xs text-muted-foreground"
+                                                            >
+                                                                <span
+                                                                    class="font-medium text-foreground"
+                                                                    >{bi +
+                                                                        1}.</span
+                                                                >
+                                                                {blank}
+                                                            </p>
+                                                        {/each}
+                                                    </div>
+                                                {/if}
+                                            </div>
+                                        {:else if item.item_type === "sa"}
+                                            <div
+                                                class="rounded-xl border border-border bg-card p-5"
+                                            >
+                                                <p
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
+                                                >
+                                                    Short Answer
+                                                </p>
+                                                <p
+                                                    class="text-sm font-medium text-foreground mb-3"
+                                                >
+                                                    {ii + 1}. {d.question ?? ""}
+                                                </p>
+                                                {#if d.sample_answer}
+                                                    <p
+                                                        class="mt-2 text-xs text-muted-foreground"
+                                                    >
+                                                        Sample answer: {d.sample_answer}
+                                                    </p>
+                                                {/if}
+                                            </div>
+                                        {:else if item.item_type === "matching"}
+                                            <div
+                                                class="rounded-xl border border-border bg-card p-5"
+                                            >
+                                                <p
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
+                                                >
+                                                    Matching
+                                                </p>
+                                                <p
+                                                    class="mb-3 text-sm font-medium text-foreground"
+                                                >
+                                                    {ii + 1}. {d.question ??
+                                                        "Match each item with its definition."}
+                                                </p>
+                                                <div
+                                                    class="flex flex-col gap-1.5"
+                                                >
+                                                    {#each d.pairs ?? [] as pair}
+                                                        <p
+                                                            class="text-sm text-foreground"
+                                                        >
+                                                            <span
+                                                                class="font-medium"
+                                                                >{pair.left}</span
+                                                            >
+                                                            <span
+                                                                class="text-muted-foreground"
+                                                            >
+                                                                — {pair.right}</span
+                                                            >
+                                                        </p>
+                                                    {/each}
+                                                </div>
+                                                {#if !d.pairs?.length}
+                                                    <p
+                                                        class="text-sm italic text-muted-foreground"
+                                                    >
+                                                        Empty
+                                                    </p>
+                                                {/if}
+                                            </div>
+                                        {:else if item.item_type === "drag_sort"}
+                                            <div
+                                                class="rounded-xl border border-border bg-card p-5"
+                                            >
+                                                <p
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
+                                                >
+                                                    Drag &amp; Sort
+                                                </p>
+                                                <p
+                                                    class="mb-3 text-sm font-medium text-foreground"
+                                                >
+                                                    {ii + 1}. {d.question ??
+                                                        "Put these items in the correct order."}
+                                                </p>
+                                                <ol
+                                                    class="flex flex-col gap-1.5 ml-5 list-decimal marker:text-muted-foreground"
+                                                >
+                                                    {#each d.items ?? [] as it}
+                                                        <li
+                                                            class="text-sm text-foreground"
+                                                        >
+                                                            {it}
+                                                        </li>
+                                                    {/each}
+                                                </ol>
+                                                {#if !d.items?.length}
+                                                    <p
+                                                        class="text-sm italic text-muted-foreground"
+                                                    >
+                                                        Empty
+                                                    </p>
+                                                {/if}
+                                            </div>
+                                        {:else if item.item_type === "sequence"}
+                                            <div
+                                                class="rounded-xl border border-border bg-card p-5"
+                                            >
+                                                <p
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
+                                                >
+                                                    Sequence
+                                                </p>
+                                                <p
+                                                    class="mb-3 text-sm font-medium text-foreground"
+                                                >
+                                                    {ii + 1}. {d.question ??
+                                                        "Arrange the steps in order."}
+                                                </p>
+                                                <ol
+                                                    class="flex flex-col gap-1.5 ml-5 list-decimal marker:text-muted-foreground"
+                                                >
+                                                    {#each d.steps ?? [] as step}
+                                                        <li
+                                                            class="text-sm text-foreground"
+                                                        >
+                                                            {step}
+                                                        </li>
+                                                    {/each}
+                                                </ol>
+                                                {#if !d.steps?.length}
+                                                    <p
+                                                        class="text-sm italic text-muted-foreground"
+                                                    >
+                                                        Empty
+                                                    </p>
                                                 {/if}
                                             </div>
                                         {:else}
                                             <div
-                                                class="rounded-lg bg-muted/10 px-4 py-3"
+                                                class="rounded-xl border border-border bg-card p-5"
                                             >
                                                 <p
-                                                    class="text-xs font-semibold uppercase text-muted-foreground mb-2"
+                                                    class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
                                                     {item.item_type}
                                                 </p>
                                                 {#if itemPreview(item)}
-                                                    <p class="text-xs">
+                                                    <p
+                                                        class="text-sm text-foreground"
+                                                    >
                                                         {itemPreview(item)}
                                                     </p>
                                                 {:else}
-                                                    <span
-                                                        class="text-muted-foreground italic"
-                                                        >Empty</span
+                                                    <p
+                                                        class="text-sm italic text-muted-foreground"
                                                     >
+                                                        Empty
+                                                    </p>
                                                 {/if}
                                             </div>
                                         {/if}

@@ -65,6 +65,13 @@ type CourseItem struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type CourseScore struct {
+	UserID      int64              `json:"user_id"`
+	CourseID    int64              `json:"course_id"`
+	Score       int32              `json:"score"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+}
+
 type Document struct {
 	ID           int64              `json:"id"`
 	Title        string             `json:"title"`
@@ -173,4 +180,10 @@ type User struct {
 type UserRole struct {
 	UserID int64  `json:"user_id"`
 	Role   string `json:"role"`
+}
+
+type UserStreak struct {
+	UserID     int64              `json:"user_id"`
+	StreakDate pgtype.Date        `json:"streak_date"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
