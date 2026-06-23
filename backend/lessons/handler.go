@@ -91,8 +91,26 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 	}
 	userID := c.GetInt64("user_id")
 
+	// Clear item progress on retake
+	if c.Query("retake") == "true" {
+		_ = h.Queries.DeleteItemProgress(c.Request.Context(),
+			database.DeleteItemProgressParams{UserID: userID, CourseID: id})
+		// Reset module-level progress too
+		pct := pgtype.Numeric{}
+		pct.Scan("0")
+		_, _ = h.Queries.UpsertLessonProgress(c.Request.Context(),
+			database.UpsertLessonProgressParams{
+				UserID: userID, CourseID: id,
+				CurrentModule: 0, Completed: false, ScorePct: pct,
+			})
+	}
+
 	// Record streak engagement (silent, best-effort)
 	_ = h.Queries.RecordStreak(c.Request.Context(), userID)
+
+	// Create enrollment row on first access (no-op if already enrolled)
+	_ = h.Queries.EnrollInCourse(c.Request.Context(),
+		database.EnrollInCourseParams{UserID: userID, CourseID: id})
 
 	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
 	if err != nil {
@@ -102,15 +120,31 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 	modules, _ := h.Queries.GetModulesByCourse(c.Request.Context(), id)
 	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
 
+	// Load item-level progress
+	itemProg, _ := h.Queries.GetItemProgressByCourse(c.Request.Context(),
+		database.GetItemProgressByCourseParams{UserID: userID, CourseID: id})
+	itemProgMap := make(map[int64]gin.H)
+	for _, ip := range itemProg {
+		itemProgMap[ip.ItemID] = gin.H{
+			"answer":     json.RawMessage(ip.Answer),
+			"is_correct": ip.IsCorrect,
+		}
+	}
+
 	itemMap := make(map[int64][]gin.H)
 	for _, item := range items {
 		mid := item.ModuleID.Int64
-		itemMap[mid] = append(itemMap[mid], gin.H{
+		entry := gin.H{
 			"id":         item.ID,
 			"item_type":  item.ItemType,
 			"sort_order": item.SortOrder,
 			"data":       json.RawMessage(item.Data),
-		})
+		}
+		if saved, ok := itemProgMap[item.ID]; ok {
+			entry["saved_answer"] = saved["answer"]
+			entry["saved_is_correct"] = saved["is_correct"]
+		}
+		itemMap[mid] = append(itemMap[mid], entry)
 	}
 
 	mods := make([]gin.H, 0)
@@ -176,8 +210,42 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 	c.JSON(http.StatusOK, progress)
 }
 
+func (h *Handler) SaveItemProgress(c *gin.Context) {
+	var body struct {
+		CourseID  int64           `json:"course_id"`
+		ItemID    int64           `json:"item_id"`
+		Answer    json.RawMessage `json:"answer"`
+		IsCorrect *bool           `json:"is_correct"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID := c.GetInt64("user_id")
+
+	isCorrect := pgtype.Bool{Valid: false}
+	if body.IsCorrect != nil {
+		isCorrect = pgtype.Bool{Bool: *body.IsCorrect, Valid: true}
+	}
+
+	prog, err := h.Queries.UpsertItemProgress(c.Request.Context(),
+		database.UpsertItemProgressParams{
+			UserID:    userID,
+			CourseID:  body.CourseID,
+			ItemID:    body.ItemID,
+			Answer:    body.Answer,
+			IsCorrect: isCorrect,
+		})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, prog)
+}
+
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/courses/published", h.ListPublished)
 	r.GET("/courses/:id/play", h.GetCourseForPlay)
 	r.POST("/lessons/progress", h.SaveProgress)
+	r.POST("/lessons/item-progress", h.SaveItemProgress)
 }

@@ -74,7 +74,39 @@ CRITICAL RULES:
 5. Do NOT include any quiz questions, multiple choice, true/false, or assessment items. This is PURE CONTENT only.
 6. If the source material for this section is very thin, it is better to be short and accurate than long and fabricated.`
 
-// Step 3: Question Generator — produces a batch of 5 mixed-format assessment items
+// Step 3: Per-Section Question Generator — produces 1-3 assessment items
+// that test the content JUST covered in one section. Used inside the per-section
+// loop so questions are interleaved with content, not batched at the end.
+const perSectionQuestionPrompt = `You are an expert assessment designer. Given ONE section of educational content, generate 1-3 high-quality assessment items that test understanding of THIS section specifically.
+
+CRITICAL RULES:
+1. Generate questions ONLY about the content in this specific section — do not draw from other topics.
+2. Pick question types that BEST fit the section material. Choose from: mc (multiple choice), ma (multiple answer), tf (true/false), fb (fill-in-the-blank), sa (short answer). Matching, drag_sort, hotspot, and sequence are also allowed if the content naturally suits them.
+3. Vary the types — don't use the same format for all questions.
+4. Every question MUST be answerable strictly from the section content.
+5. Every question MUST include an "explanation" field explaining the correct answer(s).
+6. MC: exactly 4 plausible options with distractions that are common misconceptions; "correct" is a 0-based index.
+7. MA: 4-6 options with 2-3 correct; "correct" is an array of 0-based indices.
+8. TF: "statement" + "answer" (boolean).
+9. FB: "text" with "___" blanks + "blanks" array of answers.
+10. SA: "question" + "sample_answer".
+11. Content must be substantive — not trivial recall of names or dates.
+12. Do not use placeholders, TBD, or lorem ipsum.
+
+Output ONLY a valid JSON array — no markdown, no surrounding text:
+
+[
+  {
+    "type": "mc",
+    "data": { "question": "...", "options": ["...","...","...","..."], "correct": 0, "explanation": "..." }
+  },
+  {
+    "type": "tf",
+    "data": { "statement": "...", "answer": true, "explanation": "..." }
+  }
+]`
+
+// Step 3 (legacy): Question Generator — produces a batch of 8 mixed-format items
 // from a content summary. The full content is NOT sent to the LLM — only a summary
 // for context. The JSON wrapping is done programmatically in Go code.
 const questionGenPrompt = `You are an expert assessment designer. Based on the educational content summary provided, generate EXACTLY 8 high-quality assessment items with VARIED formats.
@@ -210,6 +242,30 @@ CRITICAL RULES:
 - Content must remain accurate and educational.
 - Keep assessment items meaningful and not trivial.
 - Do not use placeholders or lorem ipsum.`
+
+// EditItem system prompt — for AI-driven editing of a single course item.
+const editItemSystemPrompt = `You are an expert instructional designer and content editor. Given a single course item in JSON format and edit instructions, produce the modified version of JUST that item.
+
+Output ONLY valid JSON — no markdown, no explanation. Keep the same item_type and data structure:
+
+- "content": { "data": { "body": "..." } }
+- "mc": { "data": { "question": "...", "options": [...], "correct": <index>, "explanation": "..." } }
+- "ma": { "data": { "question": "...", "options": [...], "correct": [<indices>], "explanation": "..." } }
+- "tf": { "data": { "statement": "...", "answer": <bool>, "explanation": "..." } }
+- "fb": { "data": { "text": "...", "blanks": [...] } }
+- "sa": { "data": { "question": "...", "sample_answer": "..." } }
+- "matching": { "data": { "question": "...", "pairs": [{"left":"...","right":"..."}] } }
+- "drag_sort": { "data": { "question": "...", "items": [...] } }
+- "sequence": { "data": { "question": "...", "steps": [...] } }
+- "hotspot": { "data": { "question": "...", "image": "...", "regions": [{"label":"...","x":<pct>,"y":<pct>,"correct":<bool>}] } }
+
+CRITICAL RULES:
+- Apply the edit instructions faithfully to this single item.
+- Keep the same item_type — do not change it.
+- Maintain the same data structure/fields appropriate to the item_type.
+- Content must remain accurate, educational, and substantive.
+- Do not use placeholders or lorem ipsum.
+- Output ONLY the JSON object — no surrounding text or markdown fences.`
 
 type Handler struct {
 	Queries   *database.Queries
@@ -581,6 +637,9 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/courses/:id", h.GetCourse)
 	r.GET("/courses/:id/preview", h.PreviewCourse)
 	r.PUT("/courses/:id/edit", middlewares.WrapRequireRole(h.EditCourse, "content creator"))
+	r.POST("/items/:itemId/ai-edit", middlewares.WrapRequireRole(h.AiEditItem, "content creator"))
+	r.PUT("/items/:itemId", middlewares.WrapRequireRole(h.UpdateItemData, "content creator"))
+	r.DELETE("/items/:itemId", middlewares.WrapRequireRole(h.DeleteItem, "content creator"))
 }
 
 // EditCourse modifies an existing course based on AI-driven edit instructions.
@@ -722,6 +781,150 @@ Apply these edits and return the FULL modified course JSON (not just the changes
 		"status":      course.Status,
 		"modules":     modulesResult,
 	})
+}
+
+// AiEditItem returns an AI-suggested edit for a single course item.
+// This does NOT persist to the database — the frontend shows a preview
+// and the user must accept it via UpdateItemData.
+func (h *Handler) AiEditItem(c *gin.Context) {
+	itemID, err := strconv.ParseInt(c.Param("itemId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid item ID"})
+		return
+	}
+
+	var body struct {
+		Instructions string `json:"instructions"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Instructions) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Instructions are required"})
+		return
+	}
+
+	// Fetch the current item
+	item, err := h.Queries.GetCourseItemByID(c.Request.Context(), itemID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
+		return
+	}
+
+	// Build the item JSON for the LLM
+	currentItem := gin.H{
+		"item_type": item.ItemType,
+		"data":      json.RawMessage(item.Data),
+	}
+	currentJSON, _ := json.Marshal(currentItem)
+
+	editPrompt := fmt.Sprintf(`Here is a course item in JSON format:
+
+%s
+
+Edit instructions: %s
+
+Apply these edits and return ONLY the modified JSON for this single item.`, string(currentJSON), body.Instructions)
+
+	log.Printf("[ai] editing item %d: %s", itemID, body.Instructions)
+	response, err := h.LLM.Chat(editItemSystemPrompt, editPrompt)
+	if err != nil {
+		log.Printf("[ai] edit item llm: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI edit failed"})
+		return
+	}
+
+	jsonStr := stripMarkdownFences(response)
+	var suggested genItem
+	if err := json.Unmarshal([]byte(jsonStr), &suggested); err != nil {
+		log.Printf("[ai] parse edit item json: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse AI response"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"item_id":        item.ID,
+		"item_type":      item.ItemType,
+		"current_data":   json.RawMessage(item.Data),
+		"suggested_type": suggested.Type,
+		"suggested_data": suggested.Data,
+	})
+}
+
+// UpdateItemData persists a modified item's data to the database.
+func (h *Handler) UpdateItemData(c *gin.Context) {
+	itemID, err := strconv.ParseInt(c.Param("itemId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid item ID"})
+		return
+	}
+
+	var body struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.Data) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Data is required"})
+		return
+	}
+
+	// Verify item exists
+	_, err = h.Queries.GetCourseItemByID(c.Request.Context(), itemID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
+		return
+	}
+
+	updated, err := h.Queries.UpdateCourseItemData(c.Request.Context(), database.UpdateCourseItemDataParams{
+		ID:   itemID,
+		Data: []byte(body.Data),
+	})
+	if err != nil {
+		log.Printf("[ai] update item data: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update item"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":         updated.ID,
+		"item_type":  updated.ItemType,
+		"sort_order": updated.SortOrder,
+		"data":       json.RawMessage(updated.Data),
+	})
+}
+
+// DeleteItem removes a course item from the database and renumbers its siblings.
+func (h *Handler) DeleteItem(c *gin.Context) {
+	itemID, err := strconv.ParseInt(c.Param("itemId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid item ID"})
+		return
+	}
+
+	// Fetch the item so we know which module to renumber
+	item, err := h.Queries.GetCourseItemByID(c.Request.Context(), itemID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
+		return
+	}
+
+	if err := h.Queries.DeleteCourseItemByID(c.Request.Context(), itemID); err != nil {
+		log.Printf("[ai] delete item: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete item"})
+		return
+	}
+
+	// Renumber remaining items in the same module so sort_order stays contiguous
+	if item.ModuleID.Valid {
+		siblings, _ := h.Queries.GetCourseItemsByModule(c.Request.Context(), item.ModuleID)
+		for i, sib := range siblings {
+			if sib.SortOrder != int32(i) {
+				h.Queries.UpdateCourseItemModule(c.Request.Context(), database.UpdateCourseItemModuleParams{
+					ID:        sib.ID,
+					ModuleID:  sib.ModuleID,
+					SortOrder: int32(i),
+				})
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"id": itemID, "deleted": true})
 }
 
 // ---- helpers ----

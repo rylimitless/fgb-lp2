@@ -61,6 +61,8 @@
 
     // Answers: { [itemId]: answer }
     let answers = $state<Record<number, any>>({});
+    // Which items have had their answer revealed via inline Check button
+    let checkedRevealed = $state<Record<number, boolean>>({});
 
     $effect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -152,13 +154,31 @@
         enrolledCourse = null;
         currentModuleIdx = 0;
         answers = {};
+        checkedRevealed = {};
         showResults = false;
+        // Check if this is a retake (course was previously completed)
+        const existing = courses.find((c: any) => c.id === courseId);
+        const isRetake = existing?.progress?.completed === true;
         try {
-            const res = await fetch(`/api/courses/${courseId}/play`, {
+            const url =
+                `/api/courses/${courseId}/play` +
+                (isRetake ? "?retake=true" : "");
+            const res = await fetch(url, {
                 credentials: "include",
             });
             if (res.ok) {
                 enrolledCourse = await res.json();
+                // Restore saved item-level answers
+                if (enrolledCourse.modules) {
+                    for (const mod of enrolledCourse.modules) {
+                        if (!mod?.items) continue;
+                        for (const item of mod.items) {
+                            if (item.saved_answer !== undefined) {
+                                answers[item.id] = item.saved_answer;
+                            }
+                        }
+                    }
+                }
                 // Resume from saved progress if available
                 const prog = enrolledCourse.progress;
                 if (
@@ -248,6 +268,33 @@
 
     function setAnswer(itemId: number, answer: any) {
         answers[itemId] = answer;
+        saveItemAnswer(itemId, answer).catch(() => {});
+    }
+
+    async function saveItemAnswer(itemId: number, answer: any) {
+        if (previewMode || !enrolledCourse) return;
+        const mods = enrolledCourse.modules;
+        let item: any;
+        for (const m of mods) {
+            item = (m?.items ?? []).find((it: any) => it.id === itemId);
+            if (item) break;
+        }
+        const correct = item ? isCorrect(item, answer) : null;
+        try {
+            await fetch("/api/lessons/item-progress", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    course_id: enrolledCourse.id,
+                    item_id: itemId,
+                    answer,
+                    is_correct: correct,
+                }),
+            });
+        } catch {
+            /* ignore */
+        }
     }
 
     function isCorrect(item: any, answer: any): boolean {
@@ -265,6 +312,20 @@
             }
             case "tf":
                 return answer === d.answer;
+            case "fb": {
+                if (!Array.isArray(answer) || !Array.isArray(d.blanks))
+                    return false;
+                return (
+                    answer.length === d.blanks.length &&
+                    d.blanks.every(
+                        (b: string, i: number) =>
+                            String(answer[i] ?? "")
+                                .trim()
+                                .toLowerCase() ===
+                            String(b).trim().toLowerCase(),
+                    )
+                );
+            }
             case "matching": {
                 const pairs = d.pairs ?? [];
                 if (!pairs.length || !answer || typeof answer !== "object")
@@ -1090,7 +1151,20 @@
                                             </label>
                                         {/each}
                                     </div>
-                                    {#if showResults}
+                                    {#if !showResults && !checkedRevealed[item.id]}
+                                        <button
+                                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={answers[item.id] ===
+                                                undefined}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <CheckCircle class="size-3" />
+                                            Check
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1179,7 +1253,20 @@
                                             </label>
                                         {/each}
                                     </div>
-                                    {#if showResults}
+                                    {#if !showResults && !checkedRevealed[item.id]}
+                                        <button
+                                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={(answers[item.id] ?? [])
+                                                .length === 0}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <CheckCircle class="size-3" />
+                                            Check
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1220,7 +1307,20 @@
                                             </button>
                                         {/each}
                                     </div>
-                                    {#if showResults}
+                                    {#if !showResults && !checkedRevealed[item.id]}
+                                        <button
+                                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={answers[item.id] ===
+                                                undefined}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <CheckCircle class="size-3" />
+                                            Check
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1272,6 +1372,41 @@
                                             />
                                         {/each}
                                     </div>
+                                    {#if !showResults && !checkedRevealed[item.id]}
+                                        <button
+                                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={!answers[item.id] ||
+                                                (answers[item.id] ?? [])
+                                                    .length === 0}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <CheckCircle class="size-3" />
+                                            Check
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
+                                        <AnswerFeedback
+                                            status={!answers[item.id]
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                    {/if}
                                 </div>
                             {:else if item.item_type === "sa"}
                                 <div
@@ -1295,7 +1430,19 @@
                                         placeholder="Type your answer..."
                                         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                                     ></textarea>
-                                    {#if showResults && item.data?.sample_answer}
+                                    {#if !showResults && !checkedRevealed[item.id] && item.data?.sample_answer}
+                                        <button
+                                            class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={!answers[item.id]}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <Eye class="size-3" />
+                                            Reveal sample
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
                                         <p
                                             class="mt-2 text-xs text-muted-foreground"
                                         >
@@ -1317,10 +1464,24 @@
                                     <QuestionMatching
                                         data={item.data}
                                         value={answers[item.id]}
-                                        reveal={showResults}
+                                        reveal={showResults ||
+                                            checkedRevealed[item.id]}
                                         onChange={(v) => setAnswer(item.id, v)}
                                     />
-                                    {#if showResults}
+                                    {#if !showResults && !checkedRevealed[item.id]}
+                                        <button
+                                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={answers[item.id] ===
+                                                undefined}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <CheckCircle class="size-3" />
+                                            Check
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1356,10 +1517,24 @@
                                     <QuestionOrdering
                                         data={item.data}
                                         value={answers[item.id]}
-                                        reveal={showResults}
+                                        reveal={showResults ||
+                                            checkedRevealed[item.id]}
                                         onChange={(v) => setAnswer(item.id, v)}
                                     />
-                                    {#if showResults}
+                                    {#if !showResults && !checkedRevealed[item.id]}
+                                        <button
+                                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={answers[item.id] ===
+                                                undefined}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <CheckCircle class="size-3" />
+                                            Check
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1395,10 +1570,24 @@
                                     <QuestionHotspot
                                         data={item.data}
                                         value={answers[item.id]}
-                                        reveal={showResults}
+                                        reveal={showResults ||
+                                            checkedRevealed[item.id]}
                                         onChange={(v) => setAnswer(item.id, v)}
                                     />
-                                    {#if showResults}
+                                    {#if !showResults && !checkedRevealed[item.id]}
+                                        <button
+                                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={answers[item.id] ===
+                                                undefined}
+                                            onclick={() =>
+                                                (checkedRevealed[item.id] =
+                                                    true)}
+                                        >
+                                            <CheckCircle class="size-3" />
+                                            Check
+                                        </button>
+                                    {/if}
+                                    {#if showResults || checkedRevealed[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined

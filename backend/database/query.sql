@@ -115,6 +115,9 @@ insert into course_items (course_id, module_id, item_type, sort_order, data)
 values ($1, $2, $3, $4, $5)
 returning *;
 
+-- name: GetCourseItemByID :one
+select * from course_items where id = $1;
+
 -- name: GetCourseItemsByModule :many
 select * from course_items where module_id = $1 order by sort_order asc;
 
@@ -126,6 +129,9 @@ delete from modules where course_id = $1;
 
 -- name: DeleteCourseItems :exec
 delete from course_items where course_id = $1;
+
+-- name: DeleteCourseItemByID :exec
+delete from course_items where id = $1;
 
 -- name: GetPendingReviewDocuments :many
 select * from documents where review_status = 'pending' order by created_at desc limit $1 offset $2;
@@ -162,6 +168,24 @@ returning *;
 
 -- name: GetLessonProgress :one
 select * from lesson_progress where user_id = $1 and course_id = $2;
+
+-- name: EnrollInCourse :exec
+insert into lesson_progress (user_id, course_id, current_module, completed, score_pct)
+values ($1, $2, 0, false, 0)
+on conflict (user_id, course_id) do nothing;
+
+-- name: UpsertItemProgress :one
+insert into item_progress (user_id, course_id, item_id, answer, is_correct)
+values ($1, $2, $3, $4, $5)
+on conflict (user_id, item_id)
+do update set answer = $4, is_correct = $5, answered_at = now()
+returning *;
+
+-- name: GetItemProgressByCourse :many
+select * from item_progress where user_id = $1 and course_id = $2;
+
+-- name: DeleteItemProgress :exec
+delete from item_progress where user_id = $1 and course_id = $2;
 
 -- name: GetLearningPreference :one
 select * from learning_preferences where user_id = $1;

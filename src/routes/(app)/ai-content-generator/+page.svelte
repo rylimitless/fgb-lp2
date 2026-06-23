@@ -19,6 +19,7 @@
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import Markdown from "$lib/components/brand/Markdown.svelte";
+    import AiItemEditWrapper from "$lib/components/brand/AiItemEditWrapper.svelte";
 
     let { data } = $props();
 
@@ -89,6 +90,15 @@
     let sidebarCollapsed = $state(false);
     let generateCollapsed = $state(false);
     let editError = $state("");
+
+    // ---- Per-item AI Edit ----
+    let editingItemId = $state<number | null>(null);
+    let itemEditInstructions = $state("");
+    let itemEditLoading = $state(false);
+    let itemEditError = $state("");
+    // Preview: { item_id, item_type, current_data, suggested_data }
+    let itemEditPreview = $state<any>(null);
+    let itemEditAcceptedIds = $state<Set<number>>(new Set());
 
     function toggleModule(id: number) {
         expandedModules[id] = !expandedModules[id];
@@ -233,7 +243,9 @@
                 activeJobId = job.id;
                 generationSteps = job.steps ?? [];
                 generationDone = false;
-                streamedModules = job.modules ?? [];
+                // Don't pre-seed streamedModules — the SSE replay will
+                // push them, and we want to avoid duplicates.
+                streamedModules = [];
                 streamProgress = "";
                 genError = "";
 
@@ -274,6 +286,130 @@
             editError = "Network error";
         } finally {
             editing = false;
+        }
+    }
+
+    // ---- Per-item AI Edit handlers ----
+
+    function startItemEdit(itemId: number) {
+        editingItemId = itemId;
+        itemEditInstructions = "";
+        itemEditError = "";
+        itemEditPreview = null;
+    }
+
+    function cancelItemEdit() {
+        editingItemId = null;
+        itemEditInstructions = "";
+        itemEditError = "";
+        itemEditPreview = null;
+        itemEditLoading = false;
+    }
+
+    async function handleItemAiEdit() {
+        if (
+            !itemEditInstructions.trim() ||
+            editingItemId === null ||
+            !viewingCourse
+        )
+            return;
+        itemEditError = "";
+        itemEditLoading = true;
+        itemEditPreview = null;
+        try {
+            const res = await fetch(`/api/items/${editingItemId}/ai-edit`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    instructions: itemEditInstructions,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                itemEditError = err.error || "AI edit failed";
+                return;
+            }
+            itemEditPreview = await res.json();
+        } catch {
+            itemEditError = "Network error";
+        } finally {
+            itemEditLoading = false;
+        }
+    }
+
+    async function acceptItemEdit() {
+        if (!itemEditPreview || !viewingCourse) return;
+        try {
+            const res = await fetch(`/api/items/${itemEditPreview.item_id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    data: itemEditPreview.suggested_data,
+                }),
+            });
+            if (!res.ok) {
+                itemEditError = "Failed to save edit";
+                return;
+            }
+            // Update local state
+            const updated = await res.json();
+            viewingCourse = {
+                ...viewingCourse,
+                modules: viewingCourse.modules.map((mod: any) => ({
+                    ...mod,
+                    items: mod.items.map((item: any) =>
+                        item.id === updated.id
+                            ? { ...item, data: updated.data }
+                            : item,
+                    ),
+                })),
+            };
+            itemEditAcceptedIds = new Set([
+                ...itemEditAcceptedIds,
+                itemEditPreview.item_id,
+            ]);
+            cancelItemEdit();
+        } catch {
+            itemEditError = "Network error while saving";
+        }
+    }
+
+    function discardItemEdit() {
+        itemEditPreview = null;
+        itemEditError = "";
+    }
+
+    function onItemInstructionsInput(e: Event) {
+        itemEditInstructions = (e.target as HTMLInputElement).value;
+    }
+
+    async function deleteItem(itemId: number) {
+        if (!viewingCourse) return;
+        if (!confirm("Delete this question? This cannot be undone.")) return;
+        try {
+            const res = await fetch(`/api/items/${itemId}`, {
+                method: "DELETE",
+                credentials: "include",
+            });
+            if (!res.ok) {
+                itemEditError = "Failed to delete item";
+                return;
+            }
+            // Remove from local state
+            viewingCourse = {
+                ...viewingCourse,
+                modules: viewingCourse.modules.map((mod: any) => ({
+                    ...mod,
+                    items: (mod.items ?? []).filter(
+                        (item: any) => item.id !== itemId,
+                    ),
+                })),
+            };
+            cancelItemEdit();
+        } catch {
+            itemEditError = "Network error while deleting";
         }
     }
 
@@ -872,12 +1008,27 @@
                                     {mod.description}
                                 </p>
                                 <div class="flex flex-col gap-4">
-                                    {#each mod.items ?? [] as item, ii}
+                                    {#each mod.items ?? [] as item, ii (item.id)}
                                         {@const d = itemData(item)}
                                         {#if item.item_type === "content"}
                                             <article
-                                                class="rounded-2xl border border-border bg-card p-6 md:p-8"
+                                                class="rounded-2xl border border-border bg-card p-6 md:p-8 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <span
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
                                                 >
@@ -898,8 +1049,23 @@
                                             </article>
                                         {:else if item.item_type === "mc"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -949,8 +1115,23 @@
                                             </div>
                                         {:else if item.item_type === "ma"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -1007,8 +1188,23 @@
                                             </div>
                                         {:else if item.item_type === "tf"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -1037,8 +1233,23 @@
                                             </div>
                                         {:else if item.item_type === "fb"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -1076,8 +1287,23 @@
                                             </div>
                                         {:else if item.item_type === "sa"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -1098,8 +1324,23 @@
                                             </div>
                                         {:else if item.item_type === "matching"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -1140,8 +1381,23 @@
                                             </div>
                                         {:else if item.item_type === "drag_sort"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -1174,8 +1430,23 @@
                                             </div>
                                         {:else if item.item_type === "sequence"}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >
@@ -1208,8 +1479,23 @@
                                             </div>
                                         {:else}
                                             <div
-                                                class="rounded-xl border border-border bg-card p-5"
+                                                class="rounded-xl border border-border bg-card p-5 relative group/item"
                                             >
+                                                <AiItemEditWrapper
+                                                    {item}
+                                                    {editingItemId}
+                                                    {itemEditInstructions}
+                                                    {itemEditLoading}
+                                                    {itemEditError}
+                                                    {itemEditPreview}
+                                                    onStartEdit={startItemEdit}
+                                                    onCancelEdit={cancelItemEdit}
+                                                    onAiEdit={handleItemAiEdit}
+                                                    onAccept={acceptItemEdit}
+                                                    onDiscard={discardItemEdit}
+                                                    onInstructionsInput={onItemInstructionsInput}
+                                                    onDelete={deleteItem}
+                                                />
                                                 <p
                                                     class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2"
                                                 >

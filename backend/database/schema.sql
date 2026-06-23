@@ -200,6 +200,20 @@ create table if not exists lesson_progress (
   unique(user_id, course_id)
 );
 
+-- Guided Lesson Player: per-user per-item answers and correctness
+create table if not exists item_progress (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  course_id bigint not null references courses(id) on delete cascade,
+  item_id bigint not null references course_items(id) on delete cascade,
+  answer jsonb not null default 'null',
+  is_correct boolean,
+  answered_at timestamptz not null default now(),
+  unique(user_id, item_id)
+);
+create index if not exists idx_item_progress_user_course
+  on item_progress(user_id, course_id);
+
 -- Notifications: system notifications for users
 create table if not exists notifications (
   id bigserial primary key,

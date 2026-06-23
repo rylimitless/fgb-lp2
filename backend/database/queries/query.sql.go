@@ -328,6 +328,15 @@ func (q *Queries) DeleteCourse(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteCourseItemByID = `-- name: DeleteCourseItemByID :exec
+delete from course_items where id = $1
+`
+
+func (q *Queries) DeleteCourseItemByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteCourseItemByID, id)
+	return err
+}
+
 const deleteCourseItems = `-- name: DeleteCourseItems :exec
 delete from course_items where course_id = $1
 `
@@ -355,6 +364,20 @@ func (q *Queries) DeleteDocument(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteItemProgress = `-- name: DeleteItemProgress :exec
+delete from item_progress where user_id = $1 and course_id = $2
+`
+
+type DeleteItemProgressParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) DeleteItemProgress(ctx context.Context, arg DeleteItemProgressParams) error {
+	_, err := q.db.Exec(ctx, deleteItemProgress, arg.UserID, arg.CourseID)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 delete from sessions where token = $1
 `
@@ -379,6 +402,22 @@ delete from user_roles where user_id = $1
 
 func (q *Queries) DeleteUserRoles(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
+	return err
+}
+
+const enrollInCourse = `-- name: EnrollInCourse :exec
+insert into lesson_progress (user_id, course_id, current_module, completed, score_pct)
+values ($1, $2, 0, false, 0)
+on conflict (user_id, course_id) do nothing
+`
+
+type EnrollInCourseParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) EnrollInCourse(ctx context.Context, arg EnrollInCourseParams) error {
+	_, err := q.db.Exec(ctx, enrollInCourse, arg.UserID, arg.CourseID)
 	return err
 }
 
@@ -714,6 +753,25 @@ func (q *Queries) GetCourseEffectiveness(ctx context.Context) ([]GetCourseEffect
 	return items, nil
 }
 
+const getCourseItemByID = `-- name: GetCourseItemByID :one
+select id, course_id, module_id, item_type, sort_order, data, created_at from course_items where id = $1
+`
+
+func (q *Queries) GetCourseItemByID(ctx context.Context, id int64) (CourseItem, error) {
+	row := q.db.QueryRow(ctx, getCourseItemByID, id)
+	var i CourseItem
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.ModuleID,
+		&i.ItemType,
+		&i.SortOrder,
+		&i.Data,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getCourseItemsByCourse = `-- name: GetCourseItemsByCourse :many
 select id, course_id, module_id, item_type, sort_order, data, created_at from course_items where course_id = $1 order by sort_order asc
 `
@@ -900,6 +958,43 @@ func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
 			&i.ErrorMessage,
 			&i.ReviewStatus,
 			&i.ReviewNotes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItemProgressByCourse = `-- name: GetItemProgressByCourse :many
+select id, user_id, course_id, item_id, answer, is_correct, answered_at from item_progress where user_id = $1 and course_id = $2
+`
+
+type GetItemProgressByCourseParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) GetItemProgressByCourse(ctx context.Context, arg GetItemProgressByCourseParams) ([]ItemProgress, error) {
+	rows, err := q.db.Query(ctx, getItemProgressByCourse, arg.UserID, arg.CourseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ItemProgress
+	for rows.Next() {
+		var i ItemProgress
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CourseID,
+			&i.ItemID,
+			&i.Answer,
+			&i.IsCorrect,
+			&i.AnsweredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1915,6 +2010,43 @@ func (q *Queries) UpsertCourseScore(ctx context.Context, arg UpsertCourseScorePa
 		&i.CourseID,
 		&i.Score,
 		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const upsertItemProgress = `-- name: UpsertItemProgress :one
+insert into item_progress (user_id, course_id, item_id, answer, is_correct)
+values ($1, $2, $3, $4, $5)
+on conflict (user_id, item_id)
+do update set answer = $4, is_correct = $5, answered_at = now()
+returning id, user_id, course_id, item_id, answer, is_correct, answered_at
+`
+
+type UpsertItemProgressParams struct {
+	UserID    int64       `json:"user_id"`
+	CourseID  int64       `json:"course_id"`
+	ItemID    int64       `json:"item_id"`
+	Answer    []byte      `json:"answer"`
+	IsCorrect pgtype.Bool `json:"is_correct"`
+}
+
+func (q *Queries) UpsertItemProgress(ctx context.Context, arg UpsertItemProgressParams) (ItemProgress, error) {
+	row := q.db.QueryRow(ctx, upsertItemProgress,
+		arg.UserID,
+		arg.CourseID,
+		arg.ItemID,
+		arg.Answer,
+		arg.IsCorrect,
+	)
+	var i ItemProgress
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.ItemID,
+		&i.Answer,
+		&i.IsCorrect,
+		&i.AnsweredAt,
 	)
 	return i, err
 }

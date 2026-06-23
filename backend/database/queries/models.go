@@ -98,6 +98,16 @@ type DocumentChunk struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type ItemProgress struct {
+	ID         int64              `json:"id"`
+	UserID     int64              `json:"user_id"`
+	CourseID   int64              `json:"course_id"`
+	ItemID     int64              `json:"item_id"`
+	Answer     []byte             `json:"answer"`
+	IsCorrect  pgtype.Bool        `json:"is_correct"`
+	AnsweredAt pgtype.Timestamptz `json:"answered_at"`
+}
+
 type LearningPreference struct {
 	UserID          int64              `json:"user_id"`
 	LearningStyle   string             `json:"learning_style"`

@@ -171,28 +171,31 @@ func (s *JobStore) listActive() []*GenerationJob {
 	return active
 }
 
-// recoverFromDB fetches pending jobs from DB and emits them to the worker on startup.
-func (s *JobStore) recoverFromDB(worker *Worker) {
+// recoverFromDB marks any interrupted jobs as failed on startup.
+// We intentionally DO NOT resume interrupted generations: re-running
+// processJob from scratch created duplicate courses on every restart,
+// wasting LLM credits and producing runaway module counts. If a job
+// was interrupted, the user can manually re-trigger generation.
+func (s *JobStore) recoverFromDB() {
 	ctx := context.Background()
 
-	// Reset any running jobs that were left over from a crash
-	if err := s.db.ResetStaleJobs(ctx); err != nil {
-		log.Printf("[jobstore] reset stale jobs: %v", err)
-	}
-
+	// Mark ALL previously pending/running jobs as failed.
+	// We intentionally DO NOT resume interrupted generations: re-running
+	// processJob from scratch created duplicate courses on every restart,
+	// wasting LLM credits and producing runaway module counts. If a job
+	// was interrupted, the user can manually re-trigger generation.
 	rows, err := s.db.ListActiveGenerationJobs(ctx)
 	if err != nil {
 		log.Printf("[jobstore] list active jobs: %v", err)
 		return
 	}
-
 	for _, row := range rows {
-		job := dbRowToJob(row, s.db)
-		s.mu.Lock()
-		s.inFlightMap[job.ID] = job
-		s.mu.Unlock()
-		log.Printf("[jobstore] recovered job %s (%s)", job.ID, job.Status)
-		worker.enqueue(job)
+		msg := "cancelled: server restarted during generation"
+		if row.CourseID != nil {
+			msg = fmt.Sprintf("interrupted during generation; partial course #%d was kept", *row.CourseID)
+		}
+		log.Printf("[jobstore] cancelling interrupted job %s (%s)", row.ID, msg)
+		s.db.FailGenerationJob(ctx, row.ID, msg)
 	}
 }
 
@@ -242,7 +245,7 @@ func newWorker(store *JobStore, queries *database.Queries, llm *LLMClient, emb *
 	// Recover any jobs that were pending/running when the server last stopped
 	go func() {
 		time.Sleep(500 * time.Millisecond) // let everything initialize
-		store.recoverFromDB(w)
+		store.recoverFromDB()
 	}()
 	return w
 }
@@ -379,6 +382,13 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 		w.failJob(job, "Step 1 failed: no modules found")
 		return
 	}
+
+	// Hard cap to prevent runaway generation from an overly ambitious LLM plan.
+	const maxModules = 25
+	if len(coursePlan.Modules) > maxModules {
+		log.Printf("[worker] job %s step1: clamping %d modules to %d", job.ID, len(coursePlan.Modules), maxModules)
+		coursePlan.Modules = coursePlan.Modules[:maxModules]
+	}
 	log.Printf("[worker] job %s step1: %d modules", job.ID, len(coursePlan.Modules))
 
 	// --- Build source refs (course-level, from broad retrieval) ---
@@ -477,11 +487,12 @@ func buildChunkContext(chunks []database.SearchDocumentChunksRow) string {
 }
 
 // generateModule runs the per-module pipeline (retrieval → sections → content → questions)
-// for a single module. Designed to run concurrently across modules via errgroup.
+// for a single module. Each section gets its content written, then 1-3 questions are
+// generated about that section. Items are stored interleaved: content, q1, q2, content, q3...
 func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, mi int, modPlan planModule, totalModules int) (gin.H, error) {
 	moduleLabel := fmt.Sprintf("%d/%d", mi+1, totalModules)
 
-	// --- Per-module retrieval: embed this module's title + description ---
+	// --- Per-module retrieval ---
 	job.addStep("retrieving", fmt.Sprintf("Finding source material for Module %s — %s...", moduleLabel, modPlan.Title))
 	modEmb, err := w.emb.Embed([]string{modPlan.Title + ". " + modPlan.Description})
 	if err != nil {
@@ -511,8 +522,8 @@ func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseI
 		return nil, fmt.Errorf("Failed to create module %d", mi+1)
 	}
 
-	// --- STEP 2a: Section Lister ---
-	job.addStep("writing", fmt.Sprintf("Step 2/3: Analyzing structure for Module %s — %s...", moduleLabel, modPlan.Title))
+	// --- Step 2a: Section Lister ---
+	job.addStep("writing", fmt.Sprintf("Analyzing structure for Module %s — %s...", moduleLabel, modPlan.Title))
 
 	sectionPrompt := fmt.Sprintf(`Course: %s — %s
 Module: "%s" — %s
@@ -533,10 +544,22 @@ List 3-5 key sections that comprehensively break down this module's content.`,
 		sectionTitles = []string{modPlan.Title}
 	}
 
-	// --- STEP 2b: Per-section content writer ---
-	var allContent strings.Builder
+	// --- Step 2b+3: Per-section content + interleaved questions ---
+	// Each section gets its content written, then 1-3 questions generated about
+	// that section. Items are stored interleaved: content, q1, q2, content, q3, ...
+	// This replaces the old approach of batching all content then all 8 questions.
+	itemsResult := make([]gin.H, 0)
+	sortOrder := int32(0)
+
+	allowedTypes := map[string]bool{
+		"mc": true, "ma": true, "tf": true, "fb": true, "sa": true,
+		"matching": true, "drag_sort": true, "hotspot": true,
+		"sequence": true, "scale": true,
+	}
+
 	for si, secTitle := range sectionTitles {
-		job.addStep("writing", fmt.Sprintf("Step 2/3: Writing section %d/%d of Module %s — %s...",
+		// --- Write content for this section ---
+		job.addStep("writing", fmt.Sprintf("Writing section %d/%d of Module %s — %s...",
 			si+1, len(sectionTitles), moduleLabel, secTitle))
 
 		contentPrompt := fmt.Sprintf(`Course: %s — %s
@@ -549,118 +572,89 @@ Write exhaustive, faithful teaching content for this section.`,
 
 		secContent, err := w.llm.Chat(moduleSectionWriterPrompt, contentPrompt)
 		if err != nil {
-			log.Printf("[worker] step2b (m%d s%d): %v", mi+1, si+1, err)
-			return nil, fmt.Errorf("Step 2b failed for module %d section %d", mi+1, si+1)
+			log.Printf("[worker] content (m%d s%d): %v", mi+1, si+1, err)
+			return nil, fmt.Errorf("Content generation failed for module %d section %d", mi+1, si+1)
 		}
 
+		// Store content item
+		sectionBody := strings.TrimSpace(secContent)
 		if len(sectionTitles) > 1 {
-			allContent.WriteString(fmt.Sprintf("\n### %s\n\n", secTitle))
+			sectionBody = fmt.Sprintf("### %s\n\n%s", secTitle, sectionBody)
 		}
-		allContent.WriteString(strings.TrimSpace(secContent))
-		allContent.WriteString("\n\n")
-	}
-	rawContent := strings.TrimSpace(allContent.String())
-
-	// --- STEP 3: Question generator ---
-	job.addStep("packaging", fmt.Sprintf("Step 3/3: Generating assessment for Module %s...", moduleLabel))
-
-	contentSummary := rawContent
-	if len(contentSummary) > 2500 {
-		contentSummary = contentSummary[:2500] + "\n\n[... content continues for " +
-			fmt.Sprintf("%d", len(rawContent)-2500) + " more characters ...]"
-	}
-
-	questionPrompt := fmt.Sprintf(`Module: "%s" — %s
-
-Content Summary (full content is %d characters total):
-%s
-
-Based on the concepts covered above, generate exactly 8 assessment items as a JSON array, using these formats in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.`,
-		modPlan.Title, modPlan.Description, len(rawContent), contentSummary)
-
-	questionResp, err := w.llm.Chat(questionGenPrompt, questionPrompt)
-	if err != nil {
-		log.Printf("[worker] step3 (module %d): %v", mi+1, err)
-		return nil, fmt.Errorf("Step 3 failed for module %d", mi+1)
-	}
-
-	questionJSON := stripMarkdownFences(questionResp)
-	var questions []genItem
-	if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
-		log.Printf("[worker] step3 parse questions (module %d): %v", mi+1, err)
-		repairPrompt := fmt.Sprintf(`The previous response was invalid JSON. Repair it into ONLY a valid JSON array of exactly 8 assessment items using these types in order: mc, ma, tf, fb, matching, drag_sort, hotspot, sa.
-
-Invalid response:
-%s
-
-Output ONLY the repaired JSON array.`, questionResp)
-		repairedResp, repairErr := w.llm.Chat(questionGenPrompt, repairPrompt)
-		if repairErr != nil {
-			log.Printf("[worker] step3 repair questions (module %d): %v", mi+1, repairErr)
-			return nil, fmt.Errorf("Step 3 failed: bad question JSON for module %d", mi+1)
+		contentData, err := json.Marshal(map[string]string{"body": sectionBody})
+		if err != nil {
+			return nil, fmt.Errorf("Content encoding error for module %d section %d", mi+1, si+1)
 		}
-		questionJSON = stripMarkdownFences(repairedResp)
-		if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
-			log.Printf("[worker] step3 repaired JSON still invalid (module %d): %v", mi+1, err)
-			return nil, fmt.Errorf("Step 3 failed: bad question JSON for module %d", mi+1)
-		}
-	}
-	if len(questions) == 0 {
-		log.Printf("[worker] step3 empty question array (module %d)", mi+1)
-		return nil, fmt.Errorf("Step 3 failed: no questions for module %d", mi+1)
-	}
-
-	contentData, err := json.Marshal(map[string]string{"body": rawContent})
-	if err != nil {
-		return nil, fmt.Errorf("Content encoding error for module %d", mi+1)
-	}
-
-	itemsResult := make([]gin.H, 0, 1+len(questions))
-	ciContent, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
-		CourseID:  courseID,
-		ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
-		ItemType:  "content",
-		SortOrder: 0,
-		Data:      []byte(contentData),
-	})
-	if err == nil {
-		itemsResult = append(itemsResult, gin.H{
-			"id": ciContent.ID, "item_type": "content", "sort_order": 0,
-			"data": json.RawMessage(contentData),
-		})
-	} else {
-		log.Printf("[worker] create content item (module %d): %v", mi+1, err)
-	}
-
-	// Allowed item types per the course_items check constraint.
-	allowedTypes := map[string]bool{
-		"mc": true, "ma": true, "tf": true, "fb": true, "sa": true,
-		"matching": true, "drag_sort": true, "hotspot": true,
-		"sequence": true, "scale": true,
-	}
-
-	for qi, q := range questions {
-		qType := strings.ToLower(strings.TrimSpace(q.Type))
-		if !allowedTypes[qType] {
-			log.Printf("[worker] step3 unknown item_type %q (module %d, q %d) — defaulting to mc", q.Type, mi+1, qi+1)
-			qType = "mc"
-		}
-		sort := int32(qi + 1)
-		ci, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
+		ciContent, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
 			CourseID:  courseID,
 			ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
-			ItemType:  qType,
-			SortOrder: sort,
-			Data:      []byte(q.Data),
+			ItemType:  "content",
+			SortOrder: sortOrder,
+			Data:      []byte(contentData),
 		})
+		if err == nil {
+			itemsResult = append(itemsResult, gin.H{
+				"id": ciContent.ID, "item_type": "content", "sort_order": sortOrder,
+				"data": json.RawMessage(contentData),
+			})
+			sortOrder++
+		} else {
+			log.Printf("[worker] create content item (module %d section %d): %v", mi+1, si+1, err)
+		}
+
+		// --- Generate 1-3 questions about this section ---
+		job.addStep("writing", fmt.Sprintf("Creating questions for section %d/%d of Module %s...",
+			si+1, len(sectionTitles), moduleLabel))
+
+		contentSummary := sectionBody
+		if len(contentSummary) > 2000 {
+			contentSummary = contentSummary[:2000]
+		}
+
+		questionPrompt := fmt.Sprintf(`Section: "%s"
+
+Content:
+%s
+
+Generate 1-3 assessment items that test understanding of THIS section.`, secTitle, contentSummary)
+
+		questionResp, err := w.llm.Chat(perSectionQuestionPrompt, questionPrompt)
 		if err != nil {
-			log.Printf("[worker] create question item (module %d, q %d): %v", mi+1, qi+1, err)
+			log.Printf("[worker] questions (m%d s%d): %v", mi+1, si+1, err)
+			// Non-fatal: continue to next section even if questions fail
 			continue
 		}
-		itemsResult = append(itemsResult, gin.H{
-			"id": ci.ID, "item_type": qType, "sort_order": sort,
-			"data": q.Data,
-		})
+
+		questionJSON := stripMarkdownFences(questionResp)
+		var questions []genItem
+		if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
+			log.Printf("[worker] parse questions (m%d s%d): %v — skipping questions", mi+1, si+1, err)
+			continue
+		}
+
+		for _, q := range questions {
+			qType := strings.ToLower(strings.TrimSpace(q.Type))
+			if !allowedTypes[qType] {
+				log.Printf("[worker] unknown item_type %q (m%d s%d) — defaulting to mc", q.Type, mi+1, si+1)
+				qType = "mc"
+			}
+			ci, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
+				CourseID:  courseID,
+				ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
+				ItemType:  qType,
+				SortOrder: sortOrder,
+				Data:      []byte(q.Data),
+			})
+			if err != nil {
+				log.Printf("[worker] create question (m%d s%d): %v", mi+1, si+1, err)
+				continue
+			}
+			itemsResult = append(itemsResult, gin.H{
+				"id": ci.ID, "item_type": qType, "sort_order": sortOrder,
+				"data": q.Data,
+			})
+			sortOrder++
+		}
 	}
 
 	modResult := gin.H{
