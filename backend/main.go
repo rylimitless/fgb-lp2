@@ -12,6 +12,7 @@ import (
 	"fgb-lp/departments"
 	"fgb-lp/documents"
 	"fgb-lp/gamification"
+	homehandler "fgb-lp/home_handler"
 	"fgb-lp/lessons"
 	"fgb-lp/middlewares"
 	"fgb-lp/notifications"
@@ -56,7 +57,7 @@ func main() {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3038", "https://fgbacademy.rybuildstuff.dev", "https://fgbguide.rybuildstuff.dev"},
+		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3038", "https://fgbacademy.rybuildstuff.dev", "https://fgbguide.rybuildstuff.dev", "https://98fe-173-225-243-241.ngrok-free.app"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -206,6 +207,9 @@ func main() {
 
 	notifHandler := notifications.NewHandler(queries)
 	notifHandler.RegisterRoutes(protected)
+
+	dashHandler := homehandler.NewDashboardHandler(dbpool)
+	protected.GET("/dashboard", dashHandler.GetDashboard)
 
 	userHandler := users.NewHandler(queries)
 	userHandler.RegisterRoutes(adminGroup)

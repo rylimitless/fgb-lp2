@@ -10,7 +10,7 @@ COPY . .
 
 # 3. Tidy and build the binary (better than 'go run' for production)
 RUN go mod tidy
-RUN go build
+RUN go build .
 EXPOSE 5555
 
 # 4. Run the compiled binary

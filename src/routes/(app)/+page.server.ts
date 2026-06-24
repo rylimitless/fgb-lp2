@@ -9,6 +9,7 @@ export const load: PageServerLoad = async (event) => {
     reviewCoursesRes,
     streakRes,
     scoreRes,
+    dashRes,
   ] = await Promise.all([
     apiFetch(event, "/api/documents"),
     apiFetch(event, "/api/courses"),
@@ -16,6 +17,7 @@ export const load: PageServerLoad = async (event) => {
     apiFetch(event, "/api/review/courses?limit=100"),
     apiFetch(event, "/api/gamification/streak"),
     apiFetch(event, "/api/gamification/score"),
+    apiFetch(event, "/api/dashboard"),
   ]);
 
   const docs = docsRes.ok ? await docsRes.json() : [];
@@ -57,6 +59,16 @@ export const load: PageServerLoad = async (event) => {
     /* ignore */
   }
 
+  // Dashboard aggregated data
+  let dashboard = null;
+  try {
+    if (dashRes.ok) {
+      dashboard = await dashRes.json();
+    }
+  } catch {
+    /* ignore */
+  }
+
   const approvedDocs = docs.filter((d: any) => d.approved);
   const publishedCourses = courses.filter(
     (c: any) => c.status === "published" && c.approved,
@@ -77,5 +89,6 @@ export const load: PageServerLoad = async (event) => {
       streakDays,
       totalScore,
     },
+    dashboard,
   };
 };

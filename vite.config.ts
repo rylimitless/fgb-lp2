@@ -16,7 +16,11 @@ export default defineConfig({
   ],
   server: {
     host: "0.0.0.0",
-    allowedHosts: ["fgbacademy.rybuildstuff.dev", "fgbguide.rybuildstuff.dev"],
+    allowedHosts: [
+      "fgbacademy.rybuildstuff.dev",
+      "fgbguide.rybuildstuff.dev",
+      "98fe-173-225-243-241.ngrok-free.app",
+    ],
 
     port: 5173,
     hmr: {
@@ -28,8 +32,6 @@ export default defineConfig({
     watch: {
       usePolling: true,
       interval: 300,
-      
-      
     },
     proxy: {
       "/api": {

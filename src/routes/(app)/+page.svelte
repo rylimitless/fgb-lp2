@@ -107,20 +107,41 @@
         Math.round((((stats.theta + 3) / 6) * 100) % 100) || 62,
     );
 
-    // Continue learning
-    let continueCourse = $derived(inProgressCourses[0]);
+    // Continue learning — live from dashboard, with derived fallback
+    let continueCourse = $derived(
+        data.dashboard?.continue_learning
+            ? ({
+                  id: data.dashboard.continue_learning.id,
+                  title: data.dashboard.continue_learning.title,
+                  progress: {
+                      current_module:
+                          data.dashboard.continue_learning.current_module,
+                      completed: false,
+                  },
+                  image: data.dashboard.continue_learning.image,
+              } as any)
+            : inProgressCourses[0],
+    );
     let continueTitle = $derived(
         continueCourse?.title ?? "Information Security Awareness",
     );
     let continuePct = $derived(
-        continueCourse?.progress?.current_module !== undefined
-            ? Math.min(
-                  Math.round(
-                      (continueCourse.progress.current_module / 5) * 100,
-                  ),
-                  92,
-              )
-            : 65,
+        data.dashboard?.continue_learning?.progress_pct ??
+            (continueCourse?.progress?.current_module !== undefined
+                ? Math.min(
+                      Math.round(
+                          (continueCourse.progress.current_module / 5) * 100,
+                      ),
+                      92,
+                  )
+                : 65),
+    );
+    let continueImage = $derived(
+        data.dashboard?.continue_learning?.image ??
+            "/brand/modules/information-security.png",
+    );
+    let continueCourseId = $derived(
+        data.dashboard?.continue_learning?.id ?? null,
     );
 
     // Pathway image resolver (shared convention)
@@ -177,32 +198,67 @@
                 image: pathImg(c.title),
             })),
     );
-    let recommended = $derived(realRecs.length >= 3 ? realRecs : showcaseRecs);
+    // Recommended (real, else dashboard, else showcase trio)
+    let recommended = $derived(
+        data.dashboard?.recommended?.length
+            ? data.dashboard.recommended
+            : realRecs.length >= 3
+              ? realRecs
+              : showcaseRecs,
+    );
 
-    // Learning path (showcase — reference: Leadership Excellence Path)
-    const learningPath = [
-        { label: "Foundations of Leadership", status: "Completed" },
-        { label: "Emotional Intelligence", status: "Completed" },
-        { label: "Strategic Thinking", status: "In Progress" },
-        { label: "Leading High Performing Teams", status: "Locked" },
-        { label: "Change Leadership", status: "Locked" },
-    ];
+    // Learning path — live from dashboard, with showcase fallback
+    let learningPath = $derived(
+        data.dashboard?.learning_path?.length
+            ? data.dashboard.learning_path
+            : [
+                  { label: "Foundations of Leadership", status: "Completed" },
+                  { label: "Emotional Intelligence", status: "Completed" },
+                  { label: "Strategic Thinking", status: "In Progress" },
+                  { label: "Leading High Performing Teams", status: "Locked" },
+                  { label: "Change Leadership", status: "Locked" },
+              ],
+    );
 
-    // Achievements (showcase, tier-styled)
-    let achievements = $derived([
-        { label: "Quick Learner", tier: "gold" as const, icon: Zap },
-        ...(gamification.streakDays >= 7
-            ? [
+    // Achievements — live from dashboard, with derived fallback
+    const iconMap: Record<string, typeof Zap> = {
+        zap: Zap,
+        flame: Flame,
+        "book-open": BookOpen,
+        users: Users,
+    };
+    let achievements = $derived(
+        data.dashboard?.achievements?.length
+            ? data.dashboard.achievements.map(
+                  (a: { label: string; tier: string; icon: string }) => ({
+                      label: a.label,
+                      tier: a.tier as "gold" | "silver" | "bronze",
+                      icon: iconMap[a.icon] ?? Zap,
+                  }),
+              )
+            : [
+                  { label: "Quick Learner", tier: "gold" as const, icon: Zap },
+                  ...(gamification.streakDays >= 7
+                      ? [
+                            {
+                                label: `${gamification.streakDays}-Day Streak`,
+                                tier: "silver" as const,
+                                icon: Flame,
+                            },
+                        ]
+                      : []),
                   {
-                      label: `${gamification.streakDays}-Day Streak`,
-                      tier: "silver" as const,
-                      icon: Flame,
+                      label: "Knowledge Explorer",
+                      tier: "gold" as const,
+                      icon: BookOpen,
                   },
-              ]
-            : []),
-        { label: "Knowledge Explorer", tier: "gold" as const, icon: BookOpen },
-        { label: "Team Player", tier: "bronze" as const, icon: Users },
-    ]);
+                  {
+                      label: "Team Player",
+                      tier: "bronze" as const,
+                      icon: Users,
+                  },
+              ],
+    );
 
     // Leaderboard (loaded client-side for live data)
     let leaderboard = $state([
@@ -230,56 +286,105 @@
         leaderboardLoading = false;
     }
 
-    const deadlines = [
-        {
-            title: "AML Compliance Refresher",
-            due: "Due in 3 days",
-            icon: Clock,
-        },
-        { title: "Data Privacy Assessment", due: "Due in 5 days", icon: Clock },
-    ];
-    const whatsNew = [
-        {
-            title: "Sustainable Banking Principles",
-            meta: "Just added",
-            icon: Sparkles,
-        },
-        {
-            title: "Digital Transformation Path",
-            meta: "Recommended for you",
-            icon: TrendingUp,
-        },
-    ];
-    const featuredLearning = [
-        "Information Security Awareness",
-        "Fraud Detection Essentials",
-        "Customer Experience Excellence",
-        "Leading Effective Teams",
-        "Data Protection Principles",
-        "Compliance Fundamentals",
-    ];
+    // Deadlines — live from dashboard, with showcase fallback
+    const deadlineIconMap: Record<string, typeof Clock> = {
+        clock: Clock,
+    };
+    let deadlines = $derived(
+        data.dashboard?.deadlines?.length
+            ? data.dashboard.deadlines.map(
+                  (d: { title: string; due: string; icon: string }) => ({
+                      title: d.title,
+                      due: d.due,
+                      icon: deadlineIconMap[d.icon] ?? Clock,
+                  }),
+              )
+            : [
+                  {
+                      title: "AML Compliance Refresher",
+                      due: "Due in 3 days",
+                      icon: Clock,
+                  },
+                  {
+                      title: "Data Privacy Assessment",
+                      due: "Due in 5 days",
+                      icon: Clock,
+                  },
+              ],
+    );
 
-    const weeklyBars = [40, 65, 50, 80, 60, 90, 75];
+    const whatsNewIconMap: Record<string, typeof Sparkles> = {
+        sparkles: Sparkles,
+        "trending-up": TrendingUp,
+    };
+    let whatsNew = $derived(
+        data.dashboard?.whats_new?.length
+            ? data.dashboard.whats_new.map(
+                  (w: { title: string; meta: string; icon: string }) => ({
+                      title: w.title,
+                      meta: w.meta,
+                      icon: whatsNewIconMap[w.icon] ?? Sparkles,
+                  }),
+              )
+            : [
+                  {
+                      title: "Sustainable Banking Principles",
+                      meta: "Just added",
+                      icon: Sparkles,
+                  },
+                  {
+                      title: "Digital Transformation Path",
+                      meta: "Recommended for you",
+                      icon: TrendingUp,
+                  },
+              ],
+    );
+    let featuredLearning = $derived(
+        data.dashboard?.featured_learning?.length
+            ? data.dashboard.featured_learning
+            : [
+                  "Information Security Awareness",
+                  "Fraud Detection Essentials",
+                  "Customer Experience Excellence",
+                  "Leading Effective Teams",
+                  "Data Protection Principles",
+                  "Compliance Fundamentals",
+              ],
+    );
+
+    let weeklyBars = $derived(
+        data.dashboard?.weekly_activity?.length === 7
+            ? data.dashboard.weekly_activity
+            : [40, 65, 50, 80, 60, 90, 75],
+    );
 
     // ---- Skill radar (Chart.js) ----
     let radarCanvas = $state<HTMLCanvasElement>();
     onMount(() => {
         fetchLeaderboard();
         if (!radarCanvas) return;
+        const skillData = data.dashboard?.skill_radar;
+        const labels = skillData?.labels?.length
+            ? skillData.labels
+            : [
+                  "Leadership",
+                  "Communication",
+                  "Problem Solving",
+                  "Strategic Thinking",
+                  "Adaptability",
+              ];
+        const values =
+            skillData?.data?.length === labels.length
+                ? skillData.data
+                : [85, 70, 75, 80, 60];
         const chart = new Chart(radarCanvas, {
             type: "radar",
             data: {
-                labels: [
-                    "Leadership",
-                    "Communication",
-                    "Problem Solving",
-                    "Strategic Thinking",
-                    "Adaptability",
-                ],
+                labels,
                 datasets: [
                     {
                         label: "Skill level",
-                        data: [85, 70, 75, 80, 60],
+                        data: values,
                         backgroundColor: "#00548e22",
                         borderColor: "#00548e",
                         borderWidth: 2,
@@ -556,12 +661,17 @@
         <div class="lg:col-span-2 motion-rise-in motion-stagger-1">
             <button
                 class="group relative h-full w-full overflow-hidden rounded-3xl border border-border bg-card text-left lift press"
-                onclick={() => goto("/lesson-player")}
+                onclick={() =>
+                    goto(
+                        continueCourseId
+                            ? `/lesson-player?id=${continueCourseId}`
+                            : "/lesson-player",
+                    )}
             >
                 <BorderBeam size={140} duration={9} color="var(--accent)" />
                 <div class="relative aspect-[16/10] w-full overflow-hidden">
                     <img
-                        src="/brand/modules/information-security.png"
+                        src={continueImage}
                         alt=""
                         class="size-full object-cover transition-transform duration-500 group-hover:scale-105"
                         onerror={(e) =>
@@ -639,7 +749,12 @@
                     <button
                         class="group flex flex-col overflow-hidden rounded-2xl border border-border bg-surface-1 text-left lift press motion-rise-in"
                         style="animation-delay: {i * 60}ms"
-                        onclick={() => goto("/lesson-player")}
+                        onclick={() =>
+                            goto(
+                                rec.id
+                                    ? `/lesson-player?id=${rec.id}`
+                                    : "/lesson-player",
+                            )}
                     >
                         <div
                             class="relative aspect-video w-full overflow-hidden"
