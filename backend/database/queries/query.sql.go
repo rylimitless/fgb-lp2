@@ -1924,6 +1924,55 @@ func (q *Queries) SearchPublishedCourses(ctx context.Context, arg SearchPublishe
 	return items, nil
 }
 
+const updateCourseItemData = `-- name: UpdateCourseItemData :one
+update course_items set data = $2 where id = $1 returning id, course_id, module_id, item_type, sort_order, data, created_at
+`
+
+type UpdateCourseItemDataParams struct {
+	ID   int64  `json:"id"`
+	Data []byte `json:"data"`
+}
+
+func (q *Queries) UpdateCourseItemData(ctx context.Context, arg UpdateCourseItemDataParams) (CourseItem, error) {
+	row := q.db.QueryRow(ctx, updateCourseItemData, arg.ID, arg.Data)
+	var i CourseItem
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.ModuleID,
+		&i.ItemType,
+		&i.SortOrder,
+		&i.Data,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateCourseItemModule = `-- name: UpdateCourseItemModule :one
+update course_items set module_id = $2, sort_order = $3 where id = $1 returning id, course_id, module_id, item_type, sort_order, data, created_at
+`
+
+type UpdateCourseItemModuleParams struct {
+	ID        int64       `json:"id"`
+	ModuleID  pgtype.Int8 `json:"module_id"`
+	SortOrder int32       `json:"sort_order"`
+}
+
+func (q *Queries) UpdateCourseItemModule(ctx context.Context, arg UpdateCourseItemModuleParams) (CourseItem, error) {
+	row := q.db.QueryRow(ctx, updateCourseItemModule, arg.ID, arg.ModuleID, arg.SortOrder)
+	var i CourseItem
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.ModuleID,
+		&i.ItemType,
+		&i.SortOrder,
+		&i.Data,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const updateCourseMeta = `-- name: UpdateCourseMeta :one
 update courses set title = $2, description = $3, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
 `

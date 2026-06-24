@@ -155,10 +155,10 @@ func (w *Worker) processDocument(ctx context.Context, doc database.Document) err
 
 	// Mark as ready (auto-approve)
 	_, err = w.queries.UpdateDocumentStatus(ctx, database.UpdateDocumentStatusParams{
-		ID:           doc.ID,
-		Status:       "ready",
-		Approved:     pgtype.Bool{Bool: true, Valid: true},
-		ReviewStatus: pgtype.Text{String: "approved", Valid: true},
+		ID:     doc.ID,
+		Status: "ready",
+		// Approved:     pgtype.Bool{Bool: false, Valid: true},
+		ReviewStatus: pgtype.Text{String: "pending", Valid: true},
 	})
 	if err != nil {
 		return fmt.Errorf("mark ready: %w", err)

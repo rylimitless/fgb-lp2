@@ -6,6 +6,13 @@ insert into users (email, password_hash, name, role)
 values ($1, $2, $3, $4)
 returning *;
 
+
+-- name: UpdateCourseItemData :one
+update course_items set data = $2 where id = $1 returning *;
+
+-- name: UpdateCourseItemModule :one
+update course_items set module_id = $2, sort_order = $3 where id = $1 returning *;
+
 -- name: GetUserByEmail :one
 select * from users where email = $1;
 
