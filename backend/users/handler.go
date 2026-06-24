@@ -253,8 +253,68 @@ func (h *Handler) getUserRoles(c *gin.Context, userID int64) []string {
 }
 
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
-	r.GET("/admin/users", h.ListUsers)
 	r.POST("/admin/users", h.CreateUser)
 	r.PUT("/admin/users/:id/roles", h.UpdateUserRoles)
 	r.DELETE("/admin/users/:id", h.DeleteUser)
+}
+
+// RegisterListRoute exposes user listing to admin+manager (read-only).
+func (h *Handler) RegisterListRoute(r *gin.RouterGroup) {
+	r.GET("/admin/users", h.ListUsers)
+}
+
+// AdminEnrollUser lets an admin or manager assign a course to a user.
+func (h *Handler) AdminEnrollUser(c *gin.Context) {
+	var body struct {
+		UserID   int64 `json:"user_id" binding:"required"`
+		CourseID int64 `json:"course_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Verify user exists
+	targetUser, err := h.Queries.GetUserByID(c.Request.Context(), body.UserID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	// Verify course exists
+	course, err := h.Queries.GetCourseByID(c.Request.Context(), body.CourseID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	// Enroll the user (no-op if already enrolled)
+	err = h.Queries.EnrollInCourse(c.Request.Context(),
+		database.EnrollInCourseParams{UserID: body.UserID, CourseID: body.CourseID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll user"})
+		return
+	}
+
+	audit.Log(h.Queries, c, "user_enrolled_in_course", map[string]any{
+		"target_user_id":    body.UserID,
+		"target_user_name":  targetUser.Name,
+		"target_user_email": targetUser.Email,
+		"course_id":         body.CourseID,
+		"course_title":      course.Title,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "User enrolled",
+		"user_id":      body.UserID,
+		"user_name":    targetUser.Name,
+		"course_id":    body.CourseID,
+		"course_title": course.Title,
+	})
+}
+
+// RegisterEnrollRoutes registers the enrollment endpoint under a group
+// that allows both admin and manager roles.
+func (h *Handler) RegisterEnrollRoutes(r *gin.RouterGroup) {
+	r.POST("/admin/enrollments", h.AdminEnrollUser)
 }

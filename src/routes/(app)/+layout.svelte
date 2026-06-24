@@ -25,6 +25,7 @@
         LifeBuoy,
         Menu,
         X,
+        Building2,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
@@ -107,6 +108,12 @@
             icon: Users,
             href: "/user-management",
             roles: ["admin"],
+        },
+        {
+            label: "Departments",
+            icon: Building2,
+            href: "/department-management",
+            roles: ["admin", "manager"],
         },
         {
             label: "Audit Log",

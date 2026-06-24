@@ -45,6 +45,10 @@ type GenerationJob struct {
 	subs map[subscriber]struct{}
 	mu   sync.RWMutex
 
+	// Cancellation support.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// DB-backed state: used to persist progress
 	db       *database.Queries
 	courseID *int64
@@ -65,6 +69,15 @@ func (j *GenerationJob) unsubscribe(ch subscriber) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	delete(j.subs, ch)
+}
+
+func (j *GenerationJob) isCancelled() bool {
+	select {
+	case <-j.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func (j *GenerationJob) broadcast(event SSEEvent) {
@@ -154,6 +167,26 @@ func (s *JobStore) get(id JobID) *GenerationJob {
 		return nil
 	}
 	return dbRowToJob(row, s.db)
+}
+
+// CancelJob cancels a running job by ID. Returns true if the job was found and cancelled.
+func (s *JobStore) CancelJob(id JobID) bool {
+	s.mu.RLock()
+	job := s.inFlightMap[id]
+	s.mu.RUnlock()
+	if job == nil {
+		return false
+	}
+	job.mu.Lock()
+	if job.Status != "running" && job.Status != "pending" {
+		job.mu.Unlock()
+		return false
+	}
+	job.mu.Unlock()
+	if job.cancel != nil {
+		job.cancel()
+	}
+	return true
 }
 
 func (s *JobStore) listActive() []*GenerationJob {
@@ -299,8 +332,10 @@ func (w *Worker) completeJob(job *GenerationJob, result gin.H, courseID int64) {
 func (w *Worker) processJob(job *GenerationJob) {
 	job.mu.Lock()
 	job.Status = "running"
+	job.ctx, job.cancel = context.WithCancel(context.Background())
 	reqTitle := job.Request.Title
 	job.mu.Unlock()
+	defer job.cancel() // clean up context
 	w.queries.StartGenerationJob(context.Background(), string(job.ID))
 
 	// Notify admins that generation has started
@@ -324,6 +359,10 @@ func (w *Worker) processJob(job *GenerationJob) {
 	}
 
 	// --- Embed the course description (used for broad outline retrieval) ---
+	if job.isCancelled() {
+		w.failJob(job, "Cancelled")
+		return
+	}
 	job.addStep("embedding", "Analyzing your course description...")
 	embeddings, err := w.emb.Embed([]string{req.Description})
 	if err != nil {
@@ -353,6 +392,10 @@ func (w *Worker) processJob(job *GenerationJob) {
 	// =====================================================================
 	// STEP 1: COURSE OUTLINER
 	// =====================================================================
+	if job.isCancelled() {
+		w.failJob(job, "Cancelled")
+		return
+	}
 	job.addStep("planning", "Step 1/3: Creating course outline and module structure...")
 	log.Printf("[worker] job %s STEP 1 (outliner): %s", job.ID, req.Title)
 
@@ -434,16 +477,20 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 	// the same handful of chunks. modulesResult is indexed by module position
 	// so final ordering is preserved regardless of completion order.
 	// =====================================================================
+	if job.isCancelled() {
+		w.failJob(job, "Cancelled")
+		return
+	}
 	totalModules := len(coursePlan.Modules)
 	modulesResult := make([]gin.H, totalModules)
 
-	g, gctx := errgroup.WithContext(context.Background())
+	g, gctx := errgroup.WithContext(job.ctx)
 	g.SetLimit(moduleConcurrency)
 
 	for mi, modPlan := range coursePlan.Modules {
 		mi, modPlan := mi, modPlan
 		g.Go(func() error {
-			modResult, err := w.generateModule(gctx, job, courseID, coursePlan, mi, modPlan, totalModules)
+			modResult, err := w.generateModule(gctx, job, courseID, coursePlan, mi, modPlan, totalModules, req.QuestionTypes)
 			if err != nil {
 				return err
 			}
@@ -489,7 +536,7 @@ func buildChunkContext(chunks []database.SearchDocumentChunksRow) string {
 // generateModule runs the per-module pipeline (retrieval → sections → content → questions)
 // for a single module. Each section gets its content written, then 1-3 questions are
 // generated about that section. Items are stored interleaved: content, q1, q2, content, q3...
-func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, mi int, modPlan planModule, totalModules int) (gin.H, error) {
+func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, mi int, modPlan planModule, totalModules int, questionTypes []string) (gin.H, error) {
 	moduleLabel := fmt.Sprintf("%d/%d", mi+1, totalModules)
 
 	// --- Per-module retrieval ---
@@ -523,6 +570,9 @@ func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseI
 	}
 
 	// --- Step 2a: Section Lister ---
+	if job.isCancelled() {
+		return nil, fmt.Errorf("Cancelled")
+	}
 	job.addStep("writing", fmt.Sprintf("Analyzing structure for Module %s — %s...", moduleLabel, modPlan.Title))
 
 	sectionPrompt := fmt.Sprintf(`Course: %s — %s
@@ -551,13 +601,31 @@ List 3-5 key sections that comprehensively break down this module's content.`,
 	itemsResult := make([]gin.H, 0)
 	sortOrder := int32(0)
 
-	allowedTypes := map[string]bool{
-		"mc": true, "ma": true, "tf": true, "fb": true, "sa": true,
-		"matching": true, "drag_sort": true, "hotspot": true,
-		"sequence": true, "scale": true,
+	// Build allowed question types from the request (empty = allow all).
+	allKnownTypes := map[string]string{
+		"mc": "multiple choice", "ma": "multiple answer", "tf": "true/false",
+		"fb": "fill-in-the-blank", "sa": "short answer", "matching": "matching",
+		"drag_sort": "drag and sort", "hotspot": "hotspot",
+	}
+	allowedTypes := make(map[string]bool)
+	if len(questionTypes) == 0 {
+		for k := range allKnownTypes {
+			allowedTypes[k] = true
+		}
+	} else {
+		for _, qt := range questionTypes {
+			qt = strings.ToLower(strings.TrimSpace(qt))
+			if _, ok := allKnownTypes[qt]; ok {
+				allowedTypes[qt] = true
+			}
+		}
 	}
 
 	for si, secTitle := range sectionTitles {
+		// Check for cancellation before each section.
+		if job.isCancelled() {
+			return nil, fmt.Errorf("Cancelled")
+		}
 		// --- Write content for this section ---
 		job.addStep("writing", fmt.Sprintf("Writing section %d/%d of Module %s — %s...",
 			si+1, len(sectionTitles), moduleLabel, secTitle))
@@ -611,12 +679,22 @@ Write exhaustive, faithful teaching content for this section.`,
 			contentSummary = contentSummary[:2000]
 		}
 
+		// Build type restriction for the prompt.
+		typeList := make([]string, 0, len(allowedTypes))
+		for k := range allowedTypes {
+			typeList = append(typeList, fmt.Sprintf("%s (%s)", k, allKnownTypes[k]))
+		}
+		var typeRestriction string
+		if len(typeList) < len(allKnownTypes) {
+			typeRestriction = fmt.Sprintf("\n\nCRITICAL: ONLY use these question types: %s. Do NOT use any other types.", strings.Join(typeList, ", "))
+		}
+
 		questionPrompt := fmt.Sprintf(`Section: "%s"
 
 Content:
 %s
 
-Generate 1-3 assessment items that test understanding of THIS section.`, secTitle, contentSummary)
+Generate 1-3 assessment items that test understanding of THIS section.%s`, secTitle, contentSummary, typeRestriction)
 
 		questionResp, err := w.llm.Chat(perSectionQuestionPrompt, questionPrompt)
 		if err != nil {

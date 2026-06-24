@@ -72,6 +72,12 @@ type CourseScore struct {
 	CompletedAt pgtype.Timestamptz `json:"completed_at"`
 }
 
+type Department struct {
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Document struct {
 	ID           int64              `json:"id"`
 	Title        string             `json:"title"`
@@ -185,6 +191,11 @@ type User struct {
 	Role         string             `json:"role"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserDepartment struct {
+	UserID       int64 `json:"user_id"`
+	DepartmentID int64 `json:"department_id"`
 }
 
 type UserRole struct {

@@ -14,8 +14,11 @@
         MessageSquareText,
         RotateCcw,
         AlertTriangle,
+        Users,
+        Building2,
+        GraduationCap,
     } from "@lucide/svelte";
-    import { PageHeader } from "$lib/components/brand";
+    import { PageHeader, showToast } from "$lib/components/brand";
     import * as Button from "$lib/components/ui/button";
 
     type ContentType = "all" | "document" | "course";
@@ -270,6 +273,86 @@
 
     let totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
 
+    // ---- Enroll Department in Course ----
+    let enrollCourse = $state<any>(null);
+    let enrollDialogOpen = $state(false);
+    let departments = $state<any[]>([]);
+    let deptLoading = $state(false);
+    let selectedDeptId = $state<number | null>(null);
+    let enrollError = $state("");
+    let enrollSaving = $state(false);
+
+    async function openEnroll(item: any) {
+        enrollCourse = item;
+        enrollDialogOpen = true;
+        selectedDeptId = null;
+        enrollError = "";
+        departments = [];
+        deptLoading = true;
+        try {
+            const res = await fetch("/api/admin/departments", {
+                credentials: "include",
+            });
+            if (res.ok) {
+                const deps = await res.json();
+                // Load user count per department
+                const withCounts = await Promise.all(
+                    deps.map(async (d: any) => {
+                        const ur = await fetch(
+                            `/api/admin/departments/${d.id}/users`,
+                            { credentials: "include" },
+                        );
+                        const users = ur.ok ? await ur.json() : [];
+                        return { ...d, user_count: users.length };
+                    }),
+                );
+                departments = withCounts;
+            }
+        } catch {
+            /* ignore */
+        }
+        deptLoading = false;
+    }
+
+    function closeEnroll() {
+        enrollCourse = null;
+        enrollDialogOpen = false;
+        selectedDeptId = null;
+        enrollError = "";
+    }
+
+    async function handleBulkEnroll() {
+        if (!enrollCourse || !selectedDeptId) return;
+        enrollSaving = true;
+        enrollError = "";
+        try {
+            const res = await fetch("/api/admin/departments/bulk-enroll", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    department_id: selectedDeptId,
+                    course_id: enrollCourse.id,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                enrollError = err.error ?? "Enrollment failed";
+                return;
+            }
+            const result = await res.json();
+            showToast(
+                `${result.enrolled_count} user(s) enrolled in "${result.course_title}".`,
+                { title: "Bulk enrollment", variant: "success" },
+            );
+            closeEnroll();
+        } catch {
+            enrollError = "Network error";
+        } finally {
+            enrollSaving = false;
+        }
+    }
+
     $effect(() => {
         loadContent();
     });
@@ -521,6 +604,17 @@
                                             {/if}
                                         </Button.Root>
                                     {/if}
+                                    {#if item.content_type === "course" && item.status === "published"}
+                                        <Button.Root
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            onclick={() => openEnroll(item)}
+                                            class="text-muted-foreground hover:text-accent"
+                                            title="Enroll a department"
+                                        >
+                                            <Users class="size-4" />
+                                        </Button.Root>
+                                    {/if}
                                     <Button.Root
                                         variant="ghost"
                                         size="icon-sm"
@@ -635,6 +729,140 @@
                         {/each}
                     </div>
                 {/if}
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Enroll Department Dialog -->
+{#if enrollCourse && enrollDialogOpen}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onclick={closeEnroll}
+        role="dialog"
+        aria-modal="true"
+    >
+        <div
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4 max-h-[80vh] flex flex-col"
+            onclick={(e: MouseEvent) => e.stopPropagation()}
+        >
+            <div
+                class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0"
+            >
+                <div class="min-w-0">
+                    <h3 class="text-base font-semibold text-foreground">
+                        Enroll Department
+                    </h3>
+                    <p class="text-sm text-muted-foreground mt-0.5 truncate">
+                        Course: {enrollCourse.title}
+                    </p>
+                </div>
+                <Button.Root
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={closeEnroll}
+                    class="shrink-0 ml-3"
+                >
+                    <XCircle class="size-5" />
+                </Button.Root>
+            </div>
+
+            <div class="px-6 py-4 flex flex-col gap-4 overflow-y-auto">
+                {#if enrollError}
+                    <div
+                        class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                    >
+                        <AlertTriangle class="size-3.5 shrink-0" />
+                        <span>{enrollError}</span>
+                    </div>
+                {/if}
+
+                <p class="text-xs text-muted-foreground">
+                    Select a department to enroll all of its members in this
+                    course.
+                </p>
+
+                {#if deptLoading}
+                    <div class="flex justify-center py-8">
+                        <LoaderCircle
+                            class="size-5 text-muted-foreground animate-spin"
+                        />
+                    </div>
+                {:else if departments.length === 0}
+                    <div
+                        class="flex flex-col items-center gap-2 py-8 text-muted-foreground"
+                    >
+                        <Building2 class="size-8" />
+                        <p class="text-sm">No departments yet.</p>
+                        <p class="text-xs">
+                            Create departments in Settings or User Management
+                            first.
+                        </p>
+                    </div>
+                {:else}
+                    <div class="flex flex-col gap-1">
+                        {#each departments as dept (dept.id)}
+                            <button
+                                class="flex items-center gap-3 rounded-lg border px-3.5 py-2.5 text-left transition-colors {selectedDeptId ===
+                                dept.id
+                                    ? 'border-primary bg-primary/5'
+                                    : 'border-border hover:border-muted-foreground/30'}"
+                                onclick={() => (selectedDeptId = dept.id)}
+                            >
+                                <div
+                                    class="size-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0"
+                                >
+                                    <Building2 class="size-4 text-accent" />
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <p
+                                        class="text-sm font-medium text-foreground truncate"
+                                    >
+                                        {dept.name}
+                                    </p>
+                                    <p class="text-xs text-muted-foreground">
+                                        {dept.user_count} member{dept.user_count ===
+                                        1
+                                            ? ""
+                                            : "s"}
+                                    </p>
+                                </div>
+                                <div
+                                    class="size-5 rounded-full border-2 flex items-center justify-center shrink-0 {selectedDeptId ===
+                                    dept.id
+                                        ? 'border-primary'
+                                        : 'border-muted-foreground/20'}"
+                                >
+                                    {#if selectedDeptId === dept.id}
+                                        <div
+                                            class="size-2.5 rounded-full bg-primary"
+                                        ></div>
+                                    {/if}
+                                </div>
+                            </button>
+                        {/each}
+                    </div>
+                {/if}
+            </div>
+
+            <div
+                class="flex items-center justify-end gap-2 px-6 py-4 border-t border-border shrink-0"
+            >
+                <Button.Root
+                    variant="ghost"
+                    size="sm"
+                    onclick={closeEnroll}
+                    disabled={enrollSaving}
+                >
+                    Cancel
+                </Button.Root>
+                <Button.Root
+                    size="sm"
+                    onclick={handleBulkEnroll}
+                    disabled={!selectedDeptId || enrollSaving || deptLoading}
+                >
+                    {enrollSaving ? "Enrolling…" : "Enroll Department"}
+                </Button.Root>
             </div>
         </div>
     </div>

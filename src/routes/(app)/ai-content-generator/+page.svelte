@@ -18,6 +18,14 @@
         Play,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import {
+        DropdownMenu,
+        DropdownMenuTrigger,
+        DropdownMenuContent,
+        DropdownMenuCheckboxGroup,
+        DropdownMenuCheckboxItem,
+        DropdownMenuLabel,
+    } from "$lib/components/ui/dropdown-menu";
     import Markdown from "$lib/components/brand/Markdown.svelte";
     import AiItemEditWrapper from "$lib/components/brand/AiItemEditWrapper.svelte";
 
@@ -65,9 +73,11 @@
     let title = $state("");
     let description = $state("");
     let selectedDocIds = $state<number[]>([]);
+    let questionTypes = $state<string[]>([]);
     let generating = $state(false);
     let genError = $state("");
     let activeJobId = $state<string | null>(null);
+    let streamAbortController = $state<AbortController | null>(null);
 
     // ---- Generation progress (SSE streaming) ----
     let generationSteps = $state<{ step: string; detail: string }[]>([]);
@@ -120,6 +130,7 @@
         streamProgress = "";
         viewingCourse = null;
         generating = true;
+        streamAbortController = new AbortController();
 
         try {
             const enqueueRes = await fetch("/api/courses/generate", {
@@ -130,6 +141,7 @@
                     title: title || "Untitled Course",
                     description,
                     source_doc_ids: selectedDocIds,
+                    question_types: questionTypes,
                 }),
             });
 
@@ -142,18 +154,44 @@
             const { job_id } = await enqueueRes.json();
             activeJobId = job_id;
 
-            await streamJobEvents(job_id);
-        } catch {
-            if (!genError) genError = "Network error. Is the backend running?";
+            await streamJobEvents(job_id, streamAbortController.signal);
+        } catch (e: any) {
+            if (e?.name === "AbortError") {
+                genError = "Generation cancelled";
+            } else if (!genError) {
+                genError = "Network error. Is the backend running?";
+            }
         } finally {
             generating = false;
             activeJobId = null;
+            streamAbortController = null;
         }
     }
 
-    async function streamJobEvents(jobId: string) {
+    async function cancelGeneration() {
+        if (!activeJobId) return;
+        // Abort the SSE stream first so the UI updates immediately.
+        if (streamAbortController) {
+            streamAbortController.abort();
+        }
+        // Tell the backend to cancel the job.
+        try {
+            await fetch(`/api/courses/generate/${activeJobId}/cancel`, {
+                method: "POST",
+                credentials: "include",
+            });
+        } catch {
+            // best-effort
+        }
+        generating = false;
+        activeJobId = null;
+        streamAbortController = null;
+    }
+
+    async function streamJobEvents(jobId: string, signal?: AbortSignal) {
         const streamRes = await fetch(`/api/courses/generate/${jobId}/stream`, {
             credentials: "include",
+            signal,
         });
 
         if (!streamRes.ok) {
@@ -248,14 +286,20 @@
                 streamedModules = [];
                 streamProgress = "";
                 genError = "";
+                streamAbortController = new AbortController();
 
                 try {
-                    await streamJobEvents(job.id);
-                } catch {
-                    if (!genError) genError = "Stream connection lost";
+                    await streamJobEvents(job.id, streamAbortController.signal);
+                } catch (e: any) {
+                    if (e?.name === "AbortError") {
+                        genError = "Generation cancelled";
+                    } else if (!genError) {
+                        genError = "Stream connection lost";
+                    }
                 } finally {
                     generating = false;
                     activeJobId = null;
+                    streamAbortController = null;
                 }
             }
         } catch {
@@ -549,6 +593,77 @@
                         ></textarea>
                     </div>
 
+                    <!-- Question Type Filter -->
+                    <div class="flex flex-col gap-1.5">
+                        <label
+                            class="text-xs font-medium text-muted-foreground"
+                        >
+                            Question types
+                            {#if questionTypes.length > 0}
+                                <span class="text-primary"
+                                    >({questionTypes.length} selected)</span
+                                >
+                            {:else}
+                                <span class="text-muted-foreground/50"
+                                    >(all types)</span
+                                >
+                            {/if}
+                        </label>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger
+                                class="flex items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground hover:bg-muted/50 transition-colors"
+                            >
+                                {#if questionTypes.length === 0}
+                                    <span class="text-muted-foreground"
+                                        >All question types</span
+                                    >
+                                {:else}
+                                    <span class="truncate"
+                                        >{questionTypes
+                                            .map((t) => t.replace("_", " "))
+                                            .join(", ")}</span
+                                    >
+                                {/if}
+                                <ChevronDown
+                                    class="size-4 text-muted-foreground shrink-0 ml-2"
+                                />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent class="w-56">
+                                <DropdownMenuLabel
+                                    >Select question types</DropdownMenuLabel
+                                >
+                                <DropdownMenuCheckboxGroup
+                                    bind:value={questionTypes}
+                                >
+                                    <DropdownMenuCheckboxItem value="mc"
+                                        >Multiple Choice</DropdownMenuCheckboxItem
+                                    >
+                                    <DropdownMenuCheckboxItem value="ma"
+                                        >Multiple Answer</DropdownMenuCheckboxItem
+                                    >
+                                    <DropdownMenuCheckboxItem value="tf"
+                                        >True / False</DropdownMenuCheckboxItem
+                                    >
+                                    <DropdownMenuCheckboxItem value="fb"
+                                        >Fill in the Blank</DropdownMenuCheckboxItem
+                                    >
+                                    <DropdownMenuCheckboxItem value="sa"
+                                        >Short Answer</DropdownMenuCheckboxItem
+                                    >
+                                    <DropdownMenuCheckboxItem value="matching"
+                                        >Matching</DropdownMenuCheckboxItem
+                                    >
+                                    <DropdownMenuCheckboxItem value="drag_sort"
+                                        >Drag & Sort</DropdownMenuCheckboxItem
+                                    >
+                                    <DropdownMenuCheckboxItem value="hotspot"
+                                        >Hotspot</DropdownMenuCheckboxItem
+                                    >
+                                </DropdownMenuCheckboxGroup>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </div>
+
                     {#if approvedDocs.length > 0 || processingDocs.length > 0}
                         <div class="flex flex-col gap-1.5">
                             <p
@@ -627,19 +742,33 @@
                         </div>
                     {/if}
 
-                    <Button.Root
-                        class="w-full"
-                        disabled={generating || !description.trim()}
-                        onclick={handleGenerate}
-                    >
-                        {#if generating}
-                            <LoaderCircle class="size-4 mr-2 animate-spin" />
-                            Generating course…
-                        {:else}
+                    {#if generating}
+                        <div class="flex gap-2">
+                            <Button.Root
+                                class="flex-1"
+                                variant="destructive"
+                                onclick={cancelGeneration}
+                            >
+                                <XCircle class="size-4 mr-2" />
+                                Stop
+                            </Button.Root>
+                            <Button.Root class="flex-1" disabled={true}>
+                                <LoaderCircle
+                                    class="size-4 mr-2 animate-spin"
+                                />
+                                Generating…
+                            </Button.Root>
+                        </div>
+                    {:else}
+                        <Button.Root
+                            class="w-full"
+                            disabled={!description.trim()}
+                            onclick={handleGenerate}
+                        >
                             <Sparkles class="size-4 mr-2" />
                             Generate Course
-                        {/if}
-                    </Button.Root>
+                        </Button.Root>
+                    {/if}
                 </div>
             {/if}
         </div>

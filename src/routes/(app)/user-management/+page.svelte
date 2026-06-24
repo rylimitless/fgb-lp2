@@ -1,5 +1,10 @@
 <script lang="ts">
-    import { PageHeader, StatCard, PremiumTable, showToast } from "$lib/components/brand";
+    import {
+        PageHeader,
+        StatCard,
+        PremiumTable,
+        showToast,
+    } from "$lib/components/brand";
     import {
         Users,
         Plus,
@@ -7,6 +12,11 @@
         AlertCircle,
         Pencil,
         XCircle,
+        BookOpen,
+        GraduationCap,
+        LoaderCircle,
+        Search,
+        Check,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Input from "$lib/components/ui/input";
@@ -193,6 +203,90 @@
                 return "bg-muted text-muted-foreground border-border";
         }
     }
+
+    // ---- Enroll in Course ----
+    let enrollingUser = $state<User | null>(null);
+    let enrollDialogOpen = $state(false);
+    let availableCourses = $state<any[]>([]);
+    let enrollCoursesLoading = $state(false);
+    let selectedCourseId = $state<number | null>(null);
+    let enrollError = $state("");
+    let enrollSaving = $state(false);
+    let enrollSearch = $state("");
+
+    async function openEnroll(user: User) {
+        enrollingUser = user;
+        enrollDialogOpen = true;
+        selectedCourseId = null;
+        enrollError = "";
+        enrollSearch = "";
+        availableCourses = [];
+        enrollCoursesLoading = true;
+        try {
+            const res = await fetch("/api/courses/published", {
+                credentials: "include",
+            });
+            if (res.ok) {
+                availableCourses = await res.json();
+            }
+        } catch {
+            /* ignore */
+        }
+        enrollCoursesLoading = false;
+    }
+
+    function closeEnroll() {
+        enrollingUser = null;
+        enrollDialogOpen = false;
+        selectedCourseId = null;
+        enrollError = "";
+    }
+
+    async function handleEnroll() {
+        if (!enrollingUser || !selectedCourseId) return;
+        enrollSaving = true;
+        enrollError = "";
+        try {
+            const res = await fetch("/api/admin/enrollments", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_id: enrollingUser.id,
+                    course_id: selectedCourseId,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                enrollError = err.error ?? "Failed to enroll user";
+                return;
+            }
+            const result = await res.json();
+            showToast(
+                `${result.user_name} enrolled in "${result.course_title}".`,
+                { title: "Enrolled", variant: "success" },
+            );
+            closeEnroll();
+        } catch {
+            enrollError = "Network error";
+        } finally {
+            enrollSaving = false;
+        }
+    }
+
+    let filteredCourses = $derived(
+        enrollSearch
+            ? availableCourses.filter(
+                  (c: any) =>
+                      c.title
+                          .toLowerCase()
+                          .includes(enrollSearch.toLowerCase()) ||
+                      (c.description ?? "")
+                          .toLowerCase()
+                          .includes(enrollSearch.toLowerCase()),
+              )
+            : availableCourses,
+    );
 </script>
 
 <div class="flex w-full max-w-4xl mx-auto flex-col gap-6">
@@ -237,7 +331,9 @@
         <div class="motion-rise-in motion-stagger-2">
             <StatCard
                 label="Administrators"
-                value={data.users?.filter((u: any) => (u.roles ?? [u.role]).includes("admin")).length ?? 0}
+                value={data.users?.filter((u: any) =>
+                    (u.roles ?? [u.role]).includes("admin"),
+                ).length ?? 0}
                 tone="primary"
                 hint="root access"
             />
@@ -245,7 +341,9 @@
         <div class="motion-rise-in motion-stagger-3">
             <StatCard
                 label="Content creators"
-                value={data.users?.filter((u: any) => (u.roles ?? [u.role]).includes("content creator")).length ?? 0}
+                value={data.users?.filter((u: any) =>
+                    (u.roles ?? [u.role]).includes("content creator"),
+                ).length ?? 0}
                 tone="info"
                 hint="can author courses"
             />
@@ -253,7 +351,9 @@
         <div class="motion-rise-in motion-stagger-4">
             <StatCard
                 label="Approvers"
-                value={data.users?.filter((u: any) => (u.roles ?? [u.role]).includes("approver")).length ?? 0}
+                value={data.users?.filter((u: any) =>
+                    (u.roles ?? [u.role]).includes("approver"),
+                ).length ?? 0}
                 tone="warning"
                 hint="can publish content"
             />
@@ -416,6 +516,15 @@
                         variant="ghost"
                         size="icon"
                         class="size-8 text-muted-foreground hover:text-primary"
+                        onclick={() => openEnroll(user)}
+                        title="Enroll in course"
+                    >
+                        <BookOpen class="size-3.5" />
+                    </Button.Root>
+                    <Button.Root
+                        variant="ghost"
+                        size="icon"
+                        class="size-8 text-muted-foreground hover:text-primary"
                         onclick={() => openEdit(user)}
                     >
                         <Pencil class="size-3.5" />
@@ -528,6 +637,144 @@
                     disabled={editSaving}
                 >
                     {editSaving ? "Saving…" : "Save Roles"}
+                </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Enroll in Course Dialog -->
+{#if enrollingUser && enrollDialogOpen}
+    {@const u = enrollingUser!}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onclick={closeEnroll}
+        role="dialog"
+        aria-modal="true"
+    >
+        <div
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
+            onclick={(e: MouseEvent) => e.stopPropagation()}
+        >
+            <!-- Header -->
+            <div
+                class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0"
+            >
+                <div class="min-w-0">
+                    <h3 class="text-base font-semibold text-foreground">
+                        Enroll in Course
+                    </h3>
+                    <p class="text-sm text-muted-foreground mt-0.5 truncate">
+                        {u.name} ({u.email})
+                    </p>
+                </div>
+                <Button.Root
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={closeEnroll}
+                    class="shrink-0 ml-3"
+                >
+                    <XCircle class="size-5" />
+                </Button.Root>
+            </div>
+
+            <!-- Body -->
+            <div class="px-6 py-4 flex flex-col gap-4 overflow-y-auto">
+                {#if enrollError}
+                    <div
+                        class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                    >
+                        <AlertCircle class="size-3.5 shrink-0" />
+                        <span>{enrollError}</span>
+                    </div>
+                {/if}
+
+                <!-- Search -->
+                <div class="relative">
+                    <Search
+                        class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground"
+                    />
+                    <input
+                        type="text"
+                        placeholder="Search courses..."
+                        bind:value={enrollSearch}
+                        class="w-full rounded-lg border border-input bg-background pl-8 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                </div>
+
+                <!-- Course list -->
+                {#if enrollCoursesLoading}
+                    <div class="flex justify-center py-8">
+                        <LoaderCircle
+                            class="size-5 text-muted-foreground animate-spin"
+                        />
+                    </div>
+                {:else if filteredCourses.length === 0}
+                    <p class="text-sm text-muted-foreground text-center py-6">
+                        {enrollSearch
+                            ? "No matching courses"
+                            : "No published courses available"}
+                    </p>
+                {:else}
+                    <div class="flex flex-col gap-1 max-h-64 overflow-y-auto">
+                        {#each filteredCourses as c (c.id)}
+                            <button
+                                class="flex items-start gap-3 rounded-lg border px-3.5 py-2.5 text-left transition-colors {selectedCourseId ===
+                                c.id
+                                    ? 'border-primary bg-primary/5'
+                                    : 'border-border hover:border-muted-foreground/30'}"
+                                onclick={() => (selectedCourseId = c.id)}
+                            >
+                                <div
+                                    class="size-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5"
+                                >
+                                    <GraduationCap
+                                        class="size-4 text-primary"
+                                    />
+                                </div>
+                                <div class="min-w-0">
+                                    <p
+                                        class="text-sm font-medium text-foreground truncate"
+                                    >
+                                        {c.title}
+                                    </p>
+                                    {#if c.description}
+                                        <p
+                                            class="text-xs text-muted-foreground mt-0.5 line-clamp-2"
+                                        >
+                                            {c.description}
+                                        </p>
+                                    {/if}
+                                </div>
+                                {#if selectedCourseId === c.id}
+                                    <Check
+                                        class="size-4 text-primary shrink-0 mt-1"
+                                    />
+                                {/if}
+                            </button>
+                        {/each}
+                    </div>
+                {/if}
+            </div>
+
+            <!-- Footer -->
+            <div
+                class="flex items-center justify-end gap-2 px-6 py-4 border-t border-border shrink-0"
+            >
+                <Button.Root
+                    variant="ghost"
+                    size="sm"
+                    onclick={closeEnroll}
+                    disabled={enrollSaving}
+                >
+                    Cancel
+                </Button.Root>
+                <Button.Root
+                    size="sm"
+                    onclick={handleEnroll}
+                    disabled={!selectedCourseId || enrollSaving}
+                >
+                    {enrollSaving ? "Enrolling…" : "Enroll"}
                 </Button.Root>
             </div>
         </div>

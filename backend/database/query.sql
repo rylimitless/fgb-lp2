@@ -369,3 +369,41 @@ limit $1;
 select coalesce(sum(score), 0)::int as total_score
 from course_scores
 where user_id = $1;
+
+-- Departments --
+
+-- name: CreateDepartment :one
+insert into departments (name)
+values ($1)
+returning *;
+
+-- name: GetDepartments :many
+select * from departments order by name asc;
+
+-- name: GetDepartmentByID :one
+select * from departments where id = $1;
+
+-- name: DeleteDepartment :exec
+delete from departments where id = $1;
+
+-- name: AddUserToDepartment :exec
+insert into user_departments (user_id, department_id)
+values ($1, $2)
+on conflict (user_id, department_id) do nothing;
+
+-- name: RemoveUserFromDepartment :exec
+delete from user_departments
+where user_id = $1 and department_id = $2;
+
+-- name: GetUserDepartments :many
+select d.* from departments d
+join user_departments ud on ud.department_id = d.id
+where ud.user_id = $1
+order by d.name asc;
+
+-- name: GetUsersByDepartment :many
+select u.id, u.email, u.name, u.role, u.created_at
+from users u
+join user_departments ud on ud.user_id = u.id
+where ud.department_id = $1
+order by u.name asc;

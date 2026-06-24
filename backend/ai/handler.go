@@ -323,10 +323,11 @@ type plan struct {
 // ---- Request types ----
 
 type GenerateCourseRequest struct {
-	Title        string  `json:"title"`
-	Description  string  `json:"description"`
-	SourceDocIDs []int64 `json:"source_doc_ids"`
-	CreatedBy    int64   `json:"created_by,omitempty"`
+	Title         string   `json:"title"`
+	Description   string   `json:"description"`
+	SourceDocIDs  []int64  `json:"source_doc_ids"`
+	QuestionTypes []string `json:"question_types,omitempty"`
+	CreatedBy     int64    `json:"created_by,omitempty"`
 }
 
 // ---- SSE writer ----
@@ -627,10 +628,25 @@ func (h *Handler) ListActiveJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// CancelGeneration cancels an in-progress course generation job.
+func (h *Handler) CancelGeneration(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Job ID is required"})
+		return
+	}
+	if h.Jobs.CancelJob(JobID(id)) {
+		c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found or already completed"})
+	}
+}
+
 // RegisterRoutes adds course generation routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/courses/generate", middlewares.WrapRequireRole(h.GenerateCourse, "content creator"))
 	r.GET("/courses/generate/active", h.ListActiveJobs)
+	r.POST("/courses/generate/:id/cancel", middlewares.WrapRequireRole(h.CancelGeneration, "content creator"))
 	r.GET("/courses/generate/:id", h.GetJobStatus)
 	r.GET("/courses/generate/:id/stream", h.StreamJob)
 	r.GET("/courses", h.ListCourses)

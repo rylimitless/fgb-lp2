@@ -9,6 +9,7 @@ import (
 	"fgb-lp/coach"
 	"fgb-lp/content_repository"
 	database "fgb-lp/database/queries"
+	"fgb-lp/departments"
 	"fgb-lp/documents"
 	"fgb-lp/gamification"
 	"fgb-lp/lessons"
@@ -123,6 +124,9 @@ func main() {
 	adminGroup := protected.Group("")
 	adminGroup.Use(middlewares.RequireRole("admin"))
 
+	adminManagerGroup := protected.Group("")
+	adminManagerGroup.Use(middlewares.RequireRole("admin", "manager"))
+
 	approverGroup := protected.Group("")
 	approverGroup.Use(middlewares.RequireRole("approver"))
 
@@ -205,6 +209,11 @@ func main() {
 
 	userHandler := users.NewHandler(queries)
 	userHandler.RegisterRoutes(adminGroup)
+	userHandler.RegisterListRoute(adminManagerGroup)
+	userHandler.RegisterEnrollRoutes(adminManagerGroup)
+
+	deptHandler := departments.NewHandler(queries)
+	deptHandler.RegisterRoutes(adminManagerGroup)
 
 	analyticsHandler := analytics.NewHandler(queries)
 	analyticsHandler.RegisterRoutes(adminGroup)

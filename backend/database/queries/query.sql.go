@@ -12,6 +12,22 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+const addUserToDepartment = `-- name: AddUserToDepartment :exec
+insert into user_departments (user_id, department_id)
+values ($1, $2)
+on conflict (user_id, department_id) do nothing
+`
+
+type AddUserToDepartmentParams struct {
+	UserID       int64 `json:"user_id"`
+	DepartmentID int64 `json:"department_id"`
+}
+
+func (q *Queries) AddUserToDepartment(ctx context.Context, arg AddUserToDepartmentParams) error {
+	_, err := q.db.Exec(ctx, addUserToDepartment, arg.UserID, arg.DepartmentID)
+	return err
+}
+
 const checkIfFirstUser = `-- name: CheckIfFirstUser :one
 select count(*) from users
 `
@@ -197,6 +213,21 @@ func (q *Queries) CreateCourseItem(ctx context.Context, arg CreateCourseItemPara
 	return i, err
 }
 
+const createDepartment = `-- name: CreateDepartment :one
+
+insert into departments (name)
+values ($1)
+returning id, name, created_at
+`
+
+// Departments --
+func (q *Queries) CreateDepartment(ctx context.Context, name string) (Department, error) {
+	row := q.db.QueryRow(ctx, createDepartment, name)
+	var i Department
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
+}
+
 const createModule = `-- name: CreateModule :one
 insert into modules (course_id, title, description, sort_order)
 values ($1, $2, $3, $4)
@@ -352,6 +383,15 @@ delete from modules where course_id = $1
 
 func (q *Queries) DeleteCourseModules(ctx context.Context, courseID int64) error {
 	_, err := q.db.Exec(ctx, deleteCourseModules, courseID)
+	return err
+}
+
+const deleteDepartment = `-- name: DeleteDepartment :exec
+delete from departments where id = $1
+`
+
+func (q *Queries) DeleteDepartment(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteDepartment, id)
 	return err
 }
 
@@ -875,6 +915,41 @@ func (q *Queries) GetCourses(ctx context.Context) ([]Course, error) {
 	return items, nil
 }
 
+const getDepartmentByID = `-- name: GetDepartmentByID :one
+select id, name, created_at from departments where id = $1
+`
+
+func (q *Queries) GetDepartmentByID(ctx context.Context, id int64) (Department, error) {
+	row := q.db.QueryRow(ctx, getDepartmentByID, id)
+	var i Department
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
+}
+
+const getDepartments = `-- name: GetDepartments :many
+select id, name, created_at from departments order by name asc
+`
+
+func (q *Queries) GetDepartments(ctx context.Context) ([]Department, error) {
+	rows, err := q.db.Query(ctx, getDepartments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Department
+	for rows.Next() {
+		var i Department
+		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getDocumentByID = `-- name: GetDocumentByID :one
 select id, title, file_path, status, uploaded_by, total_chunks, chunks_done, created_at, approved, error_message, review_status, review_notes from documents where id = $1
 `
@@ -1378,6 +1453,33 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 	return i, err
 }
 
+const getUserDepartments = `-- name: GetUserDepartments :many
+select d.id, d.name, d.created_at from departments d
+join user_departments ud on ud.department_id = d.id
+where ud.user_id = $1
+order by d.name asc
+`
+
+func (q *Queries) GetUserDepartments(ctx context.Context, userID int64) ([]Department, error) {
+	rows, err := q.db.Query(ctx, getUserDepartments, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Department
+	for rows.Next() {
+		var i Department
+		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUserNotifications = `-- name: GetUserNotifications :many
 select id, user_id, title, message, link, is_read, created_at from notifications where user_id = $1 order by created_at desc limit $2
 `
@@ -1475,6 +1577,48 @@ func (q *Queries) GetUserTotalScore(ctx context.Context, userID int64) (int32, e
 	var total_score int32
 	err := row.Scan(&total_score)
 	return total_score, err
+}
+
+const getUsersByDepartment = `-- name: GetUsersByDepartment :many
+select u.id, u.email, u.name, u.role, u.created_at
+from users u
+join user_departments ud on ud.user_id = u.id
+where ud.department_id = $1
+order by u.name asc
+`
+
+type GetUsersByDepartmentRow struct {
+	ID        int64              `json:"id"`
+	Email     string             `json:"email"`
+	Name      string             `json:"name"`
+	Role      string             `json:"role"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetUsersByDepartment(ctx context.Context, departmentID int64) ([]GetUsersByDepartmentRow, error) {
+	rows, err := q.db.Query(ctx, getUsersByDepartment, departmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUsersByDepartmentRow
+	for rows.Next() {
+		var i GetUsersByDepartmentRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.Role,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertAuditLog = `-- name: InsertAuditLog :one
@@ -1638,6 +1782,21 @@ on conflict (user_id, streak_date) do nothing
 // Streaks & Leaderboard --
 func (q *Queries) RecordStreak(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, recordStreak, userID)
+	return err
+}
+
+const removeUserFromDepartment = `-- name: RemoveUserFromDepartment :exec
+delete from user_departments
+where user_id = $1 and department_id = $2
+`
+
+type RemoveUserFromDepartmentParams struct {
+	UserID       int64 `json:"user_id"`
+	DepartmentID int64 `json:"department_id"`
+}
+
+func (q *Queries) RemoveUserFromDepartment(ctx context.Context, arg RemoveUserFromDepartmentParams) error {
+	_, err := q.db.Exec(ctx, removeUserFromDepartment, arg.UserID, arg.DepartmentID)
 	return err
 }
 

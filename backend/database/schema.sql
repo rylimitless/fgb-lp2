@@ -117,6 +117,22 @@ alter table courses add column review_status text default 'pending';
 alter table courses add column review_notes text default '';
 alter table courses add column approved_by bigint references users(id);
 
+-- Departments: organisational grouping for users and courses
+create table if not exists departments (
+  id bigserial primary key,
+  name text not null unique,
+  created_at timestamptz not null default now()
+);
+
+-- Many-to-many: users assigned to departments
+create table if not exists user_departments (
+  user_id bigint not null references users(id) on delete cascade,
+  department_id bigint not null references departments(id) on delete cascade,
+  primary key (user_id, department_id)
+);
+create index if not exists idx_user_departments_dept
+  on user_departments(department_id);
+
 -- Migrations: add module support
 create table if not exists modules (
   id bigserial primary key,
