@@ -58,7 +58,7 @@ services:
       db:
         condition: service_healthy
       embeddings:
-        condition: service_starteds
+        condition: service_started
 
   frontend:
     build:
