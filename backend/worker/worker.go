@@ -1,15 +1,19 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	database "fgb-lp/database/queries"
 	"fgb-lp/embeddings"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/ledongthuc/pdf"
@@ -94,6 +98,9 @@ func (w *Worker) processDocument(ctx context.Context, doc database.Document) err
 		return fmt.Errorf("no extractable text found in PDF")
 	}
 
+	// Sanitize the full extracted text before chunking
+	text = sanitizeText(text)
+
 	// Chunk the text
 	chunks := chunkText(text, chunkSize, chunkOverlap)
 	totalChunks := int32(len(chunks))
@@ -125,10 +132,11 @@ func (w *Worker) processDocument(ctx context.Context, doc database.Document) err
 		// Insert chunks with embeddings
 		for j, vec := range vectors {
 			chunkIdx := i + j
+			content := sanitizeText(chunks[chunkIdx])
 			_, err := w.queries.InsertDocumentChunk(ctx, database.InsertDocumentChunkParams{
 				DocumentID: doc.ID,
 				ChunkIndex: int32(chunkIdx),
-				Content:    chunks[chunkIdx],
+				Content:    content,
 				Embedding:  pgvector.NewVector(float64ToFloat32(vec)),
 			})
 			if err != nil {
@@ -161,7 +169,42 @@ func (w *Worker) processDocument(ctx context.Context, doc database.Document) err
 }
 
 // extractPDFText reads a PDF file and returns all extractable text.
+// Uses pdftotext (poppler-utils) as the primary extractor because it handles
+// virtually all PDF encodings including CID fonts and custom CMaps that the
+// ledongthuc/pdf Go library cannot decode. Falls back to the Go library if
+// pdftotext is not available.
 func extractPDFText(path string) (string, error) {
+	text, err := extractWithPdftotext(path)
+	if err == nil && strings.TrimSpace(text) != "" {
+		return text, nil
+	}
+	if err != nil {
+		log.Printf("[worker] pdftotext failed for %s: %v — falling back to Go library", path, err)
+	} else {
+		log.Printf("[worker] pdftotext returned empty for %s — falling back to Go library", path)
+	}
+
+	return extractWithGoPDF(path)
+}
+
+// extractWithPdftotext runs the pdftotext CLI tool to extract text.
+func extractWithPdftotext(path string) (string, error) {
+	// -layout: preserve physical layout as much as possible
+	// -nopgbrk: don't insert page breaks (we handle those ourselves)
+	cmd := exec.Command("pdftotext", "-layout", "-nopgbrk", path, "-")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("pdftotext: %w (stderr: %s)", err, stderr.String())
+	}
+
+	return stdout.String(), nil
+}
+
+// extractWithGoPDF uses the ledongthuc/pdf Go library as a fallback.
+func extractWithGoPDF(path string) (string, error) {
 	f, r, err := pdf.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open pdf: %w", err)
@@ -170,6 +213,7 @@ func extractPDFText(path string) (string, error) {
 
 	var buf strings.Builder
 	totalPage := r.NumPage()
+	var failedPages int
 
 	for pageNum := 1; pageNum <= totalPage; pageNum++ {
 		page := r.Page(pageNum)
@@ -178,13 +222,69 @@ func extractPDFText(path string) (string, error) {
 		}
 		text, err := page.GetPlainText(nil)
 		if err != nil {
+			failedPages++
+			log.Printf("[worker] Go PDF lib: page %d failed: %v", pageNum, err)
 			continue
 		}
 		buf.WriteString(text)
 		buf.WriteString("\n")
 	}
 
+	if failedPages > 0 {
+		log.Printf("[worker] Go PDF lib: %d/%d pages failed to extract", failedPages, totalPage)
+	}
+
 	return buf.String(), nil
+}
+
+// sanitizeText cleans extracted text to ensure it is safe for PostgreSQL text
+// columns. It strips null bytes, other control characters (except newlines and
+// tabs), replaces invalid UTF-8 sequences with the replacement character, and
+// normalizes whitespace.
+func sanitizeText(s string) string {
+	// 1. Convert to valid UTF-8, replacing any invalid sequences
+	s = strings.ToValidUTF8(s, "\ufffd")
+
+	// 2. Strip null bytes — PostgreSQL rejects \x00 in text columns
+	s = strings.ReplaceAll(s, "\x00", "")
+
+	// 3. Filter runes: keep only printable characters, newlines, tabs, and spaces.
+	//    This removes control chars like \x01–\x1F (except \t, \n), \x7F (DEL), etc.
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '\n' || r == '\t' || r == '\r' || (r >= ' ' && r != utf8.RuneError) {
+			b.WriteRune(r)
+		}
+	}
+	s = b.String()
+
+	// 4. Normalize line endings: \r\n -> \n, standalone \r -> \n
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+
+	// 5. Collapse multiple blank lines into at most two
+	lines := strings.Split(s, "\n")
+	var out []string
+	blankCount := 0
+	for _, line := range lines {
+		trimmed := strings.TrimRightFunc(line, unicode.IsSpace)
+		if trimmed == "" {
+			blankCount++
+			if blankCount <= 2 {
+				out = append(out, "")
+			}
+		} else {
+			blankCount = 0
+			out = append(out, trimmed)
+		}
+	}
+	// Trim trailing blank lines
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+
+	return strings.Join(out, "\n")
 }
 
 // chunkText splits text into overlapping chunks of approximately chunkSize chars.
