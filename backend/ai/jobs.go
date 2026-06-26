@@ -716,12 +716,13 @@ Generate 1-3 assessment items that test understanding of THIS section.%s`, secTi
 				log.Printf("[worker] unknown item_type %q (m%d s%d) — defaulting to mc", q.Type, mi+1, si+1)
 				qType = "mc"
 			}
+			itemData := ensureIRTParams(q.Data, qType)
 			ci, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
 				CourseID:  courseID,
 				ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
 				ItemType:  qType,
 				SortOrder: sortOrder,
-				Data:      []byte(q.Data),
+				Data:      itemData,
 			})
 			if err != nil {
 				log.Printf("[worker] create question (m%d s%d): %v", mi+1, si+1, err)

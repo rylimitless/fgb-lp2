@@ -52,6 +52,7 @@ type ContentItem struct {
 	ReviewStatus string `json:"review_status,omitempty"`
 	ReviewNotes  string `json:"review_notes,omitempty"`
 	Approved     bool   `json:"approved"`
+	Settings     string `json:"settings,omitempty"` // JSONB, only for courses
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at,omitempty"`
 	// Document-specific
@@ -86,7 +87,7 @@ func (h *Handler) ListContent(c *gin.Context) {
 		SELECT id, title, 'document' as content_type, status, approved, review_status,
 		       total_chunks, chunks_done, COALESCE(error_message, '') as error_message,
 		       COALESCE(review_notes, '') as review_notes,
-		       created_at, created_at as updated_at
+		       created_at, created_at as updated_at, '' as settings
 		FROM documents
 		WHERE ($3::text = '' OR $3 = 'document')
 		  AND ($4::text = '' OR title ILIKE '%' || $4 || '%')
@@ -95,7 +96,7 @@ func (h *Handler) ListContent(c *gin.Context) {
 		       COALESCE(review_status, 'pending') as review_status,
 		       0, 0, '' as error_message,
 		       COALESCE(review_notes, '') as review_notes,
-		       created_at, updated_at
+		       created_at, updated_at, COALESCE(settings::text, '{}') as settings
 		FROM courses
 		WHERE ($3::text = '' OR $3 = 'course')
 		  AND ($4::text = '' OR title ILIKE '%' || $4 || '%' OR description ILIKE '%' || $4 || '%')
@@ -117,7 +118,7 @@ func (h *Handler) ListContent(c *gin.Context) {
 		if err := rows.Scan(
 			&item.ID, &item.Title, &item.ContentType, &item.Status, &item.Approved,
 			&item.ReviewStatus, &item.TotalChunks, &item.ChunksDone, &item.ErrorMessage,
-			&item.ReviewNotes, &createdAt, &updatedAt,
+			&item.ReviewNotes, &createdAt, &updatedAt, &item.Settings,
 		); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

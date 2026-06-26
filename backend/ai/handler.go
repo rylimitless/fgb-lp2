@@ -92,17 +92,20 @@ CRITICAL RULES:
 10. SA: "question" + "sample_answer".
 11. Content must be substantive — not trivial recall of names or dates.
 12. Do not use placeholders, TBD, or lorem ipsum.
+13. Every question MUST include "irt_beta" and "irt_alpha" fields in the data object. These are Item Response Theory parameters that the adaptive engine uses to select questions at the learner's difficulty level:
+    - irt_beta: item difficulty from -3 (trivially easy) to +3 (extremely hard). Estimate based on Bloom's Taxonomy level of the question — simple recall = -2 to -1, comprehension = -1 to 0, application = 0 to +1, analysis/synthesis = +1 to +2, evaluation = +2 to +3.
+    - irt_alpha: item discrimination from 0.5 (poor discriminator — everyone gets it right or wrong) to 2.5 (excellent discriminator — sharply separates strong from weak learners). Most well-written questions are around 1.0-1.5.
 
 Output ONLY a valid JSON array — no markdown, no surrounding text:
 
 [
   {
     "type": "mc",
-    "data": { "question": "...", "options": ["...","...","...","..."], "correct": 0, "explanation": "..." }
+    "data": { "question": "...", "options": ["...","...","...","..."], "correct": 0, "explanation": "...", "irt_beta": 0.5, "irt_alpha": 1.2 }
   },
   {
     "type": "tf",
-    "data": { "statement": "...", "answer": true, "explanation": "..." }
+    "data": { "statement": "...", "answer": true, "explanation": "...", "irt_beta": -0.3, "irt_alpha": 1.0 }
   }
 ]`
 
@@ -130,7 +133,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
       "question": "...",
       "options": ["...","...","...","..."],
       "correct": 0,
-      "explanation": "Why the correct answer is right and the others are wrong."
+      "explanation": "Why the correct answer is right and the others are wrong.",
+      "irt_beta": 0.5,
+      "irt_alpha": 1.2
     }
   },
   {
@@ -139,7 +144,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
       "question": "Select all that apply.",
       "options": ["...","...","...","...","..."],
       "correct": [0, 2],
-      "explanation": "Why these answers are correct and the others are not."
+      "explanation": "Why these answers are correct and the others are not.",
+      "irt_beta": 0.8,
+      "irt_alpha": 1.4
     }
   },
   {
@@ -147,7 +154,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
     "data": {
       "statement": "A substantive statement based directly on the source.",
       "answer": true,
-      "explanation": "Why the statement is true (or false)."
+      "explanation": "Why the statement is true (or false).",
+      "irt_beta": -0.3,
+      "irt_alpha": 1.0
     }
   },
   {
@@ -155,7 +164,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
     "data": {
       "text": "A sentence with one or more ___ to fill in.",
       "blanks": ["expected answer 1", "expected answer 2"],
-      "explanation": "Why those are the correct fills."
+      "explanation": "Why those are the correct fills.",
+      "irt_beta": 0.2,
+      "irt_alpha": 1.1
     }
   },
   {
@@ -168,7 +179,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
         { "left": "Concept C", "right": "Definition or implication C" },
         { "left": "Concept D", "right": "Definition or implication D" }
       ],
-      "explanation": "Why these pairings are correct."
+      "explanation": "Why these pairings are correct.",
+      "irt_beta": 0.6,
+      "irt_alpha": 1.3
     }
   },
   {
@@ -176,7 +189,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
     "data": {
       "question": "Put these steps in the correct order.",
       "items": ["First step", "Second step", "Third step", "Fourth step"],
-      "explanation": "Why this is the correct sequence."
+      "explanation": "Why this is the correct sequence.",
+      "irt_beta": 0.4,
+      "irt_alpha": 1.1
     }
   },
   {
@@ -190,7 +205,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
         { "label": "Distractor 2", "x": 68, "y": 42, "correct": false },
         { "label": "Distractor 3", "x": 55, "y": 75, "correct": false }
       ],
-      "explanation": "Why the correct region represents the concept."
+      "explanation": "Why the correct region represents the concept.",
+      "irt_beta": 0.3,
+      "irt_alpha": 1.0
     }
   },
   {
@@ -198,7 +215,9 @@ Output ONLY a valid JSON array — no markdown, no other text:
     "data": {
       "question": "An open-ended question requiring a 2-4 sentence answer.",
       "sample_answer": "An exemplary answer demonstrating the depth expected.",
-      "explanation": "What a strong answer should cover."
+      "explanation": "What a strong answer should cover.",
+      "irt_beta": 1.2,
+      "irt_alpha": 1.5
     }
   }
 ]
@@ -215,7 +234,8 @@ CRITICAL RULES:
 9. HOTSPOT: use image "/brand/questions/hotspot-cyber-risk.png" unless a different existing asset is clearly more relevant from this allow-list: "/brand/pathways/compliance.png", "/brand/pathways/risk-credit.png", "/brand/pathways/customer-service.png", "/brand/pathways/cybersecurity.png", "/brand/pathways/banking-foundations.png"; include 3-4 labeled regions with exactly one correct region; x/y are percentages from 0-100 and may be approximate.
 10. SA: include a substantive "sample_answer" demonstrating expected depth.
 11. Every item MUST include an "explanation" field.
-12. Output ONLY the JSON array of exactly 8 objects. No prose, no markdown fences.`
+12. Every question MUST include "irt_beta" (difficulty: -3 trivial to +3 extremely hard, based on Bloom's level) and "irt_alpha" (discrimination: 0.5 poor to 2.5 excellent, typical 1.0-1.5).
+13. Output ONLY the JSON array of exactly 8 objects. No prose, no markdown fences.`
 
 // EditCourse system prompt — for AI-driven course editing.
 const editCourseSystemPrompt = `You are an expert instructional designer and course editor. Given an existing course in JSON format and edit instructions, produce the full modified course JSON.
@@ -231,7 +251,7 @@ Output ONLY valid JSON — no markdown. Structure:
       "description": "Module description",
       "items": [
         {"type": "content", "data": { "body": "..." }},
-        {"type": "mc", "data": { "question": "...", "options": [...], "correct": 0, "explanation": "..." }}
+        {"type": "mc", "data": { "question": "...", "options": [...], "correct": 0, "explanation": "...", "irt_beta": 0.5, "irt_alpha": 1.2 }}
       ]
     }
   ]
@@ -241,6 +261,7 @@ CRITICAL RULES:
 - Apply the edit instructions faithfully while preserving the overall course structure.
 - Content must remain accurate and educational.
 - Keep assessment items meaningful and not trivial.
+- Every assessment item (not "content") MUST include "irt_beta" (difficulty: -3 trivial to +3 extremely hard, based on Bloom's level of the question) and "irt_alpha" (discrimination: 0.5 poor to 2.5 excellent, typical 1.0-1.5).
 - Do not use placeholders or lorem ipsum.`
 
 // EditItem system prompt — for AI-driven editing of a single course item.
@@ -249,23 +270,48 @@ const editItemSystemPrompt = `You are an expert instructional designer and conte
 Output ONLY valid JSON — no markdown, no explanation. Keep the same item_type and data structure:
 
 - "content": { "data": { "body": "..." } }
-- "mc": { "data": { "question": "...", "options": [...], "correct": <index>, "explanation": "..." } }
-- "ma": { "data": { "question": "...", "options": [...], "correct": [<indices>], "explanation": "..." } }
-- "tf": { "data": { "statement": "...", "answer": <bool>, "explanation": "..." } }
-- "fb": { "data": { "text": "...", "blanks": [...] } }
-- "sa": { "data": { "question": "...", "sample_answer": "..." } }
-- "matching": { "data": { "question": "...", "pairs": [{"left":"...","right":"..."}] } }
-- "drag_sort": { "data": { "question": "...", "items": [...] } }
-- "sequence": { "data": { "question": "...", "steps": [...] } }
-- "hotspot": { "data": { "question": "...", "image": "...", "regions": [{"label":"...","x":<pct>,"y":<pct>,"correct":<bool>}] } }
+- "mc": { "data": { "question": "...", "options": [...], "correct": <index>, "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "ma": { "data": { "question": "...", "options": [...], "correct": [<indices>], "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "tf": { "data": { "statement": "...", "answer": <bool>, "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "fb": { "data": { "text": "...", "blanks": [...], "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "sa": { "data": { "question": "...", "sample_answer": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "matching": { "data": { "question": "...", "pairs": [{"left":"...","right":"..."}], "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "drag_sort": { "data": { "question": "...", "items": [...], "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "sequence": { "data": { "question": "...", "steps": [...], "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
+- "hotspot": { "data": { "question": "...", "image": "...", "regions": [{"label":"...","x":<pct>,"y":<pct>,"correct":<bool>}], "explanation": "...", "irt_beta": <float>, "irt_alpha": <float> } }
 
 CRITICAL RULES:
 - Apply the edit instructions faithfully to this single item.
 - Keep the same item_type — do not change it.
 - Maintain the same data structure/fields appropriate to the item_type.
 - Content must remain accurate, educational, and substantive.
+- For assessment items (not "content"), include "irt_beta" (difficulty: -3 trivial to +3 extremely hard, based on Bloom's level) and "irt_alpha" (discrimination: 0.5 poor to 2.5 excellent, typical 1.0-1.5).
 - Do not use placeholders or lorem ipsum.
-- Output ONLY the JSON object — no surrounding text or markdown fences.`
+	- Output ONLY the JSON object — no surrounding text or markdown fences.`
+
+// ensureIRTParams injects irt_beta and irt_alpha defaults into question item data
+// when the LLM omits them. Content items are passed through unchanged.
+// Returns the marshalled []byte suitable for CreateCourseItem / UpdateCourseItemData.
+func ensureIRTParams(data json.RawMessage, itemType string) []byte {
+	if itemType == "content" {
+		return []byte(data)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return []byte(data)
+	}
+	if _, ok := m["irt_beta"]; !ok {
+		m["irt_beta"] = 0.0
+	}
+	if _, ok := m["irt_alpha"]; !ok {
+		m["irt_alpha"] = 1.0
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return []byte(data)
+	}
+	return out
+}
 
 type Handler struct {
 	Queries   *database.Queries
@@ -546,6 +592,14 @@ func (h *Handler) GetCourse(c *gin.Context) {
 		})
 	}
 
+	// Parse full settings JSON
+	var settings json.RawMessage
+	if len(course.Settings) > 0 {
+		settings = json.RawMessage(course.Settings)
+	} else {
+		settings = json.RawMessage("{}")
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"id":             course.ID,
 		"title":          course.Title,
@@ -553,6 +607,7 @@ func (h *Handler) GetCourse(c *gin.Context) {
 		"status":         course.Status,
 		"source_doc_ids": course.SourceDocIds,
 		"sources":        sources,
+		"settings":       settings,
 		"modules":        modulesResult,
 		"approved_by":    course.ApprovedBy,
 	})
@@ -642,6 +697,37 @@ func (h *Handler) CancelGeneration(c *gin.Context) {
 	}
 }
 
+// UpdateSettings updates the course settings (max_attempts, days_to_complete, etc).
+func (h *Handler) UpdateSettings(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	var body struct {
+		Settings json.RawMessage `json:"settings"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	course, err := h.Queries.UpdateCourseSettings(c.Request.Context(), database.UpdateCourseSettingsParams{
+		ID:       id,
+		Settings: []byte(body.Settings),
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update settings"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":       course.ID,
+		"settings": json.RawMessage(course.Settings),
+	})
+}
+
 // RegisterRoutes adds course generation routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/courses/generate", middlewares.WrapRequireRole(h.GenerateCourse, "content creator"))
@@ -653,6 +739,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/courses/:id", h.GetCourse)
 	r.GET("/courses/:id/preview", h.PreviewCourse)
 	r.PUT("/courses/:id/edit", middlewares.WrapRequireRole(h.EditCourse, "content creator"))
+	r.PUT("/courses/:id/settings", middlewares.WrapRequireRole(h.UpdateSettings, "content creator"))
 	r.POST("/items/:itemId/ai-edit", middlewares.WrapRequireRole(h.AiEditItem, "content creator"))
 	r.PUT("/items/:itemId", middlewares.WrapRequireRole(h.UpdateItemData, "content creator"))
 	r.DELETE("/items/:itemId", middlewares.WrapRequireRole(h.DeleteItem, "content creator"))
@@ -764,12 +851,13 @@ Apply these edits and return the FULL modified course JSON (not just the changes
 		}
 		itemsResult := make([]gin.H, 0)
 		for ii, item := range mod.Items {
+			itemData := ensureIRTParams(item.Data, item.Type)
 			ci, err := h.Queries.CreateCourseItem(c.Request.Context(), database.CreateCourseItemParams{
 				CourseID:  id,
 				ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
 				ItemType:  item.Type,
 				SortOrder: int32(ii),
-				Data:      []byte(item.Data),
+				Data:      itemData,
 			})
 			if err != nil {
 				continue
@@ -881,15 +969,16 @@ func (h *Handler) UpdateItemData(c *gin.Context) {
 	}
 
 	// Verify item exists
-	_, err = h.Queries.GetCourseItemByID(c.Request.Context(), itemID)
+	item, err := h.Queries.GetCourseItemByID(c.Request.Context(), itemID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
 		return
 	}
 
+	itemData := ensureIRTParams(body.Data, item.ItemType)
 	updated, err := h.Queries.UpdateCourseItemData(c.Request.Context(), database.UpdateCourseItemDataParams{
 		ID:   itemID,
-		Data: []byte(body.Data),
+		Data: itemData,
 	})
 	if err != nil {
 		log.Printf("[ai] update item data: %v", err)

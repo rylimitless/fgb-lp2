@@ -3,9 +3,11 @@ package lessons
 import (
 	"encoding/json"
 	database "fgb-lp/database/queries"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -69,6 +71,7 @@ func (h *Handler) ListPublished(c *gin.Context) {
 			"description":    course.Description,
 			"status":         course.Status,
 			"source_doc_ids": course.SourceDocIds,
+			"settings":       json.RawMessage(course.Settings),
 		}
 		if p, ok := progressMap[course.ID]; ok {
 			item["progress"] = gin.H{
@@ -91,6 +94,63 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 	}
 	userID := c.GetInt64("user_id")
 
+	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+		return
+	}
+
+	// Parse course settings for enforcement
+	var courseSettings map[string]interface{}
+	if len(course.Settings) > 0 {
+		json.Unmarshal(course.Settings, &courseSettings)
+	}
+
+	// Get current progress for enforcement checks
+	progress, _ := h.Queries.GetLessonProgress(c.Request.Context(),
+		database.GetLessonProgressParams{UserID: userID, CourseID: id})
+
+	// Enforce max_attempts
+	if courseSettings != nil {
+		if maxAttempts, ok := courseSettings["max_attempts"].(float64); ok && maxAttempts > 0 {
+			attemptCount, _ := h.Queries.GetCourseAttemptCount(c.Request.Context(),
+				database.GetCourseAttemptCountParams{UserID: userID, CourseID: id})
+			if attemptCount >= int32(maxAttempts) {
+				c.JSON(http.StatusOK, gin.H{
+					"id":          course.ID,
+					"title":       course.Title,
+					"description": course.Description,
+					"status":      course.Status,
+					"modules":     []gin.H{},
+					"progress":    progress,
+					"settings":    json.RawMessage(course.Settings),
+					"blocked":     gin.H{"reason": "max_attempts", "message": "You have reached the maximum number of attempts for this course."},
+				})
+				return
+			}
+		}
+
+		// Enforce days_to_complete (expiry from enrollment date)
+		if daysToComplete, ok := courseSettings["days_to_complete"].(float64); ok && daysToComplete > 0 {
+			if progress.StartedAt.Valid {
+				expiryTime := progress.StartedAt.Time.Add(time.Duration(daysToComplete) * 24 * time.Hour)
+				if time.Now().After(expiryTime) && !progress.Completed {
+					c.JSON(http.StatusOK, gin.H{
+						"id":          course.ID,
+						"title":       course.Title,
+						"description": course.Description,
+						"status":      course.Status,
+						"modules":     []gin.H{},
+						"progress":    progress,
+						"settings":    json.RawMessage(course.Settings),
+						"blocked":     gin.H{"reason": "expired", "message": fmt.Sprintf("This course must be completed within %.0f days of enrollment.", daysToComplete)},
+					})
+					return
+				}
+			}
+		}
+	}
+
 	// Clear item progress on retake
 	if c.Query("retake") == "true" {
 		_ = h.Queries.DeleteItemProgress(c.Request.Context(),
@@ -112,11 +172,6 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 	_ = h.Queries.EnrollInCourse(c.Request.Context(),
 		database.EnrollInCourseParams{UserID: userID, CourseID: id})
 
-	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
-		return
-	}
 	modules, _ := h.Queries.GetModulesByCourse(c.Request.Context(), id)
 	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
 
@@ -162,8 +217,8 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 		})
 	}
 
-	// Get progress
-	progress, _ := h.Queries.GetLessonProgress(c.Request.Context(),
+	// Re-fetch progress after possible reset
+	progress, _ = h.Queries.GetLessonProgress(c.Request.Context(),
 		database.GetLessonProgressParams{UserID: userID, CourseID: id})
 
 	c.JSON(http.StatusOK, gin.H{
@@ -173,6 +228,7 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 		"status":      course.Status,
 		"modules":     mods,
 		"progress":    progress,
+		"settings":    json.RawMessage(course.Settings),
 	})
 }
 

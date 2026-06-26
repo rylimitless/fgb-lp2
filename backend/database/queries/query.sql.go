@@ -719,6 +719,24 @@ func (q *Queries) GetCoachQueriesOverTime(ctx context.Context, limit int32) ([]G
 	return items, nil
 }
 
+const getCourseAttemptCount = `-- name: GetCourseAttemptCount :one
+select coalesce(count(*), 0)::int as attempt_count
+from lesson_progress
+where user_id = $1 and course_id = $2 and completed = true
+`
+
+type GetCourseAttemptCountParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) GetCourseAttemptCount(ctx context.Context, arg GetCourseAttemptCountParams) (int32, error) {
+	row := q.db.QueryRow(ctx, getCourseAttemptCount, arg.UserID, arg.CourseID)
+	var attempt_count int32
+	err := row.Scan(&attempt_count)
+	return attempt_count, err
+}
+
 const getCourseByID = `-- name: GetCourseByID :one
 select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses where id = $1
 `
@@ -1567,14 +1585,14 @@ func (q *Queries) GetUserStreak(ctx context.Context, userID int64) (interface{},
 }
 
 const getUserTotalScore = `-- name: GetUserTotalScore :one
-select coalesce(sum(score), 0)::int as total_score
+select coalesce(sum(score), 0) as total_score
 from course_scores
 where user_id = $1
 `
 
-func (q *Queries) GetUserTotalScore(ctx context.Context, userID int64) (int32, error) {
+func (q *Queries) GetUserTotalScore(ctx context.Context, userID int64) (interface{}, error) {
 	row := q.db.QueryRow(ctx, getUserTotalScore, userID)
-	var total_score int32
+	var total_score interface{}
 	err := row.Scan(&total_score)
 	return total_score, err
 }
@@ -2033,6 +2051,37 @@ func (q *Queries) UpdateCourseReview(ctx context.Context, arg UpdateCourseReview
 		arg.Approved,
 		arg.ApprovedBy,
 	)
+	var i Course
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.SourceDocIds,
+		&i.Status,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Department,
+		&i.Approved,
+		&i.ReviewStatus,
+		&i.ReviewNotes,
+		&i.ApprovedBy,
+	)
+	return i, err
+}
+
+const updateCourseSettings = `-- name: UpdateCourseSettings :one
+update courses set settings = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
+`
+
+type UpdateCourseSettingsParams struct {
+	ID       int64  `json:"id"`
+	Settings []byte `json:"settings"`
+}
+
+func (q *Queries) UpdateCourseSettings(ctx context.Context, arg UpdateCourseSettingsParams) (Course, error) {
+	row := q.db.QueryRow(ctx, updateCourseSettings, arg.ID, arg.Settings)
 	var i Course
 	err := row.Scan(
 		&i.ID,

@@ -41,17 +41,17 @@ func (h *Handler) ListDocuments(c *gin.Context) {
 }
 
 func (h *Handler) UploadDocument(c *gin.Context) {
-	title := c.PostForm("title")
-	if title == "" {
-		title = "Untitled"
-	}
-
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing file"})
 		return
 	}
 	defer file.Close()
+
+	title := c.PostForm("title")
+	if title == "" {
+		title = header.Filename
+	}
 
 	ext := filepath.Ext(header.Filename)
 	if ext != ".pdf" {

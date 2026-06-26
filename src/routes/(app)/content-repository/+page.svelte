@@ -17,6 +17,7 @@
         Users,
         Building2,
         GraduationCap,
+        Settings,
     } from "@lucide/svelte";
     import { PageHeader, showToast } from "$lib/components/brand";
     import * as Button from "$lib/components/ui/button";
@@ -353,6 +354,77 @@
         }
     }
 
+    // ---- Course Settings Dialog ----
+    let settingsItem = $state<any>(null);
+    let settingsOpen = $state(false);
+    let settingsMaxAttempts = $state<number | null>(null);
+    let settingsDaysToComplete = $state<number | null>(null);
+    let settingsSaving = $state(false);
+    let settingsError = $state("");
+
+    function parseItemSettings(raw: any): any {
+        if (!raw || raw === "{}") return {};
+        try {
+            return typeof raw === "string" ? JSON.parse(raw) : raw;
+        } catch {
+            return {};
+        }
+    }
+
+    function openSettings(item: any) {
+        settingsItem = item;
+        const s = parseItemSettings(item.settings);
+        settingsMaxAttempts = s.max_attempts ?? null;
+        settingsDaysToComplete = s.days_to_complete ?? null;
+        settingsError = "";
+        settingsOpen = true;
+    }
+
+    function closeSettings() {
+        settingsOpen = false;
+        settingsItem = null;
+        settingsMaxAttempts = null;
+        settingsDaysToComplete = null;
+        settingsError = "";
+    }
+
+    async function saveSettings() {
+        if (!settingsItem) return;
+        settingsSaving = true;
+        settingsError = "";
+        try {
+            const clean: any = {};
+            if (settingsMaxAttempts && settingsMaxAttempts > 0)
+                clean.max_attempts = settingsMaxAttempts;
+            if (settingsDaysToComplete && settingsDaysToComplete > 0)
+                clean.days_to_complete = settingsDaysToComplete;
+            const res = await fetch(
+                `/api/courses/${settingsItem.id}/settings`,
+                {
+                    method: "PUT",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ settings: clean }),
+                },
+            );
+            if (!res.ok) {
+                const err = await res.json();
+                settingsError = err.error ?? "Failed to save settings";
+                return;
+            }
+            showToast("Course settings updated.", {
+                title: "Settings",
+                variant: "success",
+            });
+            closeSettings();
+            loadContent();
+        } catch {
+            settingsError = "Network error";
+        } finally {
+            settingsSaving = false;
+        }
+    }
+
     $effect(() => {
         loadContent();
     });
@@ -602,6 +674,17 @@
                                             {:else}
                                                 <RotateCcw class="size-4" />
                                             {/if}
+                                        </Button.Root>
+                                    {/if}
+                                    {#if item.content_type === "course"}
+                                        <Button.Root
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            onclick={() => openSettings(item)}
+                                            class="text-muted-foreground hover:text-primary"
+                                            title="Course settings"
+                                        >
+                                            <Settings class="size-4" />
                                         </Button.Root>
                                     {/if}
                                     {#if item.content_type === "course" && item.status === "published"}
@@ -862,6 +945,110 @@
                     disabled={!selectedDeptId || enrollSaving || deptLoading}
                 >
                     {enrollSaving ? "Enrolling…" : "Enroll Department"}
+                </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Course Settings Dialog -->
+{#if settingsOpen && settingsItem}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onclick={closeSettings}
+        role="dialog"
+        aria-modal="true"
+    >
+        <div
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4 flex flex-col"
+            onclick={(e: MouseEvent) => e.stopPropagation()}
+        >
+            <div
+                class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0"
+            >
+                <div class="min-w-0">
+                    <h3 class="text-base font-semibold text-foreground">
+                        Course Settings
+                    </h3>
+                    <p class="text-sm text-muted-foreground mt-0.5 truncate">
+                        {settingsItem.title}
+                    </p>
+                </div>
+                <Button.Root
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={closeSettings}
+                    class="shrink-0 ml-3"
+                >
+                    <XCircle class="size-5" />
+                </Button.Root>
+            </div>
+
+            <div class="px-6 py-4 flex flex-col gap-4">
+                {#if settingsError}
+                    <div
+                        class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                    >
+                        <AlertTriangle class="size-3.5 shrink-0" />
+                        <span>{settingsError}</span>
+                    </div>
+                {/if}
+
+                <p class="text-xs text-muted-foreground">
+                    Control how learners can take this course. Leave a field
+                    empty to remove that limit.
+                </p>
+
+                <label class="flex flex-col gap-1.5">
+                    <span class="text-xs font-medium text-muted-foreground">
+                        Max Attempts
+                        <span class="text-muted-foreground/50 font-normal">
+                            (times a learner can take it)</span
+                        >
+                    </span>
+                    <input
+                        type="number"
+                        min="1"
+                        bind:value={settingsMaxAttempts}
+                        placeholder="Unlimited"
+                        class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                </label>
+
+                <label class="flex flex-col gap-1.5">
+                    <span class="text-xs font-medium text-muted-foreground">
+                        Days to Complete
+                        <span class="text-muted-foreground/50 font-normal">
+                            (deadline from enrollment)</span
+                        >
+                    </span>
+                    <input
+                        type="number"
+                        min="1"
+                        bind:value={settingsDaysToComplete}
+                        placeholder="No deadline"
+                        class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                </label>
+            </div>
+
+            <div
+                class="flex items-center justify-end gap-2 px-6 py-4 border-t border-border shrink-0"
+            >
+                <Button.Root
+                    variant="ghost"
+                    size="sm"
+                    onclick={closeSettings}
+                    disabled={settingsSaving}
+                >
+                    Cancel
+                </Button.Root>
+                <Button.Root
+                    size="sm"
+                    onclick={saveSettings}
+                    disabled={settingsSaving}
+                >
+                    {settingsSaving ? "Saving…" : "Save Settings"}
                 </Button.Root>
             </div>
         </div>

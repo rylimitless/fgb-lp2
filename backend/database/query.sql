@@ -103,6 +103,9 @@ select * from courses where id = $1;
 -- name: UpdateCourseMeta :one
 update courses set title = $2, description = $3, updated_at = now() where id = $1 returning *;
 
+-- name: UpdateCourseSettings :one
+update courses set settings = $2, updated_at = now() where id = $1 returning *;
+
 -- name: UpdateCourseStatus :one
 update courses set status = $2, updated_at = now() where id = $1 returning *;
 
@@ -373,9 +376,14 @@ order by total_score desc
 limit $1;
 
 -- name: GetUserTotalScore :one
-select coalesce(sum(score), 0)::int as total_score
+select coalesce(sum(score), 0) as total_score
 from course_scores
 where user_id = $1;
+
+-- name: GetCourseAttemptCount :one
+select coalesce(count(*), 0)::int as attempt_count
+from lesson_progress
+where user_id = $1 and course_id = $2 and completed = true;
 
 -- Departments --
 

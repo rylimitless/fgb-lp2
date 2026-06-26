@@ -1,13 +1,13 @@
 services:
   db:
     image: pgvector/pgvector:pg17
-    container_name: fgb-db
+    container_name: fgb-db1
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
       POSTGRES_DB: example_db
     ports:
-      - "5440:5432"
+      - "5441:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
@@ -20,9 +20,9 @@ services:
     build:
       context: ./backend/embeddings
       dockerfile: Dockerfile
-    container_name: fgb-embeddings
+    container_name: fgb-embeddings1
     ports:
-      - "7100:7100"
+      - "7101:7100"
     restart: unless-stopped
     healthcheck:
       test:
@@ -30,7 +30,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:7100/health').read()",
+          import urllib.request; urllib.request.urlopen('http://localhost:7100/health').read(),
         ]
       interval: 10s
       timeout: 5s
@@ -41,14 +41,14 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: fgb-backend
+    container_name: fgb-backend1
     environment:
       DATABASE_URL: postgres://postgres:password@db:5432/example_db
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: https://api.deepseek.com
       EMBEDDINGS_URL: http://embeddings:7100/embeddings
     ports:
-      - "5555:5555"
+      - "5556:5555"
     volumes:
       - ./backend:/app
       - /app/tmp
@@ -62,9 +62,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: fgb-frontend
+    container_name: fgb-frontend1
     ports:
-      - "3038:5173"
+      - "3039:5173"
     volumes:
       - ./src:/app/src
       - ./static:/app/static

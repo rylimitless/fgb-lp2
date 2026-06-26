@@ -3,6 +3,7 @@ package adaptive
 import (
 	"encoding/json"
 	database "fgb-lp/database/queries"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -60,13 +61,13 @@ func selectNextItem(theta float64, pool []itemIRT) *gin.H {
 	return &pool[bestIdx].Item
 }
 
-func extractIRTParams(data json.RawMessage) (beta, alpha float64) {
+func extractIRTParams(raw json.RawMessage) (beta, alpha float64) {
 	beta, alpha = 0.0, 1.0
-	if len(data) == 0 {
+	if len(raw) == 0 {
 		return
 	}
 	var m map[string]interface{}
-	if json.Unmarshal(data, &m) != nil {
+	if json.Unmarshal(raw, &m) != nil {
 		return
 	}
 	if v, ok := m["irt_beta"].(float64); ok {
@@ -114,12 +115,16 @@ func (h *Handler) StartSession(c *gin.Context) {
 
 	totalAssessable := 0
 	pool := make([]itemIRT, 0)
+	irtParamCount := 0
 	for _, item := range items {
 		if item.ItemType == "content" {
 			continue
 		}
 		totalAssessable++
 		beta, alpha := extractIRTParams(json.RawMessage(item.Data))
+		if beta != 0.0 || alpha != 1.0 {
+			irtParamCount++
+		}
 		pool = append(pool, itemIRT{
 			Item: gin.H{
 				"id":        item.ID,
@@ -137,6 +142,9 @@ func (h *Handler) StartSession(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No assessable items in this course"})
 		return
 	}
+
+	log.Printf("[adaptive] session start: user=%d course=%d theta=%.2f pool=%d irt_calibrated=%d/%d",
+		userID, courseID, theta, totalAssessable, irtParamCount, totalAssessable)
 
 	next := selectNextItem(theta, pool)
 	if next == nil {
@@ -219,6 +227,9 @@ func (h *Handler) SubmitAnswer(c *gin.Context) {
 	})
 
 	next := selectNextItem(newTheta, pool)
+
+	log.Printf("[adaptive] submit: user=%d course=%d item=%d outcome=%d theta=%.2f->%.2f p=%.2f beta=%.2f alpha=%.2f remaining=%d",
+		userID, body.CourseID, body.ItemID, body.Outcome, theta, newTheta, p, submittedBeta, submittedAlpha, len(pool))
 
 	c.JSON(http.StatusOK, gin.H{
 		"theta":       round2(newTheta),

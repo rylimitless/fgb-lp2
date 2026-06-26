@@ -69,7 +69,7 @@
         return "Expert";
     }
 
-    // ---- Real data with graceful showcase fallback (visual parity target) ----
+    // ---- Real data only, no fallback ----
     let completedCourses = $derived(
         recentCourses.filter((c: any) => c.progress?.completed),
     );
@@ -84,30 +84,39 @@
     let progressPct = $derived(
         stats.totalCourses > 0
             ? Math.round((completedCourses.length / stats.totalCourses) * 100)
-            : 72,
+            : 0,
     );
-    let completedN = $derived(completedCourses.length || 15);
-    let inProgressN = $derived(inProgressCourses.length || 8);
-    let overdueN = $derived(Math.max(0, stats.pendingReview ?? 0) || 3);
+    let completedN = $derived(completedCourses.length);
+    let inProgressN = $derived(inProgressCourses.length);
+    let overdueN = $derived(Math.max(0, stats.pendingReview ?? 0));
 
     // Level from theta
     let levelNum = $derived(
-        Math.min(10, Math.max(1, Math.round(((stats.theta + 3) / 6) * 8) + 1)),
+        stats.theta !== undefined
+            ? Math.min(
+                  10,
+                  Math.max(1, Math.round(((stats.theta + 3) / 6) * 8) + 1),
+              )
+            : 1,
     );
     let levelTitle = $derived(
-        thetaLabel(stats.theta) === "Expert"
-            ? "Visionary"
-            : thetaLabel(stats.theta) === "Advanced"
-              ? "Rising Achiever"
-              : thetaLabel(stats.theta) === "Proficient"
-                ? "Rising Achiever"
-                : "Fast Starter",
+        stats.theta !== undefined
+            ? thetaLabel(stats.theta) === "Expert"
+                ? "Visionary"
+                : thetaLabel(stats.theta) === "Advanced"
+                  ? "Rising Achiever"
+                  : thetaLabel(stats.theta) === "Proficient"
+                    ? "Rising Achiever"
+                    : "Fast Starter"
+            : "",
     );
     let levelProgressPct = $derived(
-        Math.round((((stats.theta + 3) / 6) * 100) % 100) || 62,
+        stats.theta !== undefined
+            ? Math.round((((stats.theta + 3) / 6) * 100) % 100)
+            : 0,
     );
 
-    // Continue learning — live from dashboard, with derived fallback
+    // Continue learning — live from dashboard only, no fallback
     let continueCourse = $derived(
         data.dashboard?.continue_learning
             ? ({
@@ -120,25 +129,14 @@
                   },
                   image: data.dashboard.continue_learning.image,
               } as any)
-            : inProgressCourses[0],
+            : null,
     );
-    let continueTitle = $derived(
-        continueCourse?.title ?? "Information Security Awareness",
-    );
+    let continueTitle = $derived(continueCourse?.title ?? "");
     let continuePct = $derived(
-        data.dashboard?.continue_learning?.progress_pct ??
-            (continueCourse?.progress?.current_module !== undefined
-                ? Math.min(
-                      Math.round(
-                          (continueCourse.progress.current_module / 5) * 100,
-                      ),
-                      92,
-                  )
-                : 65),
+        data.dashboard?.continue_learning?.progress_pct ?? 0,
     );
     let continueImage = $derived(
-        data.dashboard?.continue_learning?.image ??
-            "/brand/modules/information-security.png",
+        data.dashboard?.continue_learning?.image ?? "",
     );
     let continueCourseId = $derived(
         data.dashboard?.continue_learning?.id ?? null,
@@ -162,65 +160,13 @@
         return "/brand/pathways/banking-foundations.png";
     }
 
-    // Recommended (real, else showcase trio per reference)
-    const showcaseRecs = [
-        {
-            title: "Fraud Detection Essentials",
-            duration: "25 min",
-            level: "Intermediate",
-            image: "/brand/pathways/cybersecurity.png",
-        },
-        {
-            title: "Customer Experience Excellence",
-            duration: "30 min",
-            level: "Beginner",
-            image: "/brand/pathways/customer-service.png",
-        },
-        {
-            title: "Leading Effective Teams",
-            duration: "40 min",
-            level: "Advanced",
-            image: "/brand/pathways/leadership.png",
-        },
-    ];
-    let realRecs = $derived(
-        recentCourses
-            .filter(
-                (c: any) =>
-                    c.status === "published" &&
-                    (!c.progress || c.progress.current_module === undefined),
-            )
-            .slice(0, 3)
-            .map((c: any) => ({
-                title: c.title,
-                duration: `${(c.source_doc_ids?.length ?? 2) * 12} min`,
-                level: "Intermediate",
-                image: pathImg(c.title),
-            })),
-    );
-    // Recommended (real, else dashboard, else showcase trio)
-    let recommended = $derived(
-        data.dashboard?.recommended?.length
-            ? data.dashboard.recommended
-            : realRecs.length >= 3
-              ? realRecs
-              : showcaseRecs,
-    );
+    // Recommended — live from dashboard only
+    let recommended = $derived(data.dashboard?.recommended ?? []);
 
-    // Learning path — live from dashboard, with showcase fallback
-    let learningPath = $derived(
-        data.dashboard?.learning_path?.length
-            ? data.dashboard.learning_path
-            : [
-                  { label: "Foundations of Leadership", status: "Completed" },
-                  { label: "Emotional Intelligence", status: "Completed" },
-                  { label: "Strategic Thinking", status: "In Progress" },
-                  { label: "Leading High Performing Teams", status: "Locked" },
-                  { label: "Change Leadership", status: "Locked" },
-              ],
-    );
+    // Learning path — live from dashboard only
+    let learningPath = $derived(data.dashboard?.learning_path ?? []);
 
-    // Achievements — live from dashboard, with derived fallback
+    // Achievements — live from dashboard only
     const iconMap: Record<string, typeof Zap> = {
         zap: Zap,
         flame: Flame,
@@ -228,36 +174,13 @@
         users: Users,
     };
     let achievements = $derived(
-        data.dashboard?.achievements?.length
-            ? data.dashboard.achievements.map(
-                  (a: { label: string; tier: string; icon: string }) => ({
-                      label: a.label,
-                      tier: a.tier as "gold" | "silver" | "bronze",
-                      icon: iconMap[a.icon] ?? Zap,
-                  }),
-              )
-            : [
-                  { label: "Quick Learner", tier: "gold" as const, icon: Zap },
-                  ...(gamification.streakDays >= 7
-                      ? [
-                            {
-                                label: `${gamification.streakDays}-Day Streak`,
-                                tier: "silver" as const,
-                                icon: Flame,
-                            },
-                        ]
-                      : []),
-                  {
-                      label: "Knowledge Explorer",
-                      tier: "gold" as const,
-                      icon: BookOpen,
-                  },
-                  {
-                      label: "Team Player",
-                      tier: "bronze" as const,
-                      icon: Users,
-                  },
-              ],
+        (data.dashboard?.achievements ?? []).map(
+            (a: { label: string; tier: string; icon: string }) => ({
+                label: a.label,
+                tier: a.tier as "gold" | "silver" | "bronze",
+                icon: iconMap[a.icon] ?? Zap,
+            }),
+        ),
     );
 
     // Leaderboard (loaded client-side for live data)
@@ -286,31 +209,18 @@
         leaderboardLoading = false;
     }
 
-    // Deadlines — live from dashboard, with showcase fallback
+    // Deadlines — live from dashboard only
     const deadlineIconMap: Record<string, typeof Clock> = {
         clock: Clock,
     };
     let deadlines = $derived(
-        data.dashboard?.deadlines?.length
-            ? data.dashboard.deadlines.map(
-                  (d: { title: string; due: string; icon: string }) => ({
-                      title: d.title,
-                      due: d.due,
-                      icon: deadlineIconMap[d.icon] ?? Clock,
-                  }),
-              )
-            : [
-                  {
-                      title: "AML Compliance Refresher",
-                      due: "Due in 3 days",
-                      icon: Clock,
-                  },
-                  {
-                      title: "Data Privacy Assessment",
-                      due: "Due in 5 days",
-                      icon: Clock,
-                  },
-              ],
+        (data.dashboard?.deadlines ?? []).map(
+            (d: { title: string; due: string; icon: string }) => ({
+                title: d.title,
+                due: d.due,
+                icon: deadlineIconMap[d.icon] ?? Clock,
+            }),
+        ),
     );
 
     const whatsNewIconMap: Record<string, typeof Sparkles> = {
@@ -318,44 +228,20 @@
         "trending-up": TrendingUp,
     };
     let whatsNew = $derived(
-        data.dashboard?.whats_new?.length
-            ? data.dashboard.whats_new.map(
-                  (w: { title: string; meta: string; icon: string }) => ({
-                      title: w.title,
-                      meta: w.meta,
-                      icon: whatsNewIconMap[w.icon] ?? Sparkles,
-                  }),
-              )
-            : [
-                  {
-                      title: "Sustainable Banking Principles",
-                      meta: "Just added",
-                      icon: Sparkles,
-                  },
-                  {
-                      title: "Digital Transformation Path",
-                      meta: "Recommended for you",
-                      icon: TrendingUp,
-                  },
-              ],
+        (data.dashboard?.whats_new ?? []).map(
+            (w: { title: string; meta: string; icon: string }) => ({
+                title: w.title,
+                meta: w.meta,
+                icon: whatsNewIconMap[w.icon] ?? Sparkles,
+            }),
+        ),
     );
-    let featuredLearning = $derived(
-        data.dashboard?.featured_learning?.length
-            ? data.dashboard.featured_learning
-            : [
-                  "Information Security Awareness",
-                  "Fraud Detection Essentials",
-                  "Customer Experience Excellence",
-                  "Leading Effective Teams",
-                  "Data Protection Principles",
-                  "Compliance Fundamentals",
-              ],
-    );
+    let featuredLearning = $derived(data.dashboard?.featured_learning ?? []);
 
     let weeklyBars = $derived(
         data.dashboard?.weekly_activity?.length === 7
             ? data.dashboard.weekly_activity
-            : [40, 65, 50, 80, 60, 90, 75],
+            : [0, 0, 0, 0, 0, 0, 0],
     );
 
     // ---- Skill radar (Chart.js) ----
@@ -364,19 +250,9 @@
         fetchLeaderboard();
         if (!radarCanvas) return;
         const skillData = data.dashboard?.skill_radar;
-        const labels = skillData?.labels?.length
-            ? skillData.labels
-            : [
-                  "Leadership",
-                  "Communication",
-                  "Problem Solving",
-                  "Strategic Thinking",
-                  "Adaptability",
-              ];
+        const labels = skillData?.labels?.length ? skillData.labels : [];
         const values =
-            skillData?.data?.length === labels.length
-                ? skillData.data
-                : [85, 70, 75, 80, 60];
+            skillData?.data?.length === labels.length ? skillData.data : [];
         const chart = new Chart(radarCanvas, {
             type: "radar",
             data: {

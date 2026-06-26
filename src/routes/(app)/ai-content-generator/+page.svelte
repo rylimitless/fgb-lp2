@@ -101,6 +101,61 @@
     let generateCollapsed = $state(false);
     let editError = $state("");
 
+    // ---- Course Settings ----
+    let courseSettings = $state<{
+        max_attempts?: number;
+        days_to_complete?: number;
+    }>({});
+    let settingsSaving = $state(false);
+    let settingsSaved = $state(false);
+    let settingsSaveError = $state("");
+
+    function parseSettings(raw: any) {
+        if (!raw || raw === "{}") return {};
+        try {
+            return typeof raw === "string" ? JSON.parse(raw) : raw;
+        } catch {
+            return {};
+        }
+    }
+
+    async function saveSettings(courseId: number) {
+        settingsSaving = true;
+        settingsSaved = false;
+        settingsSaveError = "";
+        try {
+            const clean: any = {};
+            if (
+                courseSettings.max_attempts &&
+                courseSettings.max_attempts > 0
+            ) {
+                clean.max_attempts = courseSettings.max_attempts;
+            }
+            if (
+                courseSettings.days_to_complete &&
+                courseSettings.days_to_complete > 0
+            ) {
+                clean.days_to_complete = courseSettings.days_to_complete;
+            }
+            const res = await fetch(`/api/courses/${courseId}/settings`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ settings: clean }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || "Failed to save");
+            }
+            settingsSaved = true;
+            setTimeout(() => (settingsSaved = false), 3000);
+        } catch (e: any) {
+            settingsSaveError = e.message || "Network error";
+        } finally {
+            settingsSaving = false;
+        }
+    }
+
     // ---- Per-item AI Edit ----
     let editingItemId = $state<number | null>(null);
     let itemEditInstructions = $state("");
@@ -469,6 +524,7 @@
             });
             if (res.ok) {
                 viewingCourse = await res.json();
+                courseSettings = parseSettings(viewingCourse.settings);
             }
         } catch {
             // ignore
@@ -1052,6 +1108,82 @@
                         </div>
                     </div>
                 {/if}
+            </div>
+
+            <!-- Course Settings -->
+            <div class="rounded-lg border border-border bg-card p-4 mb-6">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-semibold text-foreground">
+                        Course Settings
+                    </h3>
+                    {#if settingsSaved}
+                        <span
+                            class="text-xs text-success inline-flex items-center gap-1"
+                        >
+                            <CheckCircle class="size-3" /> Saved
+                        </span>
+                    {/if}
+                </div>
+                <div class="flex flex-col gap-4">
+                    <div class="flex flex-col gap-1.5">
+                        <label
+                            for="settings-max-attempts"
+                            class="text-xs font-medium text-muted-foreground"
+                        >
+                            Max Attempts
+                            <span class="text-muted-foreground/50 font-normal"
+                                >(leave empty for unlimited)</span
+                            >
+                        </label>
+                        <input
+                            id="settings-max-attempts"
+                            type="number"
+                            min="1"
+                            bind:value={courseSettings.max_attempts}
+                            placeholder="Unlimited"
+                            class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring w-32"
+                        />
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label
+                            for="settings-days"
+                            class="text-xs font-medium text-muted-foreground"
+                        >
+                            Days to Complete
+                            <span class="text-muted-foreground/50 font-normal"
+                                >(leave empty for no deadline)</span
+                            >
+                        </label>
+                        <input
+                            id="settings-days"
+                            type="number"
+                            min="1"
+                            bind:value={courseSettings.days_to_complete}
+                            placeholder="No deadline"
+                            class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring w-32"
+                        />
+                    </div>
+                    {#if settingsSaveError}
+                        <p class="text-xs text-destructive">
+                            {settingsSaveError}
+                        </p>
+                    {/if}
+                    <Button.Root
+                        size="sm"
+                        class="self-start"
+                        disabled={settingsSaving}
+                        onclick={() => saveSettings(viewingCourse.id)}
+                    >
+                        {#if settingsSaving}
+                            <LoaderCircle
+                                class="size-3.5 mr-1.5 animate-spin"
+                            />
+                            Saving…
+                        {:else}
+                            Save Settings
+                        {/if}
+                    </Button.Root>
+                </div>
             </div>
 
             <!-- AI Edit bar -->

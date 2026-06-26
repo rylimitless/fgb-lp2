@@ -4,6 +4,8 @@
         BookOpen,
         ChevronLeft,
         ChevronRight,
+        ChevronDown,
+        ChevronUp,
         CheckCircle,
         Clock,
         LoaderCircle,
@@ -18,6 +20,7 @@
         Search,
         X,
         Printer,
+        Settings,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import {
@@ -37,6 +40,12 @@
         QuestionOrdering,
         QuestionHotspot,
     } from "$lib/components/brand";
+
+    let { data } = $props();
+    let userRoles: string[] = $derived(data?.user?.roles ?? []);
+    let isContentCreator = $derived(
+        userRoles.includes("content creator") || userRoles.includes("admin"),
+    );
 
     let courses = $state<any[]>([]);
     let loading = $state(true);
@@ -58,6 +67,65 @@
     // Confirmation dialog for skipping unanswered questions
     let skipConfirmOpen = $state(false);
     let pendingNavigation: (() => void) | null = $state(null);
+
+    // Settings editor state (for content creators)
+    let settingsEditOpen = $state(false);
+    let editMaxAttempts = $state<number | null>(null);
+    let editDaysToComplete = $state<number | null>(null);
+    let settingsSaving = $state(false);
+    let settingsSaveError = $state("");
+    let settingsSaved = $state(false);
+
+    function parseCourseSettings(raw: any): any {
+        if (!raw || raw === "{}") return {};
+        try {
+            return typeof raw === "string" ? JSON.parse(raw) : raw;
+        } catch {
+            return {};
+        }
+    }
+    function openSettingsEditor() {
+        const s = parseCourseSettings(enrolledCourse?.settings);
+        editMaxAttempts = s.max_attempts ?? null;
+        editDaysToComplete = s.days_to_complete ?? null;
+        settingsEditOpen = true;
+        settingsSaveError = "";
+        settingsSaved = false;
+    }
+    async function saveCourseSettings() {
+        if (!enrolledCourse) return;
+        settingsSaving = true;
+        settingsSaveError = "";
+        settingsSaved = false;
+        try {
+            const clean: any = {};
+            if (editMaxAttempts && editMaxAttempts > 0)
+                clean.max_attempts = editMaxAttempts;
+            if (editDaysToComplete && editDaysToComplete > 0)
+                clean.days_to_complete = editDaysToComplete;
+            const res = await fetch(
+                `/api/courses/${enrolledCourse.id}/settings`,
+                {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({ settings: clean }),
+                },
+            );
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || "Failed to save");
+            }
+            const updated = await res.json();
+            enrolledCourse.settings = updated.settings;
+            settingsSaved = true;
+            setTimeout(() => (settingsSaved = false), 3000);
+        } catch (e: any) {
+            settingsSaveError = e.message || "Network error";
+        } finally {
+            settingsSaving = false;
+        }
+    }
 
     // Answers: { [itemId]: answer }
     let answers = $state<Record<number, any>>({});
@@ -168,6 +236,11 @@
             });
             if (res.ok) {
                 enrolledCourse = await res.json();
+                // Check if blocked by course settings
+                if (enrolledCourse.blocked) {
+                    // enrolledCourse stays set so the UI can show the blocked message
+                    return;
+                }
                 // Restore saved item-level answers
                 if (enrolledCourse.modules) {
                     for (const mod of enrolledCourse.modules) {
@@ -867,7 +940,29 @@
     </div>
 {:else}
     <div class="flex w-full max-w-6xl mx-auto flex-col gap-4">
-        {#if previewMode}
+        {#if enrolledCourse.blocked}
+            <div
+                class="rounded-2xl border border-destructive/30 bg-destructive/5 px-6 py-8 flex flex-col items-center gap-4 motion-rise-in"
+            >
+                <AlertTriangle class="size-10 text-destructive" />
+                <div class="text-center">
+                    <h2 class="text-lg font-semibold text-foreground mb-2">
+                        {enrolledCourse.title}
+                    </h2>
+                    <p class="text-sm text-destructive font-medium">
+                        {enrolledCourse.blocked.message}
+                    </p>
+                    {#if enrolledCourse.progress?.completed}
+                        <p class="text-xs text-muted-foreground mt-2">
+                            Score: {enrolledCourse.progress.score_pct}%
+                        </p>
+                    {/if}
+                </div>
+                <Button.Root variant="outline" size="sm" onclick={goHome}>
+                    <ChevronLeft class="size-3.5 mr-1" /> Back to courses
+                </Button.Root>
+            </div>
+        {:else if previewMode}
             <div
                 role="status"
                 class="w-full rounded-2xl border border-info/30 bg-info/5 px-4 py-2.5 flex items-center justify-between motion-rise-in"
@@ -884,6 +979,75 @@
                 <Button.Root variant="outline" size="sm" onclick={goHome}>
                     <ChevronLeft class="size-3.5 mr-1" /> Back to editor
                 </Button.Root>
+            </div>
+        {/if}
+        {#if isContentCreator && !previewMode && !enrolledCourse.blocked}
+            <div class="rounded-xl border border-border bg-card p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <button
+                        class="flex items-center gap-2 text-sm font-medium text-foreground hover:text-primary transition-colors"
+                        onclick={() => (settingsEditOpen = !settingsEditOpen)}
+                    >
+                        <Settings class="size-4" />
+                        Course Settings
+                        {#if settingsEditOpen}
+                            <ChevronUp class="size-3.5" />
+                        {:else}
+                            <ChevronDown class="size-3.5" />
+                        {/if}
+                    </button>
+                    {#if settingsSaved}
+                        <span
+                            class="text-xs text-success inline-flex items-center gap-1"
+                            ><CheckCircle class="size-3" /> Saved</span
+                        >
+                    {/if}
+                </div>
+                {#if settingsEditOpen}
+                    <div class="flex flex-col gap-3 mt-2">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <label class="flex flex-col gap-1">
+                                <span class="text-xs text-muted-foreground"
+                                    >Max Attempts</span
+                                >
+                                <input
+                                    type="number"
+                                    min="1"
+                                    bind:value={editMaxAttempts}
+                                    placeholder="Unlimited"
+                                    class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm w-28"
+                                />
+                            </label>
+                            <label class="flex flex-col gap-1">
+                                <span class="text-xs text-muted-foreground"
+                                    >Days to Complete</span
+                                >
+                                <input
+                                    type="number"
+                                    min="1"
+                                    bind:value={editDaysToComplete}
+                                    placeholder="No deadline"
+                                    class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm w-28"
+                                />
+                            </label>
+                        </div>
+                        {#if settingsSaveError}
+                            <p class="text-xs text-destructive">
+                                {settingsSaveError}
+                            </p>
+                        {/if}
+                        <Button.Root
+                            size="sm"
+                            class="self-start"
+                            disabled={settingsSaving}
+                            onclick={saveCourseSettings}
+                        >
+                            {#if settingsSaving}<LoaderCircle
+                                    class="size-3.5 mr-1.5 animate-spin"
+                                />Saving…{:else}Save Settings{/if}
+                        </Button.Root>
+                    </div>
+                {/if}
             </div>
         {/if}
         <div class="flex flex-col md:flex-row w-full gap-4 md:gap-6">
