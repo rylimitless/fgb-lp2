@@ -26,6 +26,7 @@
         Menu,
         X,
         Building2,
+        Layers,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
@@ -108,6 +109,18 @@
             icon: Users,
             href: "/user-management",
             roles: ["admin"],
+        },
+        {
+            label: "Learning Paths",
+            icon: Layers,
+            href: "/learning-paths",
+            roles: [] as string[],
+        },
+        {
+            label: "Path Mgmt",
+            icon: Layers,
+            href: "/learning-path-management",
+            roles: ["admin", "manager", "content creator"],
         },
         {
             label: "Departments",

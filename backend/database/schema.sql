@@ -319,3 +319,43 @@ create table if not exists enrollments (
 create index if not exists idx_enrollments_user on enrollments(user_id);
 create index if not exists idx_enrollments_course on enrollments(course_id);
 create index if not exists idx_enrollments_status on enrollments(status);
+
+-- Learning Paths: sequenced curricula grouping multiple courses
+create table if not exists learning_paths (
+  id bigserial primary key,
+  title text not null,
+  description text not null default '',
+  created_by bigint not null references users(id) on delete cascade,
+  status text not null default 'draft'
+    check (status in ('draft', 'published', 'archived')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Courses within a learning path (ordered sequence)
+create table if not exists learning_path_courses (
+  id bigserial primary key,
+  learning_path_id bigint not null references learning_paths(id) on delete cascade,
+  course_id bigint not null references courses(id) on delete cascade,
+  sort_order int not null default 0,
+  is_required boolean not null default true,
+  unique(learning_path_id, course_id)
+);
+create index if not exists idx_lpc_path on learning_path_courses(learning_path_id);
+create index if not exists idx_lpc_course on learning_path_courses(course_id);
+
+-- User enrollments in learning paths
+create table if not exists learning_path_enrollments (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  learning_path_id bigint not null references learning_paths(id) on delete cascade,
+  status text not null default 'active'
+    check (status in ('active', 'completed', 'dropped')),
+  progress_pct numeric(5,2) not null default 0,
+  started_at timestamptz not null default now(),
+  completed_at timestamptz,
+  dropped_at timestamptz,
+  unique(user_id, learning_path_id)
+);
+create index if not exists idx_lpe_user on learning_path_enrollments(user_id);
+create index if not exists idx_lpe_path on learning_path_enrollments(learning_path_id);

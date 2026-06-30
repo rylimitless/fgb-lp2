@@ -491,3 +491,94 @@ from enrollments e
 join courses c on c.id = e.course_id
 join users u on u.id = e.user_id
 where e.id = $1;
+
+-- Learning Paths --
+
+-- name: CreateLearningPath :one
+insert into learning_paths (title, description, created_by)
+values ($1, $2, $3)
+returning *;
+
+-- name: GetLearningPaths :many
+select * from learning_paths order by updated_at desc;
+
+-- name: GetLearningPathByID :one
+select * from learning_paths where id = $1;
+
+-- name: UpdateLearningPath :one
+update learning_paths
+set title = $2, description = $3, updated_at = now()
+where id = $1
+returning *;
+
+-- name: UpdateLearningPathStatus :one
+update learning_paths
+set status = $2, updated_at = now()
+where id = $1
+returning *;
+
+-- name: DeleteLearningPath :exec
+delete from learning_paths where id = $1;
+
+-- name: AddCourseToPath :one
+insert into learning_path_courses (learning_path_id, course_id, sort_order, is_required)
+values ($1, $2, $3, $4)
+on conflict (learning_path_id, course_id) do nothing
+returning *;
+
+-- name: RemoveCourseFromPath :exec
+delete from learning_path_courses where learning_path_id = $1 and course_id = $2;
+
+-- name: GetPathCourses :many
+select lpc.*, c.title as course_title, c.description as course_description, c.status as course_status
+from learning_path_courses lpc
+join courses c on c.id = lpc.course_id
+where lpc.learning_path_id = $1
+order by lpc.sort_order asc;
+
+-- name: UpdatePathCourseOrder :one
+update learning_path_courses
+set sort_order = $3, is_required = $4
+where learning_path_id = $1 and course_id = $2
+returning *;
+
+-- name: GetPublishedLearningPaths :many
+select * from learning_paths where status = 'published' order by updated_at desc;
+
+-- name: GetPublishedLearningPathByID :one
+select * from learning_paths where id = $1 and status = 'published';
+
+-- name: EnrollInLearningPath :one
+insert into learning_path_enrollments (user_id, learning_path_id, status)
+values ($1, $2, 'active')
+on conflict (user_id, learning_path_id)
+do update set status = 'active', dropped_at = null
+returning *;
+
+-- name: GetLearningPathEnrollment :one
+select * from learning_path_enrollments
+where user_id = $1 and learning_path_id = $2;
+
+-- name: GetUserLearningPathEnrollments :many
+select lpe.*, lp.title as path_title, lp.description as path_description
+from learning_path_enrollments lpe
+join learning_paths lp on lp.id = lpe.learning_path_id
+where lpe.user_id = $1
+order by lpe.started_at desc;
+
+-- name: UpdateLearningPathEnrollmentProgress :one
+update learning_path_enrollments
+set progress_pct = $2,
+    status = case when $2 >= 100 then 'completed' else status end,
+    completed_at = case when $2 >= 100 then now() else completed_at end
+where id = $1
+returning *;
+
+-- name: DropLearningPathEnrollment :one
+update learning_path_enrollments
+set status = 'dropped', dropped_at = now()
+where id = $1
+returning *;
+
+-- name: CountPathCourses :one
+select count(*)::int from learning_path_courses where learning_path_id = $1;

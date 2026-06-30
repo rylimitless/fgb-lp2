@@ -126,6 +126,35 @@ type ItemProgress struct {
 	AnsweredAt pgtype.Timestamptz `json:"answered_at"`
 }
 
+type LearningPath struct {
+	ID          int64              `json:"id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	CreatedBy   int64              `json:"created_by"`
+	Status      string             `json:"status"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type LearningPathCourse struct {
+	ID             int64 `json:"id"`
+	LearningPathID int64 `json:"learning_path_id"`
+	CourseID       int64 `json:"course_id"`
+	SortOrder      int32 `json:"sort_order"`
+	IsRequired     bool  `json:"is_required"`
+}
+
+type LearningPathEnrollment struct {
+	ID             int64              `json:"id"`
+	UserID         int64              `json:"user_id"`
+	LearningPathID int64              `json:"learning_path_id"`
+	Status         string             `json:"status"`
+	ProgressPct    pgtype.Numeric     `json:"progress_pct"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+	DroppedAt      pgtype.Timestamptz `json:"dropped_at"`
+}
+
 type LearningPreference struct {
 	UserID          int64              `json:"user_id"`
 	LearningStyle   string             `json:"learning_style"`

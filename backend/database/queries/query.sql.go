@@ -12,6 +12,38 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+const addCourseToPath = `-- name: AddCourseToPath :one
+insert into learning_path_courses (learning_path_id, course_id, sort_order, is_required)
+values ($1, $2, $3, $4)
+on conflict (learning_path_id, course_id) do nothing
+returning id, learning_path_id, course_id, sort_order, is_required
+`
+
+type AddCourseToPathParams struct {
+	LearningPathID int64 `json:"learning_path_id"`
+	CourseID       int64 `json:"course_id"`
+	SortOrder      int32 `json:"sort_order"`
+	IsRequired     bool  `json:"is_required"`
+}
+
+func (q *Queries) AddCourseToPath(ctx context.Context, arg AddCourseToPathParams) (LearningPathCourse, error) {
+	row := q.db.QueryRow(ctx, addCourseToPath,
+		arg.LearningPathID,
+		arg.CourseID,
+		arg.SortOrder,
+		arg.IsRequired,
+	)
+	var i LearningPathCourse
+	err := row.Scan(
+		&i.ID,
+		&i.LearningPathID,
+		&i.CourseID,
+		&i.SortOrder,
+		&i.IsRequired,
+	)
+	return i, err
+}
+
 const addUserToDepartment = `-- name: AddUserToDepartment :exec
 insert into user_departments (user_id, department_id)
 values ($1, $2)
@@ -101,6 +133,17 @@ func (q *Queries) CountCoachQueries(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countPathCourses = `-- name: CountPathCourses :one
+select count(*)::int from learning_path_courses where learning_path_id = $1
+`
+
+func (q *Queries) CountPathCourses(ctx context.Context, learningPathID int64) (int32, error) {
+	row := q.db.QueryRow(ctx, countPathCourses, learningPathID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const countPendingReviewCourses = `-- name: CountPendingReviewCourses :one
@@ -265,6 +308,35 @@ func (q *Queries) CreateEnrollment(ctx context.Context, arg CreateEnrollmentPara
 		&i.EnrolledAt,
 		&i.CompletedAt,
 		&i.DroppedAt,
+	)
+	return i, err
+}
+
+const createLearningPath = `-- name: CreateLearningPath :one
+
+insert into learning_paths (title, description, created_by)
+values ($1, $2, $3)
+returning id, title, description, created_by, status, created_at, updated_at
+`
+
+type CreateLearningPathParams struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	CreatedBy   int64  `json:"created_by"`
+}
+
+// Learning Paths --
+func (q *Queries) CreateLearningPath(ctx context.Context, arg CreateLearningPathParams) (LearningPath, error) {
+	row := q.db.QueryRow(ctx, createLearningPath, arg.Title, arg.Description, arg.CreatedBy)
+	var i LearningPath
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -468,6 +540,15 @@ func (q *Queries) DeleteItemProgress(ctx context.Context, arg DeleteItemProgress
 	return err
 }
 
+const deleteLearningPath = `-- name: DeleteLearningPath :exec
+delete from learning_paths where id = $1
+`
+
+func (q *Queries) DeleteLearningPath(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteLearningPath, id)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 delete from sessions where token = $1
 `
@@ -493,6 +574,29 @@ delete from user_roles where user_id = $1
 func (q *Queries) DeleteUserRoles(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
 	return err
+}
+
+const dropLearningPathEnrollment = `-- name: DropLearningPathEnrollment :one
+update learning_path_enrollments
+set status = 'dropped', dropped_at = now()
+where id = $1
+returning id, user_id, learning_path_id, status, progress_pct, started_at, completed_at, dropped_at
+`
+
+func (q *Queries) DropLearningPathEnrollment(ctx context.Context, id int64) (LearningPathEnrollment, error) {
+	row := q.db.QueryRow(ctx, dropLearningPathEnrollment, id)
+	var i LearningPathEnrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.LearningPathID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
+	return i, err
 }
 
 const enrollInCourse = `-- name: EnrollInCourse :exec
@@ -549,6 +653,35 @@ func (q *Queries) EnrollInCourseV2(ctx context.Context, arg EnrollInCourseV2Para
 		&i.Status,
 		&i.ProgressPct,
 		&i.EnrolledAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
+	return i, err
+}
+
+const enrollInLearningPath = `-- name: EnrollInLearningPath :one
+insert into learning_path_enrollments (user_id, learning_path_id, status)
+values ($1, $2, 'active')
+on conflict (user_id, learning_path_id)
+do update set status = 'active', dropped_at = null
+returning id, user_id, learning_path_id, status, progress_pct, started_at, completed_at, dropped_at
+`
+
+type EnrollInLearningPathParams struct {
+	UserID         int64 `json:"user_id"`
+	LearningPathID int64 `json:"learning_path_id"`
+}
+
+func (q *Queries) EnrollInLearningPath(ctx context.Context, arg EnrollInLearningPathParams) (LearningPathEnrollment, error) {
+	row := q.db.QueryRow(ctx, enrollInLearningPath, arg.UserID, arg.LearningPathID)
+	var i LearningPathEnrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.LearningPathID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.StartedAt,
 		&i.CompletedAt,
 		&i.DroppedAt,
 	)
@@ -1346,6 +1479,83 @@ func (q *Queries) GetLeaderboard(ctx context.Context, limit int32) ([]GetLeaderb
 	return items, nil
 }
 
+const getLearningPathByID = `-- name: GetLearningPathByID :one
+select id, title, description, created_by, status, created_at, updated_at from learning_paths where id = $1
+`
+
+func (q *Queries) GetLearningPathByID(ctx context.Context, id int64) (LearningPath, error) {
+	row := q.db.QueryRow(ctx, getLearningPathByID, id)
+	var i LearningPath
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getLearningPathEnrollment = `-- name: GetLearningPathEnrollment :one
+select id, user_id, learning_path_id, status, progress_pct, started_at, completed_at, dropped_at from learning_path_enrollments
+where user_id = $1 and learning_path_id = $2
+`
+
+type GetLearningPathEnrollmentParams struct {
+	UserID         int64 `json:"user_id"`
+	LearningPathID int64 `json:"learning_path_id"`
+}
+
+func (q *Queries) GetLearningPathEnrollment(ctx context.Context, arg GetLearningPathEnrollmentParams) (LearningPathEnrollment, error) {
+	row := q.db.QueryRow(ctx, getLearningPathEnrollment, arg.UserID, arg.LearningPathID)
+	var i LearningPathEnrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.LearningPathID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
+	return i, err
+}
+
+const getLearningPaths = `-- name: GetLearningPaths :many
+select id, title, description, created_by, status, created_at, updated_at from learning_paths order by updated_at desc
+`
+
+func (q *Queries) GetLearningPaths(ctx context.Context) ([]LearningPath, error) {
+	rows, err := q.db.Query(ctx, getLearningPaths)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LearningPath
+	for rows.Next() {
+		var i LearningPath
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getLearningPreference = `-- name: GetLearningPreference :one
 select user_id, learning_style, difficulty_level, preferred_topics, theta, created_at, updated_at from learning_preferences where user_id = $1
 `
@@ -1455,6 +1665,54 @@ func (q *Queries) GetMostFailedTopics(ctx context.Context, limit int32) ([]GetMo
 			&i.TotalQuestions,
 			&i.TotalCorrect,
 			&i.TotalWrong,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPathCourses = `-- name: GetPathCourses :many
+select lpc.id, lpc.learning_path_id, lpc.course_id, lpc.sort_order, lpc.is_required, c.title as course_title, c.description as course_description, c.status as course_status
+from learning_path_courses lpc
+join courses c on c.id = lpc.course_id
+where lpc.learning_path_id = $1
+order by lpc.sort_order asc
+`
+
+type GetPathCoursesRow struct {
+	ID                int64  `json:"id"`
+	LearningPathID    int64  `json:"learning_path_id"`
+	CourseID          int64  `json:"course_id"`
+	SortOrder         int32  `json:"sort_order"`
+	IsRequired        bool   `json:"is_required"`
+	CourseTitle       string `json:"course_title"`
+	CourseDescription string `json:"course_description"`
+	CourseStatus      string `json:"course_status"`
+}
+
+func (q *Queries) GetPathCourses(ctx context.Context, learningPathID int64) ([]GetPathCoursesRow, error) {
+	rows, err := q.db.Query(ctx, getPathCourses, learningPathID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetPathCoursesRow
+	for rows.Next() {
+		var i GetPathCoursesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.LearningPathID,
+			&i.CourseID,
+			&i.SortOrder,
+			&i.IsRequired,
+			&i.CourseTitle,
+			&i.CourseDescription,
+			&i.CourseStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -1630,6 +1888,57 @@ func (q *Queries) GetPublishedCourses(ctx context.Context) ([]Course, error) {
 	return items, nil
 }
 
+const getPublishedLearningPathByID = `-- name: GetPublishedLearningPathByID :one
+select id, title, description, created_by, status, created_at, updated_at from learning_paths where id = $1 and status = 'published'
+`
+
+func (q *Queries) GetPublishedLearningPathByID(ctx context.Context, id int64) (LearningPath, error) {
+	row := q.db.QueryRow(ctx, getPublishedLearningPathByID, id)
+	var i LearningPath
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPublishedLearningPaths = `-- name: GetPublishedLearningPaths :many
+select id, title, description, created_by, status, created_at, updated_at from learning_paths where status = 'published' order by updated_at desc
+`
+
+func (q *Queries) GetPublishedLearningPaths(ctx context.Context) ([]LearningPath, error) {
+	rows, err := q.db.Query(ctx, getPublishedLearningPaths)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LearningPath
+	for rows.Next() {
+		var i LearningPath
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getSessionByToken = `-- name: GetSessionByToken :one
 select id, user_id, token, expires_at, created_at from sessions where token = $1 and expires_at > now()
 `
@@ -1757,6 +2066,58 @@ func (q *Queries) GetUserEnrollments(ctx context.Context, userID int64) ([]GetUs
 			&i.CourseTitle,
 			&i.CourseDescription,
 			&i.CourseStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getUserLearningPathEnrollments = `-- name: GetUserLearningPathEnrollments :many
+select lpe.id, lpe.user_id, lpe.learning_path_id, lpe.status, lpe.progress_pct, lpe.started_at, lpe.completed_at, lpe.dropped_at, lp.title as path_title, lp.description as path_description
+from learning_path_enrollments lpe
+join learning_paths lp on lp.id = lpe.learning_path_id
+where lpe.user_id = $1
+order by lpe.started_at desc
+`
+
+type GetUserLearningPathEnrollmentsRow struct {
+	ID              int64              `json:"id"`
+	UserID          int64              `json:"user_id"`
+	LearningPathID  int64              `json:"learning_path_id"`
+	Status          string             `json:"status"`
+	ProgressPct     pgtype.Numeric     `json:"progress_pct"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
+	DroppedAt       pgtype.Timestamptz `json:"dropped_at"`
+	PathTitle       string             `json:"path_title"`
+	PathDescription string             `json:"path_description"`
+}
+
+func (q *Queries) GetUserLearningPathEnrollments(ctx context.Context, userID int64) ([]GetUserLearningPathEnrollmentsRow, error) {
+	rows, err := q.db.Query(ctx, getUserLearningPathEnrollments, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUserLearningPathEnrollmentsRow
+	for rows.Next() {
+		var i GetUserLearningPathEnrollmentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.LearningPathID,
+			&i.Status,
+			&i.ProgressPct,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.DroppedAt,
+			&i.PathTitle,
+			&i.PathDescription,
 		); err != nil {
 			return nil, err
 		}
@@ -2070,6 +2431,20 @@ on conflict (user_id, streak_date) do nothing
 // Streaks & Leaderboard --
 func (q *Queries) RecordStreak(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, recordStreak, userID)
+	return err
+}
+
+const removeCourseFromPath = `-- name: RemoveCourseFromPath :exec
+delete from learning_path_courses where learning_path_id = $1 and course_id = $2
+`
+
+type RemoveCourseFromPathParams struct {
+	LearningPathID int64 `json:"learning_path_id"`
+	CourseID       int64 `json:"course_id"`
+}
+
+func (q *Queries) RemoveCourseFromPath(ctx context.Context, arg RemoveCourseFromPathParams) error {
+	_, err := q.db.Exec(ctx, removeCourseFromPath, arg.LearningPathID, arg.CourseID)
 	return err
 }
 
@@ -2570,6 +2945,123 @@ func (q *Queries) UpdateEnrollmentStatus(ctx context.Context, arg UpdateEnrollme
 		&i.EnrolledAt,
 		&i.CompletedAt,
 		&i.DroppedAt,
+	)
+	return i, err
+}
+
+const updateLearningPath = `-- name: UpdateLearningPath :one
+update learning_paths
+set title = $2, description = $3, updated_at = now()
+where id = $1
+returning id, title, description, created_by, status, created_at, updated_at
+`
+
+type UpdateLearningPathParams struct {
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+func (q *Queries) UpdateLearningPath(ctx context.Context, arg UpdateLearningPathParams) (LearningPath, error) {
+	row := q.db.QueryRow(ctx, updateLearningPath, arg.ID, arg.Title, arg.Description)
+	var i LearningPath
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateLearningPathEnrollmentProgress = `-- name: UpdateLearningPathEnrollmentProgress :one
+update learning_path_enrollments
+set progress_pct = $2,
+    status = case when $2 >= 100 then 'completed' else status end,
+    completed_at = case when $2 >= 100 then now() else completed_at end
+where id = $1
+returning id, user_id, learning_path_id, status, progress_pct, started_at, completed_at, dropped_at
+`
+
+type UpdateLearningPathEnrollmentProgressParams struct {
+	ID          int64          `json:"id"`
+	ProgressPct pgtype.Numeric `json:"progress_pct"`
+}
+
+func (q *Queries) UpdateLearningPathEnrollmentProgress(ctx context.Context, arg UpdateLearningPathEnrollmentProgressParams) (LearningPathEnrollment, error) {
+	row := q.db.QueryRow(ctx, updateLearningPathEnrollmentProgress, arg.ID, arg.ProgressPct)
+	var i LearningPathEnrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.LearningPathID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
+	return i, err
+}
+
+const updateLearningPathStatus = `-- name: UpdateLearningPathStatus :one
+update learning_paths
+set status = $2, updated_at = now()
+where id = $1
+returning id, title, description, created_by, status, created_at, updated_at
+`
+
+type UpdateLearningPathStatusParams struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+}
+
+func (q *Queries) UpdateLearningPathStatus(ctx context.Context, arg UpdateLearningPathStatusParams) (LearningPath, error) {
+	row := q.db.QueryRow(ctx, updateLearningPathStatus, arg.ID, arg.Status)
+	var i LearningPath
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updatePathCourseOrder = `-- name: UpdatePathCourseOrder :one
+update learning_path_courses
+set sort_order = $3, is_required = $4
+where learning_path_id = $1 and course_id = $2
+returning id, learning_path_id, course_id, sort_order, is_required
+`
+
+type UpdatePathCourseOrderParams struct {
+	LearningPathID int64 `json:"learning_path_id"`
+	CourseID       int64 `json:"course_id"`
+	SortOrder      int32 `json:"sort_order"`
+	IsRequired     bool  `json:"is_required"`
+}
+
+func (q *Queries) UpdatePathCourseOrder(ctx context.Context, arg UpdatePathCourseOrderParams) (LearningPathCourse, error) {
+	row := q.db.QueryRow(ctx, updatePathCourseOrder,
+		arg.LearningPathID,
+		arg.CourseID,
+		arg.SortOrder,
+		arg.IsRequired,
+	)
+	var i LearningPathCourse
+	err := row.Scan(
+		&i.ID,
+		&i.LearningPathID,
+		&i.CourseID,
+		&i.SortOrder,
+		&i.IsRequired,
 	)
 	return i, err
 }

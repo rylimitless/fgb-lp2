@@ -14,6 +14,7 @@ import (
 	"fgb-lp/enrollments"
 	"fgb-lp/gamification"
 	homehandler "fgb-lp/home_handler"
+	"fgb-lp/learning_paths"
 	"fgb-lp/lessons"
 	"fgb-lp/middlewares"
 	"fgb-lp/notifications"
@@ -219,6 +220,10 @@ func main() {
 	userHandler := users.NewHandler(queries)
 	userHandler.RegisterRoutes(adminGroup)
 	userHandler.RegisterListRoute(adminManagerGroup)
+
+	lpHandler := learning_paths.NewHandler(queries)
+	lpHandler.RegisterRoutes(adminManagerGroup)
+	lpHandler.RegisterLearnerRoutes(protected)
 
 	deptHandler := departments.NewHandler(queries)
 	deptHandler.RegisterRoutes(adminManagerGroup)
