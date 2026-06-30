@@ -501,8 +501,11 @@
         );
     }
 
-    function courseState(c: any): "completed" | "in_progress" | "new" {
+    function courseState(
+        c: any,
+    ): "completed" | "in_progress" | "new" | "expired" {
         if (c.progress?.completed) return "completed";
+        if (c.progress?.is_expired) return "expired";
         if (c.progress?.current_module !== undefined) return "in_progress";
         return "new";
     }
@@ -952,6 +955,14 @@
                     <p class="text-sm text-destructive font-medium">
                         {enrolledCourse.blocked.message}
                     </p>
+                    {#if enrolledCourse.blocked.reason === "expired"}
+                        <p class="text-xs text-muted-foreground mt-3 max-w-md">
+                            This course has a set deadline. You can no longer
+                            access it because the completion window has passed.
+                            Contact your administrator if you believe this is an
+                            error.
+                        </p>
+                    {/if}
                     {#if enrolledCourse.progress?.completed}
                         <p class="text-xs text-muted-foreground mt-2">
                             Score: {enrolledCourse.progress.score_pct}%

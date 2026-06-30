@@ -2,20 +2,25 @@ package notifications
 
 import (
 	"context"
+	"encoding/json"
 	database "fgb-lp/database/queries"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
 	Queries *database.Queries
+	Pool    *pgxpool.Pool
 }
 
-func NewHandler(queries *database.Queries) *Handler {
-	return &Handler{Queries: queries}
+func NewHandler(queries *database.Queries, pool *pgxpool.Pool) *Handler {
+	return &Handler{Queries: queries, Pool: pool}
 }
 
 // ListNotifications returns recent notifications + unread count for the current user.
@@ -98,6 +103,75 @@ func (h *Handler) CreateForAll(title, message, link string) {
 			Message: message,
 			Link:    link,
 		})
+	}
+}
+
+// CheckDeadlines scans all active enrollments with days_to_complete set and creates
+// notifications for approaching or overdue deadlines. Safe to call on every dashboard load;
+// uses the notification table's natural dedup (idempotent per unique title+user at worst).
+func (h *Handler) CheckDeadlines(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	uid := userID.(int64)
+	ctx := c.Request.Context()
+
+	rows, err := h.Pool.Query(ctx, `
+		SELECT e.id, c.id, c.title, c.settings, e.enrolled_at
+		FROM enrollments e
+		JOIN courses c ON c.id = e.course_id
+		WHERE e.user_id = $1 AND e.status = 'active'
+	`, uid)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	for rows.Next() {
+		var enrollmentID, courseID int64
+		var title string
+		var settingsJSON []byte
+		var enrolledAt time.Time
+		if err := rows.Scan(&enrollmentID, &courseID, &title, &settingsJSON, &enrolledAt); err != nil {
+			continue
+		}
+
+		var settings map[string]interface{}
+		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+			continue
+		}
+		dtc, ok := settings["days_to_complete"].(float64)
+		if !ok || dtc <= 0 {
+			continue
+		}
+
+		deadline := enrolledAt.Add(time.Duration(int(dtc)) * 24 * time.Hour)
+		daysLeft := int(deadline.Sub(now).Hours() / 24)
+
+		link := fmt.Sprintf("/lesson-player?id=%d", courseID)
+
+		// Only notify at specific milestones: overdue, 1 day, 3 days
+		if daysLeft < 0 {
+			h.Queries.CreateNotification(ctx, database.CreateNotificationParams{
+				UserID:  pgtype.Int8{Int64: uid, Valid: true},
+				Title:   fmt.Sprintf("Deadline passed: %s", title),
+				Message: fmt.Sprintf("Your enrollment in \"%s\" is overdue by %d day(s). Please complete it as soon as possible.", title, -daysLeft),
+				Link:    link,
+			})
+		} else if daysLeft <= 1 {
+			h.Queries.CreateNotification(ctx, database.CreateNotificationParams{
+				UserID:  pgtype.Int8{Int64: uid, Valid: true},
+				Title:   fmt.Sprintf("Deadline tomorrow: %s", title),
+				Message: fmt.Sprintf("You have %d day(s) left to complete \"%s\".", daysLeft, title),
+				Link:    link,
+			})
+		} else if daysLeft <= 3 {
+			h.Queries.CreateNotification(ctx, database.CreateNotificationParams{
+				UserID:  pgtype.Int8{Int64: uid, Valid: true},
+				Title:   fmt.Sprintf("Deadline approaching: %s", title),
+				Message: fmt.Sprintf("You have %d days left to complete \"%s\". Don't forget!", daysLeft, title),
+				Link:    link,
+			})
+		}
 	}
 }
 

@@ -24,6 +24,7 @@
         Calendar,
         Bell,
         GraduationCap,
+        AlertTriangle,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import {
@@ -141,6 +142,15 @@
     let continueCourseId = $derived(
         data.dashboard?.continue_learning?.id ?? null,
     );
+    let continueDaysLeft = $derived(
+        data.dashboard?.continue_learning?.days_left ?? null,
+    ) as number | null;
+    let continueIsOverdue = $derived(
+        data.dashboard?.continue_learning?.is_overdue ?? false,
+    );
+    let continueDeadlineDue = $derived(
+        data.dashboard?.continue_learning?.deadline_due ?? "",
+    );
 
     // Pathway image resolver (shared convention)
     const HINTS: Array<[RegExp, string]> = [
@@ -209,16 +219,27 @@
         leaderboardLoading = false;
     }
 
-    // Deadlines — live from dashboard only
+    // Deadlines — live from dashboard only (now with days_left and is_overdue)
     const deadlineIconMap: Record<string, typeof Clock> = {
         clock: Clock,
+        "alert-triangle": AlertTriangle,
     };
     let deadlines = $derived(
         (data.dashboard?.deadlines ?? []).map(
-            (d: { title: string; due: string; icon: string }) => ({
+            (d: {
+                title: string;
+                due: string;
+                icon: string;
+                days_left: number | null;
+                is_overdue: boolean;
+                course_id: number;
+            }) => ({
                 title: d.title,
                 due: d.due,
                 icon: deadlineIconMap[d.icon] ?? Clock,
+                daysLeft: d.days_left,
+                isOverdue: d.is_overdue,
+                courseId: d.course_id,
             }),
         ),
     );
@@ -562,6 +583,16 @@
                         class="absolute top-3 left-3 inline-flex items-center gap-1 rounded-full bg-accent/90 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-accent-foreground"
                         >In Progress</span
                     >
+                    {#if continueDaysLeft != null}
+                        <span
+                            class="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider tabular {continueIsOverdue
+                                ? 'bg-destructive/90 text-destructive-foreground'
+                                : 'bg-warning/90 text-warning-foreground'}"
+                        >
+                            <Clock class="size-2.5" />
+                            {continueDeadlineDue}
+                        </span>
+                    {/if}
                     <div class="absolute bottom-0 inset-x-0 p-5">
                         <p
                             class="text-[10px] uppercase tracking-wider text-white/70"
@@ -827,26 +858,37 @@
             <h3
                 class="text-sm font-semibold text-foreground inline-flex items-center gap-2 mb-4"
             >
-                <Calendar class="size-4 text-warning" /> Upcoming Deadlines
+                <Calendar class="size-4 text-warning" /> Course Deadlines
             </h3>
-            <ul class="flex flex-col">
-                {#each deadlines as d}
-                    <li
-                        class="flex items-center gap-3 py-2.5 border-b border-border/40 last:border-0"
-                    >
-                        <span
-                            class="flex size-8 items-center justify-center rounded-lg bg-warning/10 text-warning shrink-0"
-                            ><d.icon class="size-4" /></span
+            {#if deadlines.length > 0}
+                <ul class="flex flex-col">
+                    {#each deadlines as d}
+                        <li
+                            class="flex items-center gap-3 py-2.5 border-b border-border/40 last:border-0"
                         >
-                        <span class="text-sm text-foreground flex-1 truncate"
-                            >{d.title}</span
-                        >
-                        <span class="text-[11px] text-muted-foreground shrink-0"
-                            >{d.due}</span
-                        >
-                    </li>
-                {/each}
-            </ul>
+                            <span
+                                class="flex size-8 items-center justify-center rounded-lg shrink-0 {d.isOverdue
+                                    ? 'bg-destructive/10 text-destructive'
+                                    : 'bg-warning/10 text-warning'}"
+                                ><d.icon class="size-4" /></span
+                            >
+                            <span
+                                class="text-sm text-foreground flex-1 truncate"
+                                >{d.title}</span
+                            >
+                            <span
+                                class="text-[11px] shrink-0 tabular {d.isOverdue
+                                    ? 'text-destructive font-semibold'
+                                    : 'text-muted-foreground'}">{d.due}</span
+                            >
+                        </li>
+                    {/each}
+                </ul>
+            {:else}
+                <p class="text-sm text-muted-foreground py-2">
+                    No upcoming deadlines — you're on track.
+                </p>
+            {/if}
         </div>
         <div
             class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-2"

@@ -40,6 +40,7 @@ type Course struct {
 	ReviewStatus pgtype.Text        `json:"review_status"`
 	ReviewNotes  pgtype.Text        `json:"review_notes"`
 	ApprovedBy   pgtype.Int8        `json:"approved_by"`
+	Capacity     pgtype.Int4        `json:"capacity"`
 }
 
 type CourseGenerationJob struct {
@@ -102,6 +103,17 @@ type DocumentChunk struct {
 	SourceLabel pgtype.Text        `json:"source_label"`
 	Embedding   pgvector.Vector    `json:"embedding"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Enrollment struct {
+	ID          int64              `json:"id"`
+	UserID      int64              `json:"user_id"`
+	CourseID    int64              `json:"course_id"`
+	Status      string             `json:"status"`
+	ProgressPct pgtype.Numeric     `json:"progress_pct"`
+	EnrolledAt  pgtype.Timestamptz `json:"enrolled_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	DroppedAt   pgtype.Timestamptz `json:"dropped_at"`
 }
 
 type ItemProgress struct {

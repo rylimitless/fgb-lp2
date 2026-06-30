@@ -11,6 +11,7 @@ import (
 	database "fgb-lp/database/queries"
 	"fgb-lp/departments"
 	"fgb-lp/documents"
+	"fgb-lp/enrollments"
 	"fgb-lp/gamification"
 	homehandler "fgb-lp/home_handler"
 	"fgb-lp/lessons"
@@ -205,8 +206,12 @@ func main() {
 	repoHandler := content_repository.NewHandler(dbpool, queries)
 	repoHandler.RegisterRoutes(protected)
 
-	notifHandler := notifications.NewHandler(queries)
+	notifHandler := notifications.NewHandler(queries, dbpool)
 	notifHandler.RegisterRoutes(protected)
+
+	enrollmentHandler := enrollments.NewHandler(queries)
+	enrollmentHandler.RegisterRoutes(protected)
+	enrollmentHandler.RegisterAdminRoutes(adminManagerGroup)
 
 	dashHandler := homehandler.NewDashboardHandler(dbpool)
 	protected.GET("/dashboard", dashHandler.GetDashboard)
@@ -214,7 +219,6 @@ func main() {
 	userHandler := users.NewHandler(queries)
 	userHandler.RegisterRoutes(adminGroup)
 	userHandler.RegisterListRoute(adminManagerGroup)
-	userHandler.RegisterEnrollRoutes(adminManagerGroup)
 
 	deptHandler := departments.NewHandler(queries)
 	deptHandler.RegisterRoutes(adminManagerGroup)
@@ -478,5 +482,39 @@ ON CONFLICT (user_id, role) DO NOTHING;
 		`)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration course_scores table: %v\n", err)
+	}
+
+	// Create enrollments table for user-course lifecycle management
+	_, err = pool.Exec(ctx, `
+	ALTER TABLE courses ADD COLUMN IF NOT EXISTS capacity int;
+
+	CREATE TABLE IF NOT EXISTS enrollments (
+	  id bigserial primary key,
+	  user_id bigint not null references users(id) on delete cascade,
+	  course_id bigint not null references courses(id) on delete cascade,
+	  status text not null default 'active'
+	    check (status in ('active', 'completed', 'dropped', 'pending')),
+	  progress_pct numeric(5,2) not null default 0,
+	  enrolled_at timestamptz not null default now(),
+	  completed_at timestamptz,
+	  dropped_at timestamptz,
+	  unique(user_id, course_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_enrollments_user ON enrollments(user_id);
+	CREATE INDEX IF NOT EXISTS idx_enrollments_course ON enrollments(course_id);
+	CREATE INDEX IF NOT EXISTS idx_enrollments_status ON enrollments(status);
+
+	-- Backfill: create enrollment records for users who already have lesson_progress
+	INSERT INTO enrollments (user_id, course_id, status, progress_pct, enrolled_at, completed_at)
+	SELECT lp.user_id, lp.course_id,
+	  CASE WHEN lp.completed THEN 'completed'::text ELSE 'active'::text END,
+	  coalesce(lp.score_pct, 0),
+	  lp.started_at,
+	  lp.completed_at
+	FROM lesson_progress lp
+	ON CONFLICT (user_id, course_id) DO NOTHING;
+		`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration enrollments table: %v\n", err)
 	}
 }

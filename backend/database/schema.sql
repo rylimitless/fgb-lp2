@@ -299,3 +299,23 @@ create table if not exists course_scores (
 );
 create index if not exists idx_course_scores_score on course_scores(score desc);
 create index if not exists idx_course_scores_course on course_scores(course_id);
+
+-- Capacity limit for courses (null = unlimited)
+alter table courses add column if not exists capacity int;
+
+-- Enrollments: manages the user-course lifecycle
+create table if not exists enrollments (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  course_id bigint not null references courses(id) on delete cascade,
+  status text not null default 'active'
+    check (status in ('active', 'completed', 'dropped', 'pending')),
+  progress_pct numeric(5,2) not null default 0,
+  enrolled_at timestamptz not null default now(),
+  completed_at timestamptz,
+  dropped_at timestamptz,
+  unique(user_id, course_id)
+);
+create index if not exists idx_enrollments_user on enrollments(user_id);
+create index if not exists idx_enrollments_course on enrollments(course_id);
+create index if not exists idx_enrollments_status on enrollments(status);

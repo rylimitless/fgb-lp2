@@ -10,6 +10,7 @@ export const load: PageServerLoad = async (event) => {
     streakRes,
     scoreRes,
     dashRes,
+    enrollmentsRes,
   ] = await Promise.all([
     apiFetch(event, "/api/documents"),
     apiFetch(event, "/api/courses"),
@@ -18,6 +19,7 @@ export const load: PageServerLoad = async (event) => {
     apiFetch(event, "/api/gamification/streak"),
     apiFetch(event, "/api/gamification/score"),
     apiFetch(event, "/api/dashboard"),
+    apiFetch(event, "/api/enrollments"),
   ]);
 
   const docs = docsRes.ok ? await docsRes.json() : [];
@@ -90,5 +92,6 @@ export const load: PageServerLoad = async (event) => {
       totalScore,
     },
     dashboard,
+    enrollments: enrollmentsRes.ok ? await enrollmentsRes.json() : [],
   };
 };

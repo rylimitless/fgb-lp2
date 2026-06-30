@@ -66,6 +66,17 @@ func (q *Queries) ClaimDocument(ctx context.Context, id int64) (Document, error)
 	return i, err
 }
 
+const countActiveEnrollments = `-- name: CountActiveEnrollments :one
+select count(*) from enrollments where course_id = $1 and status = 'active'
+`
+
+func (q *Queries) CountActiveEnrollments(ctx context.Context, courseID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveEnrollments, courseID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countActiveLearners = `-- name: CountActiveLearners :one
 select count(distinct user_id) from (
   select user_id from practice_sessions where started_at > now() - interval '30 days'
@@ -139,7 +150,7 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, userID pgtype.In
 const createCourse = `-- name: CreateCourse :one
 insert into courses (title, description, created_by, source_doc_ids, settings)
 values ($1, $2, $3, $4, $5)
-returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
+returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity
 `
 
 type CreateCourseParams struct {
@@ -174,6 +185,7 @@ func (q *Queries) CreateCourse(ctx context.Context, arg CreateCourseParams) (Cou
 		&i.ReviewStatus,
 		&i.ReviewNotes,
 		&i.ApprovedBy,
+		&i.Capacity,
 	)
 	return i, err
 }
@@ -225,6 +237,35 @@ func (q *Queries) CreateDepartment(ctx context.Context, name string) (Department
 	row := q.db.QueryRow(ctx, createDepartment, name)
 	var i Department
 	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
+}
+
+const createEnrollment = `-- name: CreateEnrollment :one
+insert into enrollments (user_id, course_id, status)
+values ($1, $2, 'active')
+on conflict (user_id, course_id)
+do update set status = 'active', dropped_at = null
+returning id, user_id, course_id, status, progress_pct, enrolled_at, completed_at, dropped_at
+`
+
+type CreateEnrollmentParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) CreateEnrollment(ctx context.Context, arg CreateEnrollmentParams) (Enrollment, error) {
+	row := q.db.QueryRow(ctx, createEnrollment, arg.UserID, arg.CourseID)
+	var i Enrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.EnrolledAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
 	return i, err
 }
 
@@ -404,6 +445,15 @@ func (q *Queries) DeleteDocument(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteEnrollment = `-- name: DeleteEnrollment :exec
+delete from enrollments where id = $1
+`
+
+func (q *Queries) DeleteEnrollment(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteEnrollment, id)
+	return err
+}
+
 const deleteItemProgress = `-- name: DeleteItemProgress :exec
 delete from item_progress where user_id = $1 and course_id = $2
 `
@@ -459,6 +509,50 @@ type EnrollInCourseParams struct {
 func (q *Queries) EnrollInCourse(ctx context.Context, arg EnrollInCourseParams) error {
 	_, err := q.db.Exec(ctx, enrollInCourse, arg.UserID, arg.CourseID)
 	return err
+}
+
+const enrollInCourseV2 = `-- name: EnrollInCourseV2 :one
+with enrolled as (
+  insert into enrollments (user_id, course_id, status)
+  values ($1, $2, 'active')
+  on conflict (user_id, course_id) do nothing
+  returning id, user_id, course_id, status, progress_pct, enrolled_at, completed_at, dropped_at
+)
+select id, user_id, course_id, status, progress_pct, enrolled_at, completed_at, dropped_at from enrolled
+union all
+select id, user_id, course_id, status, progress_pct, enrolled_at, completed_at, dropped_at from enrollments where user_id = $1 and course_id = $2 and not exists (select 1 from enrolled)
+`
+
+type EnrollInCourseV2Params struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+type EnrollInCourseV2Row struct {
+	ID          int64              `json:"id"`
+	UserID      int64              `json:"user_id"`
+	CourseID    int64              `json:"course_id"`
+	Status      string             `json:"status"`
+	ProgressPct pgtype.Numeric     `json:"progress_pct"`
+	EnrolledAt  pgtype.Timestamptz `json:"enrolled_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	DroppedAt   pgtype.Timestamptz `json:"dropped_at"`
+}
+
+func (q *Queries) EnrollInCourseV2(ctx context.Context, arg EnrollInCourseV2Params) (EnrollInCourseV2Row, error) {
+	row := q.db.QueryRow(ctx, enrollInCourseV2, arg.UserID, arg.CourseID)
+	var i EnrollInCourseV2Row
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.EnrolledAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
+	return i, err
 }
 
 const getAdaptiveOverview = `-- name: GetAdaptiveOverview :one
@@ -738,7 +832,7 @@ func (q *Queries) GetCourseAttemptCount(ctx context.Context, arg GetCourseAttemp
 }
 
 const getCourseByID = `-- name: GetCourseByID :one
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses where id = $1
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity from courses where id = $1
 `
 
 func (q *Queries) GetCourseByID(ctx context.Context, id int64) (Course, error) {
@@ -759,6 +853,7 @@ func (q *Queries) GetCourseByID(ctx context.Context, id int64) (Course, error) {
 		&i.ReviewStatus,
 		&i.ReviewNotes,
 		&i.ApprovedBy,
+		&i.Capacity,
 	)
 	return i, err
 }
@@ -800,6 +895,83 @@ func (q *Queries) GetCourseEffectiveness(ctx context.Context) ([]GetCourseEffect
 			&i.LearnerCount,
 			&i.AvgScore,
 			&i.CompletedCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCourseEnrollment = `-- name: GetCourseEnrollment :one
+select id, user_id, course_id, status, progress_pct, enrolled_at, completed_at, dropped_at from enrollments where user_id = $1 and course_id = $2
+`
+
+type GetCourseEnrollmentParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) GetCourseEnrollment(ctx context.Context, arg GetCourseEnrollmentParams) (Enrollment, error) {
+	row := q.db.QueryRow(ctx, getCourseEnrollment, arg.UserID, arg.CourseID)
+	var i Enrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.EnrolledAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
+	return i, err
+}
+
+const getCourseEnrollments = `-- name: GetCourseEnrollments :many
+select e.id, e.user_id, e.course_id, e.status, e.progress_pct, e.enrolled_at, e.completed_at, e.dropped_at, u.name as user_name, u.email as user_email
+from enrollments e
+join users u on u.id = e.user_id
+where e.course_id = $1
+order by e.enrolled_at desc
+`
+
+type GetCourseEnrollmentsRow struct {
+	ID          int64              `json:"id"`
+	UserID      int64              `json:"user_id"`
+	CourseID    int64              `json:"course_id"`
+	Status      string             `json:"status"`
+	ProgressPct pgtype.Numeric     `json:"progress_pct"`
+	EnrolledAt  pgtype.Timestamptz `json:"enrolled_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	DroppedAt   pgtype.Timestamptz `json:"dropped_at"`
+	UserName    string             `json:"user_name"`
+	UserEmail   string             `json:"user_email"`
+}
+
+func (q *Queries) GetCourseEnrollments(ctx context.Context, courseID int64) ([]GetCourseEnrollmentsRow, error) {
+	rows, err := q.db.Query(ctx, getCourseEnrollments, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCourseEnrollmentsRow
+	for rows.Next() {
+		var i GetCourseEnrollmentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CourseID,
+			&i.Status,
+			&i.ProgressPct,
+			&i.EnrolledAt,
+			&i.CompletedAt,
+			&i.DroppedAt,
+			&i.UserName,
+			&i.UserEmail,
 		); err != nil {
 			return nil, err
 		}
@@ -895,7 +1067,7 @@ func (q *Queries) GetCourseItemsByModule(ctx context.Context, moduleID pgtype.In
 }
 
 const getCourses = `-- name: GetCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses order by updated_at desc
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity from courses order by updated_at desc
 `
 
 func (q *Queries) GetCourses(ctx context.Context) ([]Course, error) {
@@ -922,6 +1094,7 @@ func (q *Queries) GetCourses(ctx context.Context) ([]Course, error) {
 			&i.ReviewStatus,
 			&i.ReviewNotes,
 			&i.ApprovedBy,
+			&i.Capacity,
 		); err != nil {
 			return nil, err
 		}
@@ -1060,6 +1233,45 @@ func (q *Queries) GetDocuments(ctx context.Context) ([]Document, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const getEnrollmentByID = `-- name: GetEnrollmentByID :one
+select e.id, e.user_id, e.course_id, e.status, e.progress_pct, e.enrolled_at, e.completed_at, e.dropped_at, c.title as course_title, u.name as user_name
+from enrollments e
+join courses c on c.id = e.course_id
+join users u on u.id = e.user_id
+where e.id = $1
+`
+
+type GetEnrollmentByIDRow struct {
+	ID          int64              `json:"id"`
+	UserID      int64              `json:"user_id"`
+	CourseID    int64              `json:"course_id"`
+	Status      string             `json:"status"`
+	ProgressPct pgtype.Numeric     `json:"progress_pct"`
+	EnrolledAt  pgtype.Timestamptz `json:"enrolled_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	DroppedAt   pgtype.Timestamptz `json:"dropped_at"`
+	CourseTitle string             `json:"course_title"`
+	UserName    string             `json:"user_name"`
+}
+
+func (q *Queries) GetEnrollmentByID(ctx context.Context, id int64) (GetEnrollmentByIDRow, error) {
+	row := q.db.QueryRow(ctx, getEnrollmentByID, id)
+	var i GetEnrollmentByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.EnrolledAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+		&i.CourseTitle,
+		&i.UserName,
+	)
+	return i, err
 }
 
 const getItemProgressByCourse = `-- name: GetItemProgressByCourse :many
@@ -1292,7 +1504,7 @@ func (q *Queries) GetPendingDocuments(ctx context.Context) ([]Document, error) {
 }
 
 const getPendingReviewCourses = `-- name: GetPendingReviewCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses where review_status = 'pending' order by updated_at desc limit $1 offset $2
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity from courses where review_status = 'pending' order by updated_at desc limit $1 offset $2
 `
 
 type GetPendingReviewCoursesParams struct {
@@ -1324,6 +1536,7 @@ func (q *Queries) GetPendingReviewCourses(ctx context.Context, arg GetPendingRev
 			&i.ReviewStatus,
 			&i.ReviewNotes,
 			&i.ApprovedBy,
+			&i.Capacity,
 		); err != nil {
 			return nil, err
 		}
@@ -1378,7 +1591,7 @@ func (q *Queries) GetPendingReviewDocuments(ctx context.Context, arg GetPendingR
 }
 
 const getPublishedCourses = `-- name: GetPublishedCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by from courses where status = 'published' and approved = true order by updated_at desc
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity from courses where status = 'published' and approved = true order by updated_at desc
 `
 
 func (q *Queries) GetPublishedCourses(ctx context.Context) ([]Course, error) {
@@ -1405,6 +1618,7 @@ func (q *Queries) GetPublishedCourses(ctx context.Context) ([]Course, error) {
 			&i.ReviewStatus,
 			&i.ReviewNotes,
 			&i.ApprovedBy,
+			&i.Capacity,
 		); err != nil {
 			return nil, err
 		}
@@ -1488,6 +1702,62 @@ func (q *Queries) GetUserDepartments(ctx context.Context, userID int64) ([]Depar
 	for rows.Next() {
 		var i Department
 		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getUserEnrollments = `-- name: GetUserEnrollments :many
+
+select e.id, e.user_id, e.course_id, e.status, e.progress_pct, e.enrolled_at, e.completed_at, e.dropped_at, c.title as course_title, c.description as course_description, c.status as course_status
+from enrollments e
+join courses c on c.id = e.course_id
+where e.user_id = $1
+order by e.enrolled_at desc
+`
+
+type GetUserEnrollmentsRow struct {
+	ID                int64              `json:"id"`
+	UserID            int64              `json:"user_id"`
+	CourseID          int64              `json:"course_id"`
+	Status            string             `json:"status"`
+	ProgressPct       pgtype.Numeric     `json:"progress_pct"`
+	EnrolledAt        pgtype.Timestamptz `json:"enrolled_at"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	DroppedAt         pgtype.Timestamptz `json:"dropped_at"`
+	CourseTitle       string             `json:"course_title"`
+	CourseDescription string             `json:"course_description"`
+	CourseStatus      string             `json:"course_status"`
+}
+
+// Enrollments --
+func (q *Queries) GetUserEnrollments(ctx context.Context, userID int64) ([]GetUserEnrollmentsRow, error) {
+	rows, err := q.db.Query(ctx, getUserEnrollments, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUserEnrollmentsRow
+	for rows.Next() {
+		var i GetUserEnrollmentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CourseID,
+			&i.Status,
+			&i.ProgressPct,
+			&i.EnrolledAt,
+			&i.CompletedAt,
+			&i.DroppedAt,
+			&i.CourseTitle,
+			&i.CourseDescription,
+			&i.CourseStatus,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1818,6 +2088,20 @@ func (q *Queries) RemoveUserFromDepartment(ctx context.Context, arg RemoveUserFr
 	return err
 }
 
+const resetLessonProgressStartedAt = `-- name: ResetLessonProgressStartedAt :exec
+update lesson_progress set started_at = now() where user_id = $1 and course_id = $2
+`
+
+type ResetLessonProgressStartedAtParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) ResetLessonProgressStartedAt(ctx context.Context, arg ResetLessonProgressStartedAtParams) error {
+	_, err := q.db.Exec(ctx, resetLessonProgressStartedAt, arg.UserID, arg.CourseID)
+	return err
+}
+
 const searchDocumentChunks = `-- name: SearchDocumentChunks :many
 select dc.id, dc.document_id, dc.chunk_index, dc.content, dc.page_number, dc.source_label, dc.embedding, dc.created_at, d.title as document_title
 from document_chunks dc
@@ -1875,7 +2159,7 @@ func (q *Queries) SearchDocumentChunks(ctx context.Context, arg SearchDocumentCh
 }
 
 const searchPublishedCourses = `-- name: SearchPublishedCourses :many
-select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, ts_rank(to_tsvector('english', title || ' ' || description), plainto_tsquery('english', $1)) as rank
+select id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity, ts_rank(to_tsvector('english', title || ' ' || description), plainto_tsquery('english', $1)) as rank
 from courses
 where status = 'published' and approved = true
   and to_tsvector('english', title || ' ' || description) @@ plainto_tsquery('english', $1)
@@ -1903,6 +2187,7 @@ type SearchPublishedCoursesRow struct {
 	ReviewStatus pgtype.Text        `json:"review_status"`
 	ReviewNotes  pgtype.Text        `json:"review_notes"`
 	ApprovedBy   pgtype.Int8        `json:"approved_by"`
+	Capacity     pgtype.Int4        `json:"capacity"`
 	Rank         float32            `json:"rank"`
 }
 
@@ -1930,6 +2215,7 @@ func (q *Queries) SearchPublishedCourses(ctx context.Context, arg SearchPublishe
 			&i.ReviewStatus,
 			&i.ReviewNotes,
 			&i.ApprovedBy,
+			&i.Capacity,
 			&i.Rank,
 		); err != nil {
 			return nil, err
@@ -1992,7 +2278,7 @@ func (q *Queries) UpdateCourseItemModule(ctx context.Context, arg UpdateCourseIt
 }
 
 const updateCourseMeta = `-- name: UpdateCourseMeta :one
-update courses set title = $2, description = $3, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
+update courses set title = $2, description = $3, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity
 `
 
 type UpdateCourseMetaParams struct {
@@ -2019,6 +2305,7 @@ func (q *Queries) UpdateCourseMeta(ctx context.Context, arg UpdateCourseMetaPara
 		&i.ReviewStatus,
 		&i.ReviewNotes,
 		&i.ApprovedBy,
+		&i.Capacity,
 	)
 	return i, err
 }
@@ -2032,7 +2319,7 @@ set review_status = $2,
     status = case when $4 then 'published' else status end,
     updated_at = now()
 where id = $1
-returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
+returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity
 `
 
 type UpdateCourseReviewParams struct {
@@ -2067,12 +2354,13 @@ func (q *Queries) UpdateCourseReview(ctx context.Context, arg UpdateCourseReview
 		&i.ReviewStatus,
 		&i.ReviewNotes,
 		&i.ApprovedBy,
+		&i.Capacity,
 	)
 	return i, err
 }
 
 const updateCourseSettings = `-- name: UpdateCourseSettings :one
-update courses set settings = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
+update courses set settings = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity
 `
 
 type UpdateCourseSettingsParams struct {
@@ -2098,12 +2386,13 @@ func (q *Queries) UpdateCourseSettings(ctx context.Context, arg UpdateCourseSett
 		&i.ReviewStatus,
 		&i.ReviewNotes,
 		&i.ApprovedBy,
+		&i.Capacity,
 	)
 	return i, err
 }
 
 const updateCourseStatus = `-- name: UpdateCourseStatus :one
-update courses set status = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by
+update courses set status = $2, updated_at = now() where id = $1 returning id, title, description, created_by, source_doc_ids, status, settings, created_at, updated_at, department, approved, review_status, review_notes, approved_by, capacity
 `
 
 type UpdateCourseStatusParams struct {
@@ -2129,6 +2418,7 @@ func (q *Queries) UpdateCourseStatus(ctx context.Context, arg UpdateCourseStatus
 		&i.ReviewStatus,
 		&i.ReviewNotes,
 		&i.ApprovedBy,
+		&i.Capacity,
 	)
 	return i, err
 }
@@ -2220,6 +2510,66 @@ func (q *Queries) UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentSt
 		&i.ErrorMessage,
 		&i.ReviewStatus,
 		&i.ReviewNotes,
+	)
+	return i, err
+}
+
+const updateEnrollmentProgress = `-- name: UpdateEnrollmentProgress :one
+update enrollments
+set progress_pct = $2,
+    status = case when $2 >= 100 then 'completed' else status end,
+    completed_at = case when $2 >= 100 then now() else completed_at end
+where id = $1
+returning id, user_id, course_id, status, progress_pct, enrolled_at, completed_at, dropped_at
+`
+
+type UpdateEnrollmentProgressParams struct {
+	ID          int64          `json:"id"`
+	ProgressPct pgtype.Numeric `json:"progress_pct"`
+}
+
+func (q *Queries) UpdateEnrollmentProgress(ctx context.Context, arg UpdateEnrollmentProgressParams) (Enrollment, error) {
+	row := q.db.QueryRow(ctx, updateEnrollmentProgress, arg.ID, arg.ProgressPct)
+	var i Enrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.EnrolledAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
+	)
+	return i, err
+}
+
+const updateEnrollmentStatus = `-- name: UpdateEnrollmentStatus :one
+update enrollments
+set status = $2,
+    completed_at = case when $2 = 'completed' then now() else completed_at end,
+    dropped_at = case when $2 = 'dropped' then now() else dropped_at end
+where id = $1
+returning id, user_id, course_id, status, progress_pct, enrolled_at, completed_at, dropped_at
+`
+
+type UpdateEnrollmentStatusParams struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+}
+
+func (q *Queries) UpdateEnrollmentStatus(ctx context.Context, arg UpdateEnrollmentStatusParams) (Enrollment, error) {
+	row := q.db.QueryRow(ctx, updateEnrollmentStatus, arg.ID, arg.Status)
+	var i Enrollment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.Status,
+		&i.ProgressPct,
+		&i.EnrolledAt,
+		&i.CompletedAt,
+		&i.DroppedAt,
 	)
 	return i, err
 }

@@ -184,6 +184,9 @@ insert into lesson_progress (user_id, course_id, current_module, completed, scor
 values ($1, $2, 0, false, 0)
 on conflict (user_id, course_id) do nothing;
 
+-- name: ResetLessonProgressStartedAt :exec
+update lesson_progress set started_at = now() where user_id = $1 and course_id = $2;
+
 -- name: UpsertItemProgress :one
 insert into item_progress (user_id, course_id, item_id, answer, is_correct)
 values ($1, $2, $3, $4, $5)
@@ -422,3 +425,69 @@ from users u
 join user_departments ud on ud.user_id = u.id
 where ud.department_id = $1
 order by u.name asc;
+
+-- Enrollments --
+
+-- name: GetUserEnrollments :many
+select e.*, c.title as course_title, c.description as course_description, c.status as course_status
+from enrollments e
+join courses c on c.id = e.course_id
+where e.user_id = $1
+order by e.enrolled_at desc;
+
+-- name: GetCourseEnrollment :one
+select * from enrollments where user_id = $1 and course_id = $2;
+
+-- name: CreateEnrollment :one
+insert into enrollments (user_id, course_id, status)
+values ($1, $2, 'active')
+on conflict (user_id, course_id)
+do update set status = 'active', dropped_at = null
+returning *;
+
+-- name: UpdateEnrollmentStatus :one
+update enrollments
+set status = $2,
+    completed_at = case when $2 = 'completed' then now() else completed_at end,
+    dropped_at = case when $2 = 'dropped' then now() else dropped_at end
+where id = $1
+returning *;
+
+-- name: UpdateEnrollmentProgress :one
+update enrollments
+set progress_pct = $2,
+    status = case when $2 >= 100 then 'completed' else status end,
+    completed_at = case when $2 >= 100 then now() else completed_at end
+where id = $1
+returning *;
+
+-- name: GetCourseEnrollments :many
+select e.*, u.name as user_name, u.email as user_email
+from enrollments e
+join users u on u.id = e.user_id
+where e.course_id = $1
+order by e.enrolled_at desc;
+
+-- name: CountActiveEnrollments :one
+select count(*) from enrollments where course_id = $1 and status = 'active';
+
+-- name: DeleteEnrollment :exec
+delete from enrollments where id = $1;
+
+-- name: EnrollInCourseV2 :one
+with enrolled as (
+  insert into enrollments (user_id, course_id, status)
+  values ($1, $2, 'active')
+  on conflict (user_id, course_id) do nothing
+  returning *
+)
+select * from enrolled
+union all
+select * from enrollments where user_id = $1 and course_id = $2 and not exists (select 1 from enrolled);
+
+-- name: GetEnrollmentByID :one
+select e.*, c.title as course_title, u.name as user_name
+from enrollments e
+join courses c on c.id = e.course_id
+join users u on u.id = e.user_id
+where e.id = $1;

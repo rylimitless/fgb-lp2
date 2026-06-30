@@ -1,6 +1,7 @@
 package homehandler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,6 +21,74 @@ func NewDashboardHandler(pool *pgxpool.Pool) *DashboardHandler {
 	return &DashboardHandler{Pool: pool}
 }
 
+// checkDeadlines scans the user's active enrollments with days_to_complete and creates
+// notifications for approaching/overdue deadlines. Best-effort — errors are silent.
+func (h *DashboardHandler) checkDeadlines(c *gin.Context, uid int64) {
+	ctx := c.Request.Context()
+
+	rows, err := h.Pool.Query(ctx, `
+		SELECT c.title, c.settings, e.enrolled_at, e.course_id
+		FROM enrollments e
+		JOIN courses c ON c.id = e.course_id
+		WHERE e.user_id = $1 AND e.status = 'active'
+	`, uid)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	for rows.Next() {
+		var title string
+		var settingsJSON []byte
+		var enrolledAt time.Time
+		var courseID int64
+		if err := rows.Scan(&title, &settingsJSON, &enrolledAt, &courseID); err != nil {
+			continue
+		}
+
+		var settings map[string]interface{}
+		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+			continue
+		}
+		dtc, ok := settings["days_to_complete"].(float64)
+		if !ok || dtc <= 0 {
+			continue
+		}
+
+		deadline := enrolledAt.Add(time.Duration(int(dtc)) * 24 * time.Hour)
+		daysLeft := int(deadline.Sub(now).Hours() / 24)
+		link := fmt.Sprintf("/lesson-player?id=%d", courseID)
+
+		// Create notification at key milestones
+		if daysLeft < 0 {
+			h.Pool.Exec(ctx, `
+				INSERT INTO notifications (user_id, title, message, link)
+				VALUES ($1, $2, $3, $4)
+			`, uid,
+				fmt.Sprintf("⚠ Overdue: %s", title),
+				fmt.Sprintf("You are %d day(s) past the deadline for \"%s\". Complete it soon.", -daysLeft, title),
+				link)
+		} else if daysLeft <= 1 {
+			h.Pool.Exec(ctx, `
+				INSERT INTO notifications (user_id, title, message, link)
+				VALUES ($1, $2, $3, $4)
+			`, uid,
+				fmt.Sprintf("⏰ Due soon: %s", title),
+				fmt.Sprintf("Only %d day(s) left to finish \"%s\".", daysLeft, title),
+				link)
+		} else if daysLeft <= 3 {
+			h.Pool.Exec(ctx, `
+				INSERT INTO notifications (user_id, title, message, link)
+				VALUES ($1, $2, $3, $4)
+			`, uid,
+				fmt.Sprintf("📅 Approaching deadline: %s", title),
+				fmt.Sprintf("You have %d days to complete \"%s\". Keep going!", daysLeft, title),
+				link)
+		}
+	}
+}
+
 // GetDashboard returns the aggregated data the frontend dashboard consumes.
 func (h *DashboardHandler) GetDashboard(c *gin.Context) {
 	userID, exists := c.Get("user_id")
@@ -30,35 +99,81 @@ func (h *DashboardHandler) GetDashboard(c *gin.Context) {
 	uid := userID.(int64)
 	ctx := c.Request.Context()
 
+	// Check deadlines on every dashboard load (best-effort, creates notifications)
+	h.checkDeadlines(c, uid)
+
 	resp := gin.H{}
 
-	// ---- continue_learning: most recent in-progress course ----
+	// ---- continue_learning: most recent in-progress course (with deadline info) ----
 	type continueLearning struct {
 		ID            int64  `json:"id"`
 		Title         string `json:"title"`
 		CurrentModule int    `json:"current_module"`
 		ProgressPct   int    `json:"progress_pct"`
 		Image         string `json:"image"`
+		DaysLeft      *int   `json:"days_left"`
+		IsOverdue     bool   `json:"is_overdue"`
+		DeadlineDue   string `json:"deadline_due,omitempty"`
 	}
 	{
 		var cl continueLearning
 		var totalMods int
+		var settingsJSON []byte
+		var enrolledAt time.Time
+		var enrolledAtValid bool
 		err := h.Pool.QueryRow(ctx, `
 			SELECT c.id, c.title, lp.current_module,
-			       (SELECT count(*) FROM modules WHERE course_id = c.id) AS total_modules
+			       (SELECT count(*) FROM modules WHERE course_id = c.id) AS total_modules,
+			       c.settings, e.enrolled_at
 			FROM lesson_progress lp
 			JOIN courses c ON c.id = lp.course_id
+			LEFT JOIN enrollments e ON e.user_id = lp.user_id AND e.course_id = lp.course_id
 			WHERE lp.user_id = $1 AND lp.completed = false
 			ORDER BY lp.started_at DESC
 			LIMIT 1
-		`, uid).Scan(&cl.ID, &cl.Title, &cl.CurrentModule, &totalMods)
+		`, uid).Scan(&cl.ID, &cl.Title, &cl.CurrentModule, &totalMods, &settingsJSON, &enrolledAt)
 		if err == nil {
 			if totalMods > 0 {
 				cl.ProgressPct = cl.CurrentModule * 100 / totalMods
 			}
 			cl.Image = pathImg(cl.Title)
+
+			// Compute deadline countdown if days_to_complete is set
+			var settings map[string]interface{}
+			if settingsJSON != nil {
+				_ = json.Unmarshal(settingsJSON, &settings)
+			}
+			if dtc, ok := settings["days_to_complete"].(float64); ok && dtc > 0 {
+				if !enrolledAt.IsZero() {
+					enrolledAtValid = true
+				} else {
+					// Fallback: no enrollment record; use lesson_progress started_at via a separate query
+					var startedAt time.Time
+					if err2 := h.Pool.QueryRow(ctx,
+						`SELECT started_at FROM lesson_progress WHERE user_id = $1 AND course_id = $2`,
+						uid, cl.ID).Scan(&startedAt); err2 == nil {
+						enrolledAt = startedAt
+						enrolledAtValid = true
+					}
+				}
+				if enrolledAtValid {
+					deadline := enrolledAt.Add(time.Duration(int(dtc)) * 24 * time.Hour)
+					daysLeft := int(deadline.Sub(time.Now()).Hours() / 24)
+					cl.DaysLeft = &daysLeft
+					if daysLeft < 0 {
+						cl.IsOverdue = true
+						cl.DeadlineDue = fmt.Sprintf("Overdue by %d day(s)", -daysLeft)
+					} else if daysLeft == 0 {
+						cl.DeadlineDue = "Due today"
+					} else {
+						cl.DeadlineDue = fmt.Sprintf("%d day(s) left", daysLeft)
+					}
+				}
+			}
+
 			resp["continue_learning"] = cl
 		}
+		_ = enrolledAtValid
 	}
 
 	// ---- recommended: published courses the user hasn't started ----
@@ -277,37 +392,73 @@ func (h *DashboardHandler) GetDashboard(c *gin.Context) {
 		}
 	}
 
-	// ---- deadlines: in-progress courses (oldest first) ----
+	// ---- deadlines: in-progress courses with days_to_complete set (closest expiry first) ----
 	type deadlineItem struct {
-		Title string `json:"title"`
-		Due   string `json:"due"`
-		Icon  string `json:"icon"`
+		Title     string `json:"title"`
+		Due       string `json:"due"`
+		Icon      string `json:"icon"`
+		DaysLeft  *int   `json:"days_left"`
+		IsOverdue bool   `json:"is_overdue"`
+		CourseID  int64  `json:"course_id"`
 	}
 	{
 		dlRows, err := h.Pool.Query(ctx, `
-			SELECT c.title, lp.started_at
-			FROM lesson_progress lp
-			JOIN courses c ON c.id = lp.course_id
-			WHERE lp.user_id = $1 AND lp.completed = false
-			ORDER BY lp.started_at ASC
-			LIMIT 2
+			SELECT c.id, c.title, c.settings, e.enrolled_at
+			FROM enrollments e
+			JOIN courses c ON c.id = e.course_id
+			WHERE e.user_id = $1 AND e.status = 'active'
+			ORDER BY e.enrolled_at ASC
 		`, uid)
 		if err == nil {
 			var dls []deadlineItem
+			now := time.Now()
 			for dlRows.Next() {
-				var dl deadlineItem
-				var startedAt time.Time
-				if err := dlRows.Scan(&dl.Title, &startedAt); err != nil {
+				var courseID int64
+				var title string
+				var settingsJSON []byte
+				var enrolledAt time.Time
+				if err := dlRows.Scan(&courseID, &title, &settingsJSON, &enrolledAt); err != nil {
 					continue
 				}
-				daysSince := int(time.Since(startedAt).Hours() / 24)
-				if daysSince > 0 {
-					dl.Due = fmt.Sprintf("Started %d days ago", daysSince)
-					dl.Icon = "clock"
-					dls = append(dls, dl)
+
+				// Parse days_to_complete from course settings
+				var settings map[string]interface{}
+				if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+					continue
 				}
+				dtc, ok := settings["days_to_complete"].(float64)
+				if !ok || dtc <= 0 {
+					continue // Only show courses with a deadline set
+				}
+
+				daysToComplete := int(dtc)
+				deadline := enrolledAt.Add(time.Duration(daysToComplete) * 24 * time.Hour)
+				daysLeft := int(deadline.Sub(now).Hours() / 24)
+
+				dl := deadlineItem{
+					Title:    title,
+					CourseID: courseID,
+				}
+
+				if daysLeft < 0 {
+					dl.Due = fmt.Sprintf("Overdue by %d day(s)", -daysLeft)
+					dl.Icon = "alert-triangle"
+					dl.IsOverdue = true
+				} else if daysLeft == 0 {
+					dl.Due = "Due today"
+					dl.Icon = "clock"
+				} else {
+					dl.Due = fmt.Sprintf("%d day(s) left", daysLeft)
+					dl.Icon = "clock"
+				}
+				dl.DaysLeft = &daysLeft
+				dls = append(dls, dl)
 			}
 			dlRows.Close()
+			// Limit to 3 for the dashboard card
+			if len(dls) > 3 {
+				dls = dls[:3]
+			}
 			if len(dls) > 0 {
 				resp["deadlines"] = dls
 			}

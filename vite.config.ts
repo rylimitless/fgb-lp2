@@ -24,7 +24,7 @@ export default defineConfig({
 
     port: 5173,
     hmr: {
-      clientPort: 3038,
+      clientPort: 3039,
     },
     // On Windows + Docker Desktop, host file-change events do not propagate
     // into the Linux container via inotify. Polling makes Vite detect edits

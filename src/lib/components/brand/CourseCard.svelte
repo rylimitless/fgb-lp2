@@ -9,6 +9,7 @@
         Lock,
         Clock,
         Repeat,
+        AlertTriangle,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
 
@@ -23,6 +24,9 @@
             current_module?: number;
             completed?: boolean;
             score_pct?: string | number;
+            is_expired?: boolean;
+            days_overdue?: number;
+            days_left?: number;
         } | null;
     };
 
@@ -83,13 +87,19 @@
     let resolvedImage = $derived(resolveImage(course, image));
 
     // State derivation -----------------------------------------------------
-    let state: "completed" | "in_progress" | "not_started" = $derived(
-        course.progress?.completed
-            ? "completed"
-            : course.progress?.current_module !== undefined
-              ? "in_progress"
-              : "not_started",
+    let isExpired = $derived(
+        course.progress?.is_expired === true && !course.progress?.completed,
     );
+    let state: "completed" | "in_progress" | "not_started" | "expired" =
+        $derived(
+            course.progress?.completed
+                ? "completed"
+                : isExpired
+                  ? "expired"
+                  : course.progress?.current_module !== undefined
+                    ? "in_progress"
+                    : "not_started",
+        );
 
     let scoreNumber = $derived(() => {
         const raw = course.progress?.score_pct;
@@ -124,12 +134,16 @@
     let ctaLabel = $derived(
         state === "completed"
             ? "Retake"
-            : state === "in_progress"
-              ? "Continue"
-              : "Enroll",
+            : state === "expired"
+              ? "Deadline passed"
+              : state === "in_progress"
+                ? "Continue"
+                : "Enroll",
     );
 
-    let CtaIcon = $derived(state === "completed" ? RotateCcw : Play);
+    let CtaIcon = $derived(
+        state === "completed" ? RotateCcw : state === "expired" ? Lock : Play,
+    );
 
     // Parse settings for display on card
     let parsedSettings = $derived(() => {
@@ -142,10 +156,19 @@
         }
     });
     let maxAttempts = $derived(parsedSettings().max_attempts ?? 0);
-    let daysToComplete = $derived(parsedSettings().days_to_complete ?? 0);
-    let hasSettings = $derived(maxAttempts > 0 || daysToComplete > 0);
+    let courseDaysToComplete = $derived(parsedSettings().days_to_complete ?? 0);
+    // Per-user remaining days from the API (only set when user is actively enrolled)
+    let remainingDays = $derived(
+        course.progress?.days_left as number | undefined,
+    );
+    let hasSettings = $derived(maxAttempts > 0 || courseDaysToComplete > 0);
 
     function handleClick(e: MouseEvent) {
+        // Don't allow enrolling in expired courses
+        if (state === "expired") {
+            e.preventDefault();
+            return;
+        }
         // If a click handler is supplied, prevent default link and call it.
         if (onenroll) {
             e.preventDefault();
@@ -203,14 +226,19 @@
                     "absolute top-2 right-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider backdrop-blur",
                     state === "completed"
                         ? "bg-success/80 text-success-foreground"
-                        : state === "in_progress"
-                          ? "bg-accent/85 text-accent-foreground"
-                          : "bg-background/30 text-primary-foreground",
+                        : state === "expired"
+                          ? "bg-destructive/85 text-destructive-foreground"
+                          : state === "in_progress"
+                            ? "bg-accent/85 text-accent-foreground"
+                            : "bg-background/30 text-primary-foreground",
                 )}
             >
                 {#if state === "completed"}
                     <CheckCircle class="size-2.5" />
                     Complete
+                {:else if state === "expired"}
+                    <AlertTriangle class="size-2.5" />
+                    Expired
                 {:else if state === "in_progress"}
                     In progress
                 {:else}
@@ -257,7 +285,7 @@
                 </p>
             {/if}
 
-            {#if hasSettings}
+            {#if hasSettings || remainingDays !== undefined}
                 <div class="flex items-center gap-2 flex-wrap">
                     {#if maxAttempts > 0}
                         <span
@@ -267,14 +295,31 @@
                             {maxAttempts} attempt{maxAttempts !== 1 ? "s" : ""}
                         </span>
                     {/if}
-                    {#if daysToComplete > 0}
+                    {#if remainingDays !== undefined && remainingDays >= 0}
+                        <!-- Per-user countdown: prominent, live from enrollment -->
+                        <span
+                            class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold tabular {remainingDays <=
+                            1
+                                ? 'bg-destructive/15 text-destructive'
+                                : remainingDays <= 3
+                                  ? 'bg-warning/15 text-warning'
+                                  : 'bg-accent/15 text-accent'}"
+                        >
+                            <Clock class="size-3" />
+                            {remainingDays === 0
+                                ? "Due today"
+                                : `${remainingDays} day${remainingDays !== 1 ? "s" : ""} left`}
+                        </span>
+                    {:else if courseDaysToComplete > 0}
+                        <!-- Course-level total (user not enrolled yet) -->
                         <span
                             class="inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground tabular"
                         >
                             <Clock class="size-2.5" />
-                            {daysToComplete} day{daysToComplete !== 1
+                            {courseDaysToComplete} day{courseDaysToComplete !==
+                            1
                                 ? "s"
-                                : ""}
+                                : ""} to complete
                         </span>
                     {/if}
                 </div>
@@ -283,6 +328,12 @@
             {#if state === "completed"}
                 <p class="text-[11px] text-success font-medium tabular mt-auto">
                     Scored {Math.round(scoreNumber())}%
+                </p>
+            {:else if state === "expired"}
+                <p
+                    class="text-[11px] text-destructive font-medium tabular mt-auto"
+                >
+                    Overdue by {course.progress?.days_overdue ?? "?"} day(s)
                 </p>
             {:else if state === "in_progress"}
                 <p class="text-[11px] text-muted-foreground tabular mt-auto">
@@ -299,7 +350,12 @@
             <div class="mt-2 flex items-center justify-between">
                 <Button.Root
                     size="default"
-                    variant={state === "completed" ? "outline" : "default"}
+                    variant={state === "completed"
+                        ? "outline"
+                        : state === "expired"
+                          ? "ghost"
+                          : "default"}
+                    disabled={state === "expired"}
                 >
                     <CtaIcon class="size-3.5" />
                     {ctaLabel}

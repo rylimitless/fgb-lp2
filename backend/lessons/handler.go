@@ -63,6 +63,15 @@ func (h *Handler) ListPublished(c *gin.Context) {
 		progressMap[p.CourseID] = p
 	}
 
+	// Fetch enrollments for expiry computation
+	enrollments, _ := h.Queries.GetUserEnrollments(c.Request.Context(), userID)
+	enrollmentMap := make(map[int64]database.GetUserEnrollmentsRow)
+	for _, e := range enrollments {
+		enrollmentMap[e.CourseID] = e
+	}
+
+	now := time.Now()
+
 	result := make([]gin.H, 0)
 	for _, course := range courses {
 		item := gin.H{
@@ -74,11 +83,28 @@ func (h *Handler) ListPublished(c *gin.Context) {
 			"settings":       json.RawMessage(course.Settings),
 		}
 		if p, ok := progressMap[course.ID]; ok {
-			item["progress"] = gin.H{
+			prog := gin.H{
 				"current_module": p.CurrentModule,
 				"completed":      p.Completed,
 				"score_pct":      p.ScorePct,
 			}
+
+			// Compute enrollment expiry status
+			if e, ok := enrollmentMap[course.ID]; ok && e.Status == "active" {
+				var settings map[string]interface{}
+				json.Unmarshal(course.Settings, &settings)
+				if dtc, hasDtc := settings["days_to_complete"].(float64); hasDtc && dtc > 0 {
+					deadline := e.EnrolledAt.Time.Add(time.Duration(int(dtc)) * 24 * time.Hour)
+					daysLeft := int(deadline.Sub(now).Hours() / 24)
+					prog["days_left"] = daysLeft
+					if now.After(deadline) && !p.Completed {
+						prog["is_expired"] = true
+						prog["days_overdue"] = -daysLeft
+					}
+				}
+			}
+
+			item["progress"] = prog
 		}
 		result = append(result, item)
 	}
@@ -110,6 +136,10 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 	progress, _ := h.Queries.GetLessonProgress(c.Request.Context(),
 		database.GetLessonProgressParams{UserID: userID, CourseID: id})
 
+	// Get enrollment record for expiry enforcement (preferred over lesson_progress.started_at)
+	enrollment, _ := h.Queries.GetCourseEnrollment(c.Request.Context(),
+		database.GetCourseEnrollmentParams{UserID: userID, CourseID: id})
+
 	// Enforce max_attempts
 	if courseSettings != nil {
 		if maxAttempts, ok := courseSettings["max_attempts"].(float64); ok && maxAttempts > 0 {
@@ -130,10 +160,21 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 			}
 		}
 
-		// Enforce days_to_complete (expiry from enrollment date)
+		// Enforce days_to_complete (expiry from enrollment date via enrollments table)
 		if daysToComplete, ok := courseSettings["days_to_complete"].(float64); ok && daysToComplete > 0 {
-			if progress.StartedAt.Valid {
-				expiryTime := progress.StartedAt.Time.Add(time.Duration(daysToComplete) * 24 * time.Hour)
+			// Prefer enrollment.enrolled_at, fall back to lesson_progress.started_at
+			var enrolledAt time.Time
+			hasEnrollmentDate := false
+			if enrollment.EnrolledAt.Valid {
+				enrolledAt = enrollment.EnrolledAt.Time
+				hasEnrollmentDate = true
+			} else if progress.StartedAt.Valid {
+				enrolledAt = progress.StartedAt.Time
+				hasEnrollmentDate = true
+			}
+
+			if hasEnrollmentDate {
+				expiryTime := enrolledAt.Add(time.Duration(daysToComplete) * 24 * time.Hour)
 				if time.Now().After(expiryTime) && !progress.Completed {
 					c.JSON(http.StatusOK, gin.H{
 						"id":          course.ID,
@@ -155,7 +196,7 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 	if c.Query("retake") == "true" {
 		_ = h.Queries.DeleteItemProgress(c.Request.Context(),
 			database.DeleteItemProgressParams{UserID: userID, CourseID: id})
-		// Reset module-level progress too
+		// Reset module-level progress too, including started_at to reflect the re-enrollment
 		pct := pgtype.Numeric{}
 		pct.Scan("0")
 		_, _ = h.Queries.UpsertLessonProgress(c.Request.Context(),
@@ -163,6 +204,9 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 				UserID: userID, CourseID: id,
 				CurrentModule: 0, Completed: false, ScorePct: pct,
 			})
+		// Reset started_at on retake so the expiry clock restarts
+		_ = h.Queries.ResetLessonProgressStartedAt(c.Request.Context(),
+			database.ResetLessonProgressStartedAtParams{UserID: userID, CourseID: id})
 	}
 
 	// Record streak engagement (silent, best-effort)
@@ -263,6 +307,15 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Sync enrollment progress
+	enrollment, _ := h.Queries.GetCourseEnrollment(c.Request.Context(),
+		database.GetCourseEnrollmentParams{UserID: userID, CourseID: body.CourseID})
+	if enrollment.ID != 0 {
+		_, _ = h.Queries.UpdateEnrollmentProgress(c.Request.Context(),
+			database.UpdateEnrollmentProgressParams{ID: enrollment.ID, ProgressPct: pct})
+	}
+
 	c.JSON(http.StatusOK, progress)
 }
 
