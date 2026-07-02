@@ -3,9 +3,11 @@ package lessons
 import (
 	"context"
 	"encoding/json"
+	"fgb-lp/audit"
 	"fgb-lp/badges"
 	"fgb-lp/certificates"
 	database "fgb-lp/database/queries"
+	"fgb-lp/mailer"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,6 +23,7 @@ type Handler struct {
 	Queries      *database.Queries
 	Certificates *certificates.Handler
 	Badges       *badges.Handler
+	Mailer       mailer.Sender
 }
 
 func NewHandler(queries *database.Queries) *Handler {
@@ -36,6 +39,12 @@ func (h *Handler) WithCertificates(cert *certificates.Handler) *Handler {
 // WithBadges sets the badge evaluator for auto-evaluating on course completion.
 func (h *Handler) WithBadges(b *badges.Handler) *Handler {
 	h.Badges = b
+	return h
+}
+
+// WithMailer sets the email sender for course completion notifications.
+func (h *Handler) WithMailer(m mailer.Sender) *Handler {
+	h.Mailer = m
 	return h
 }
 
@@ -363,6 +372,40 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 						log.Printf("[lessons] badge evaluation failed for user=%d: %v", userID, err)
 					} else {
 						log.Printf("[lessons] badges evaluated for user=%d, new=%d", userID, len(newBadges))
+					}
+				}()
+			}
+
+			// Send course completion email (fire-and-forget)
+			if h.Mailer != nil {
+				go func() {
+					user, err := h.Queries.GetUserByID(context.Background(), userID)
+					if err != nil {
+						log.Printf("[lessons] failed to get user %d for completion email: %v", userID, err)
+						return
+					}
+					course, err := h.Queries.GetCourseByID(context.Background(), body.CourseID)
+					if err != nil {
+						log.Printf("[lessons] failed to get course %d for completion email: %v", body.CourseID, err)
+						return
+					}
+					scoreVal := 0.0
+					if body.ScorePct != "" {
+						fmt.Sscanf(body.ScorePct, "%f", &scoreVal)
+					}
+					// Get certificate code if one was just issued
+					certCode := ""
+					if h.Certificates != nil {
+						cert := h.Certificates.GetCourseCert(context.Background(), userID, body.CourseID)
+						if cert != nil {
+							certCode = cert.CertificateCode
+						}
+					}
+					if sendErr := h.Mailer.SendCourseComplete(context.Background(), user.Email, user.Name, course.Title, scoreVal, certCode, nil); sendErr != nil {
+						log.Printf("[lessons] failed to send completion email to %s: %v", user.Email, sendErr)
+						audit.Logf(h.Queries, nil, "email_course_complete_failed", "to=%s course=%q score=%.0f%% error=%v", user.Email, course.Title, scoreVal, sendErr)
+					} else {
+						audit.Logf(h.Queries, nil, "email_course_complete_sent", "to=%s course=%q score=%.0f%% cert=%s", user.Email, course.Title, scoreVal, certCode)
 					}
 				}()
 			}

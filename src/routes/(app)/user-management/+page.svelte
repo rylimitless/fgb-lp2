@@ -2,7 +2,8 @@
     import {
         PageHeader,
         StatCard,
-        PremiumTable,
+        SelectableTable,
+        BulkUserCreate,
         showToast,
     } from "$lib/components/brand";
     import {
@@ -17,6 +18,7 @@
         LoaderCircle,
         Search,
         Check,
+        UserPlus,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Input from "$lib/components/ui/input";
@@ -37,7 +39,7 @@
         { id: "auditor", label: "Auditor" },
     ];
 
-    // ---- Create form state ----
+    // ---- Single-user create form ----
     let showForm = $state(false);
     let formEmail = $state("");
     let formPassword = $state("");
@@ -45,6 +47,9 @@
     let formRoles = $state<string[]>(["end user"]);
     let formError = $state("");
     let formSubmitting = $state(false);
+
+    // ---- Bulk create ----
+    let bulkCreateOpen = $state(false);
 
     let deleteError = $state("");
 
@@ -94,7 +99,6 @@
                 editError = err.error ?? "Failed to update roles";
                 return;
             }
-            // Update local state
             users = users.map((u) =>
                 u.id === userId ? { ...u, roles: editRoles } : u,
             );
@@ -111,7 +115,7 @@
         }
     }
 
-    // ---- Create ----
+    // ---- Single Create ----
     async function handleCreate() {
         formError = "";
         if (formRoles.length === 0) {
@@ -178,17 +182,15 @@
     }
 
     async function refreshUsers() {
-        const res = await fetch("/api/admin/users", { credentials: "include" });
+        const res = await fetch("/api/admin/users", {
+            credentials: "include",
+        });
         if (res.ok) {
             users = await res.json();
         }
     }
 
     function roleBadgeClass(role: string): string {
-        // Role -> brand semantic token. 4-token hierarchy per BRAND.md §4.3:
-        // admin -> primary (strongest), manager -> accent (leadership gold),
-        // approver -> warning (gatekeeping), auditor -> info (oversight),
-        // content creator -> info (productive), default -> neutral.
         switch (role) {
             case "admin":
                 return "bg-primary/10 text-primary border-primary/30";
@@ -204,7 +206,17 @@
         }
     }
 
-    // ---- Enroll in Course ----
+    // ---- Selection state (for bulk actions) ----
+    let selectedIds = $state<number[]>([]);
+    let selectedUsers = $derived(
+        users.filter((u) => selectedIds.includes(u.id)),
+    );
+
+    function clearSelection() {
+        selectedIds = [];
+    }
+
+    // ---- Single-user Enroll in Course ----
     let enrollingUser = $state<User | null>(null);
     let enrollDialogOpen = $state(false);
     let availableCourses = $state<any[]>([]);
@@ -287,6 +299,134 @@
               )
             : availableCourses,
     );
+
+    // ---- Bulk Enroll in Course ----
+    let bulkEnrollOpen = $state(false);
+    let bulkEnrollCourses = $state<any[]>([]);
+    let bulkEnrollLoading = $state(false);
+    let bulkEnrollSearch = $state("");
+    let bulkSelectedCourseId = $state<number | null>(null);
+    let bulkEnrollError = $state("");
+    let bulkEnrollSaving = $state(false);
+
+    async function openBulkEnroll() {
+        bulkEnrollOpen = true;
+        bulkSelectedCourseId = null;
+        bulkEnrollError = "";
+        bulkEnrollSearch = "";
+        bulkEnrollCourses = [];
+        bulkEnrollLoading = true;
+        try {
+            const res = await fetch("/api/courses/published", {
+                credentials: "include",
+            });
+            if (res.ok) {
+                bulkEnrollCourses = await res.json();
+            }
+        } catch {
+            /* ignore */
+        }
+        bulkEnrollLoading = false;
+    }
+
+    function closeBulkEnroll() {
+        bulkEnrollOpen = false;
+        bulkSelectedCourseId = null;
+        bulkEnrollError = "";
+    }
+
+    let filteredBulkCourses = $derived(
+        bulkEnrollSearch
+            ? bulkEnrollCourses.filter(
+                  (c: any) =>
+                      c.title
+                          .toLowerCase()
+                          .includes(bulkEnrollSearch.toLowerCase()) ||
+                      (c.description ?? "")
+                          .toLowerCase()
+                          .includes(bulkEnrollSearch.toLowerCase()),
+              )
+            : bulkEnrollCourses,
+    );
+
+    async function handleBulkEnroll() {
+        if (!bulkSelectedCourseId || selectedIds.length === 0) return;
+        bulkEnrollSaving = true;
+        bulkEnrollError = "";
+        try {
+            const res = await fetch("/api/admin/enrollments/bulk", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_ids: selectedIds,
+                    course_id: bulkSelectedCourseId,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                bulkEnrollError = err.error ?? "Failed to enroll users";
+                return;
+            }
+            const result = await res.json();
+            const course = bulkEnrollCourses.find(
+                (c: any) => c.id === bulkSelectedCourseId,
+            );
+            showToast(
+                `${result.enrolled_count} user(s) enrolled in "${result.course_title}".`,
+                { title: "Bulk enrollment", variant: "success" },
+            );
+            closeBulkEnroll();
+            clearSelection();
+        } catch {
+            bulkEnrollError = "Network error";
+        } finally {
+            bulkEnrollSaving = false;
+        }
+    }
+
+    // ---- Bulk Delete ----
+    let bulkDeleting = $state(false);
+
+    async function handleBulkDelete() {
+        if (selectedIds.length === 0) return;
+        const confirmMsg = `Delete ${selectedIds.length} user(s)? This cannot be undone.`;
+        if (!confirm(confirmMsg)) return;
+
+        bulkDeleting = true;
+        deleteError = "";
+        let deleted = 0;
+        let failed = 0;
+
+        for (const id of selectedIds) {
+            try {
+                const res = await fetch(`/api/admin/users/${id}`, {
+                    method: "DELETE",
+                    credentials: "include",
+                });
+                if (res.ok) {
+                    deleted++;
+                } else {
+                    failed++;
+                }
+            } catch {
+                failed++;
+            }
+        }
+
+        if (deleted > 0) {
+            users = users.filter((u) => !selectedIds.includes(u.id));
+            showToast(`${deleted} user(s) removed.`, {
+                title: "Users deleted",
+                variant: "default",
+            });
+        }
+        if (failed > 0) {
+            deleteError = `${failed} deletion(s) failed.`;
+        }
+        clearSelection();
+        bulkDeleting = false;
+    }
 </script>
 
 <div class="flex w-full max-w-4xl mx-auto flex-col gap-6">
@@ -299,18 +439,28 @@
             <Users class="size-6 text-primary" />
         {/snippet}
         {#snippet actions()}
-            <Button.Root
-                variant={showForm ? "outline" : "default"}
-                size="sm"
-                onclick={() => (showForm = !showForm)}
-            >
-                {#if showForm}
-                    Cancel
-                {:else}
-                    <Plus class="size-3.5" />
-                    <span>Add user</span>
-                {/if}
-            </Button.Root>
+            <div class="flex items-center gap-2">
+                <Button.Root
+                    variant={showForm ? "outline" : "default"}
+                    size="sm"
+                    onclick={() => (showForm = !showForm)}
+                >
+                    {#if showForm}
+                        Cancel
+                    {:else}
+                        <Plus class="size-3.5" />
+                        <span>Add user</span>
+                    {/if}
+                </Button.Root>
+                <Button.Root
+                    variant="outline"
+                    size="sm"
+                    onclick={() => (bulkCreateOpen = true)}
+                >
+                    <UserPlus class="size-3.5" />
+                    <span>Add users</span>
+                </Button.Root>
+            </div>
         {/snippet}
     </PageHeader>
 
@@ -480,23 +630,71 @@
         </div>
     {/if}
 
-    <!-- Users Table -->
-    <PremiumTable
+    <!-- Bulk actions bar (floating, above table) -->
+    {#if selectedIds.length > 0}
+        <div
+            class="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3"
+        >
+            <div class="flex items-center gap-2 text-sm">
+                <span class="font-semibold text-primary">
+                    {selectedIds.length}
+                </span>
+                <span class="text-muted-foreground">
+                    user{selectedIds.length !== 1 ? "s" : ""} selected
+                </span>
+            </div>
+            <div class="flex items-center gap-2">
+                <Button.Root
+                    variant="outline"
+                    size="sm"
+                    onclick={openBulkEnroll}
+                >
+                    <BookOpen class="size-3.5" />
+                    Enroll in course
+                </Button.Root>
+                <Button.Root
+                    variant="outline"
+                    size="sm"
+                    class="text-destructive hover:bg-destructive/10 border-destructive/30"
+                    onclick={handleBulkDelete}
+                    disabled={bulkDeleting}
+                >
+                    {#if bulkDeleting}
+                        <LoaderCircle class="size-3.5 animate-spin" />
+                    {:else}
+                        <Trash2 class="size-3.5" />
+                    {/if}
+                    Delete
+                </Button.Root>
+                <button
+                    class="text-xs text-muted-foreground hover:text-foreground ml-2"
+                    onclick={clearSelection}
+                >
+                    Clear selection
+                </button>
+            </div>
+        </div>
+    {/if}
+
+    <!-- Users Table with checkboxes -->
+    <SelectableTable
         items={users}
         columns={["Name", "Email", "Roles", "Created", "Actions"]}
+        bindSelectedIds={selectedIds}
         title="Academy accounts"
-        description="Roles, access, and provisioning history"
+        description="Roles, access, and provisioning history. Select rows for bulk actions."
         emptyTitle="No users found"
         emptyDescription="Create the first account to start provisioning Academy access."
     >
         {#snippet row(user)}
+            {@const u = user as User}
             <td class="px-5 py-3 font-medium text-foreground">
-                {user.name}
+                {u.name}
             </td>
-            <td class="px-5 py-3 text-muted-foreground">{user.email}</td>
+            <td class="px-5 py-3 text-muted-foreground">{u.email}</td>
             <td class="px-5 py-3">
                 <div class="flex flex-wrap gap-1">
-                    {#each user.roles && user.roles.length > 0 ? user.roles : [user.role] as r}
+                    {#each u.roles && u.roles.length > 0 ? u.roles : [u.role] as r}
                         <span
                             class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium {roleBadgeClass(
                                 r,
@@ -508,7 +706,7 @@
                 </div>
             </td>
             <td class="px-5 py-3 text-muted-foreground text-xs">
-                {user.created_at}
+                {u.created_at}
             </td>
             <td class="px-5 py-3 text-right">
                 <div class="flex items-center justify-end gap-1">
@@ -516,7 +714,7 @@
                         variant="ghost"
                         size="icon"
                         class="size-8 text-muted-foreground hover:text-primary"
-                        onclick={() => openEnroll(user)}
+                        onclick={() => openEnroll(u)}
                         title="Enroll in course"
                     >
                         <BookOpen class="size-3.5" />
@@ -525,7 +723,7 @@
                         variant="ghost"
                         size="icon"
                         class="size-8 text-muted-foreground hover:text-primary"
-                        onclick={() => openEdit(user)}
+                        onclick={() => openEdit(u)}
                     >
                         <Pencil class="size-3.5" />
                     </Button.Root>
@@ -533,14 +731,14 @@
                         variant="ghost"
                         size="icon"
                         class="size-8 text-muted-foreground hover:text-destructive"
-                        onclick={() => handleDelete(user.id, user.name)}
+                        onclick={() => handleDelete(u.id, u.name)}
                     >
                         <Trash2 class="size-3.5" />
                     </Button.Root>
                 </div>
             </td>
         {/snippet}
-    </PremiumTable>
+    </SelectableTable>
 </div>
 
 <!-- Edit Roles Dialog -->
@@ -548,37 +746,30 @@
     {@const u = editingUser!}
     <div
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-        onclick={closeEdit}
-        role="dialog"
-        aria-modal="true"
     >
         <div
-            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4"
-            onclick={(e: MouseEvent) => e.stopPropagation()}
+            class="relative z-10 w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl"
         >
-            <!-- Header -->
             <div
-                class="flex items-center justify-between px-6 py-4 border-b border-border"
+                class="flex items-center justify-between border-b border-border px-6 py-4"
             >
                 <div class="min-w-0">
                     <h3 class="text-base font-semibold text-foreground">
-                        Edit Roles
+                        Edit roles
                     </h3>
                     <p class="text-sm text-muted-foreground mt-0.5 truncate">
-                        {u.name} ({u.email})
+                        {u.name} &middot; {u.email}
                     </p>
                 </div>
                 <Button.Root
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
+                    class="size-8 text-muted-foreground hover:text-foreground"
                     onclick={closeEdit}
-                    class="shrink-0 ml-3"
                 >
                     <XCircle class="size-5" />
                 </Button.Root>
             </div>
-
-            <!-- Body -->
             <div class="px-6 py-4 flex flex-col gap-4">
                 {#if editError}
                     <div
@@ -588,10 +779,9 @@
                         <span>{editError}</span>
                     </div>
                 {/if}
-
                 <div class="flex flex-col gap-2">
                     <label class="text-xs font-medium text-foreground"
-                        >Select roles</label
+                        >Roles</label
                     >
                     <div class="flex flex-wrap gap-2">
                         {#each ALL_ROLES as r}
@@ -618,17 +808,10 @@
                     </div>
                 </div>
             </div>
-
-            <!-- Footer -->
             <div
-                class="flex items-center justify-end gap-2 px-6 py-4 border-t border-border"
+                class="flex items-center justify-end gap-2 border-t border-border px-6 py-4"
             >
-                <Button.Root
-                    variant="ghost"
-                    size="sm"
-                    onclick={closeEdit}
-                    disabled={editSaving}
-                >
+                <Button.Root variant="outline" size="sm" onclick={closeEdit}>
                     Cancel
                 </Button.Root>
                 <Button.Root
@@ -643,42 +826,35 @@
     </div>
 {/if}
 
-<!-- Enroll in Course Dialog -->
+<!-- Single Enroll Dialog -->
 {#if enrollingUser && enrollDialogOpen}
     {@const u = enrollingUser!}
     <div
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-        onclick={closeEnroll}
-        role="dialog"
-        aria-modal="true"
     >
         <div
-            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
-            onclick={(e: MouseEvent) => e.stopPropagation()}
+            class="relative z-10 w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl flex flex-col max-h-[85vh]"
         >
-            <!-- Header -->
             <div
-                class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0"
+                class="flex items-center justify-between border-b border-border px-6 py-4"
             >
                 <div class="min-w-0">
                     <h3 class="text-base font-semibold text-foreground">
-                        Enroll in Course
+                        Enroll in course
                     </h3>
                     <p class="text-sm text-muted-foreground mt-0.5 truncate">
-                        {u.name} ({u.email})
+                        {u.name} &middot; {u.email}
                     </p>
                 </div>
                 <Button.Root
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
+                    class="size-8 text-muted-foreground hover:text-foreground"
                     onclick={closeEnroll}
-                    class="shrink-0 ml-3"
                 >
                     <XCircle class="size-5" />
                 </Button.Root>
             </div>
-
-            <!-- Body -->
             <div class="px-6 py-4 flex flex-col gap-4 overflow-y-auto">
                 {#if enrollError}
                     <div
@@ -688,21 +864,17 @@
                         <span>{enrollError}</span>
                     </div>
                 {/if}
-
-                <!-- Search -->
                 <div class="relative">
                     <Search
-                        class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground"
+                        class="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none"
                     />
                     <input
                         type="text"
-                        placeholder="Search courses..."
+                        placeholder="Search courses…"
                         bind:value={enrollSearch}
-                        class="w-full rounded-lg border border-input bg-background pl-8 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        class="w-full rounded-lg border border-border bg-background pl-9 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
-
-                <!-- Course list -->
                 {#if enrollCoursesLoading}
                     <div class="flex justify-center py-8">
                         <LoaderCircle
@@ -711,25 +883,23 @@
                     </div>
                 {:else if filteredCourses.length === 0}
                     <p class="text-sm text-muted-foreground text-center py-6">
-                        {enrollSearch
-                            ? "No matching courses"
-                            : "No published courses available"}
+                        No courses available for enrollment.
                     </p>
                 {:else}
                     <div class="flex flex-col gap-1 max-h-64 overflow-y-auto">
                         {#each filteredCourses as c (c.id)}
                             <button
-                                class="flex items-start gap-3 rounded-lg border px-3.5 py-2.5 text-left transition-colors {selectedCourseId ===
+                                class="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-lg border transition-colors {selectedCourseId ===
                                 c.id
                                     ? 'border-primary bg-primary/5'
-                                    : 'border-border hover:border-muted-foreground/30'}"
+                                    : 'border-border hover:border-muted-foreground/30 hover:bg-muted/20'}"
                                 onclick={() => (selectedCourseId = c.id)}
                             >
                                 <div
-                                    class="size-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5"
+                                    class="flex items-center justify-center size-8 rounded-md bg-muted shrink-0"
                                 >
                                     <GraduationCap
-                                        class="size-4 text-primary"
+                                        class="size-4 text-muted-foreground"
                                     />
                                 </div>
                                 <div class="min-w-0">
@@ -740,7 +910,7 @@
                                     </p>
                                     {#if c.description}
                                         <p
-                                            class="text-xs text-muted-foreground mt-0.5 line-clamp-2"
+                                            class="text-xs text-muted-foreground truncate"
                                         >
                                             {c.description}
                                         </p>
@@ -748,7 +918,7 @@
                                 </div>
                                 {#if selectedCourseId === c.id}
                                     <Check
-                                        class="size-4 text-primary shrink-0 mt-1"
+                                        class="size-4 text-primary shrink-0 ml-auto"
                                     />
                                 {/if}
                             </button>
@@ -756,17 +926,10 @@
                     </div>
                 {/if}
             </div>
-
-            <!-- Footer -->
             <div
-                class="flex items-center justify-end gap-2 px-6 py-4 border-t border-border shrink-0"
+                class="flex items-center justify-end gap-2 border-t border-border px-6 py-4"
             >
-                <Button.Root
-                    variant="ghost"
-                    size="sm"
-                    onclick={closeEnroll}
-                    disabled={enrollSaving}
-                >
+                <Button.Root variant="outline" size="sm" onclick={closeEnroll}>
                     Cancel
                 </Button.Root>
                 <Button.Root
@@ -780,3 +943,132 @@
         </div>
     </div>
 {/if}
+
+<!-- Bulk Enroll Dialog -->
+{#if bulkEnrollOpen}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    >
+        <div
+            class="relative z-10 w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl flex flex-col max-h-[85vh]"
+        >
+            <div
+                class="flex items-center justify-between border-b border-border px-6 py-4"
+            >
+                <div class="min-w-0">
+                    <h3 class="text-base font-semibold text-foreground">
+                        Bulk enroll
+                    </h3>
+                    <p class="text-sm text-muted-foreground mt-0.5">
+                        Enroll {selectedIds.length} selected user{selectedIds.length !==
+                        1
+                            ? "s"
+                            : ""} in a course.
+                    </p>
+                </div>
+                <Button.Root
+                    variant="ghost"
+                    size="icon"
+                    class="size-8 text-muted-foreground hover:text-foreground"
+                    onclick={closeBulkEnroll}
+                >
+                    <XCircle class="size-5" />
+                </Button.Root>
+            </div>
+            <div class="px-6 py-4 flex flex-col gap-4 overflow-y-auto">
+                {#if bulkEnrollError}
+                    <div
+                        class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                    >
+                        <AlertCircle class="size-3.5 shrink-0" />
+                        <span>{bulkEnrollError}</span>
+                    </div>
+                {/if}
+                <div class="relative">
+                    <Search
+                        class="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none"
+                    />
+                    <input
+                        type="text"
+                        placeholder="Search courses…"
+                        bind:value={bulkEnrollSearch}
+                        class="w-full rounded-lg border border-border bg-background pl-9 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+                {#if bulkEnrollLoading}
+                    <div class="flex justify-center py-8">
+                        <LoaderCircle
+                            class="size-5 text-muted-foreground animate-spin"
+                        />
+                    </div>
+                {:else if filteredBulkCourses.length === 0}
+                    <p class="text-sm text-muted-foreground text-center py-6">
+                        No courses available for enrollment.
+                    </p>
+                {:else}
+                    <div class="flex flex-col gap-1 max-h-64 overflow-y-auto">
+                        {#each filteredBulkCourses as c (c.id)}
+                            <button
+                                class="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-lg border transition-colors {bulkSelectedCourseId ===
+                                c.id
+                                    ? 'border-primary bg-primary/5'
+                                    : 'border-border hover:border-muted-foreground/30 hover:bg-muted/20'}"
+                                onclick={() => (bulkSelectedCourseId = c.id)}
+                            >
+                                <div
+                                    class="flex items-center justify-center size-8 rounded-md bg-muted shrink-0"
+                                >
+                                    <GraduationCap
+                                        class="size-4 text-muted-foreground"
+                                    />
+                                </div>
+                                <div class="min-w-0">
+                                    <p
+                                        class="text-sm font-medium text-foreground truncate"
+                                    >
+                                        {c.title}
+                                    </p>
+                                    {#if c.description}
+                                        <p
+                                            class="text-xs text-muted-foreground truncate"
+                                        >
+                                            {c.description}
+                                        </p>
+                                    {/if}
+                                </div>
+                                {#if bulkSelectedCourseId === c.id}
+                                    <Check
+                                        class="size-4 text-primary shrink-0 ml-auto"
+                                    />
+                                {/if}
+                            </button>
+                        {/each}
+                    </div>
+                {/if}
+            </div>
+            <div
+                class="flex items-center justify-end gap-2 border-t border-border px-6 py-4"
+            >
+                <Button.Root
+                    variant="outline"
+                    size="sm"
+                    onclick={closeBulkEnroll}
+                >
+                    Cancel
+                </Button.Root>
+                <Button.Root
+                    size="sm"
+                    onclick={handleBulkEnroll}
+                    disabled={!bulkSelectedCourseId || bulkEnrollSaving}
+                >
+                    {bulkEnrollSaving
+                        ? "Enrolling…"
+                        : `Enroll ${selectedIds.length} user${selectedIds.length !== 1 ? "s" : ""}`}
+                </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Bulk User Create Dialog -->
+<BulkUserCreate bind:open={bulkCreateOpen} onCreated={() => refreshUsers()} />

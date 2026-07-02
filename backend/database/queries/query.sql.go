@@ -60,6 +60,32 @@ func (q *Queries) AddUserToDepartment(ctx context.Context, arg AddUserToDepartme
 	return err
 }
 
+const awardBadge = `-- name: AwardBadge :one
+insert into badge_awards (user_id, badge_id, metadata)
+values ($1, $2, $3)
+on conflict (user_id, badge_id) do nothing
+returning id, user_id, badge_id, earned_at, metadata
+`
+
+type AwardBadgeParams struct {
+	UserID   int64  `json:"user_id"`
+	BadgeID  int64  `json:"badge_id"`
+	Metadata []byte `json:"metadata"`
+}
+
+func (q *Queries) AwardBadge(ctx context.Context, arg AwardBadgeParams) (BadgeAward, error) {
+	row := q.db.QueryRow(ctx, awardBadge, arg.UserID, arg.BadgeID, arg.Metadata)
+	var i BadgeAward
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.BadgeID,
+		&i.EarnedAt,
+		&i.Metadata,
+	)
+	return i, err
+}
+
 const checkIfFirstUser = `-- name: CheckIfFirstUser :one
 select count(*) from users
 `
@@ -135,6 +161,17 @@ func (q *Queries) CountCoachQueries(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countCompletedCourses = `-- name: CountCompletedCourses :one
+select count(*) from enrollments where user_id = $1 and status = 'completed'
+`
+
+func (q *Queries) CountCompletedCourses(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countCompletedCourses, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPathCourses = `-- name: CountPathCourses :one
 select count(*)::int from learning_path_courses where learning_path_id = $1
 `
@@ -185,6 +222,28 @@ select count(*) from notifications where user_id = $1 and is_read = false
 
 func (q *Queries) CountUnreadNotifications(ctx context.Context, userID pgtype.Int8) (int64, error) {
 	row := q.db.QueryRow(ctx, countUnreadNotifications, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUserBadges = `-- name: CountUserBadges :one
+select count(*) from badge_awards where user_id = $1
+`
+
+func (q *Queries) CountUserBadges(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countUserBadges, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUserCertificates = `-- name: CountUserCertificates :one
+select count(*) from certificates where user_id = $1
+`
+
+func (q *Queries) CountUserCertificates(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countUserCertificates, userID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -406,6 +465,31 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 	return i, err
 }
 
+const createPasswordResetToken = `-- name: CreatePasswordResetToken :one
+insert into password_reset_tokens (user_id, token, expires_at)
+values ($1, $2, now() + interval '1 hour')
+returning id, user_id, token, expires_at, used, created_at
+`
+
+type CreatePasswordResetTokenParams struct {
+	UserID int64  `json:"user_id"`
+	Token  string `json:"token"`
+}
+
+func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error) {
+	row := q.db.QueryRow(ctx, createPasswordResetToken, arg.UserID, arg.Token)
+	var i PasswordResetToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.Used,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createSession = `-- name: CreateSession :one
 insert into sessions (user_id, token, expires_at)
 values ($1, $2, now() + interval '24 hours')
@@ -573,6 +657,15 @@ delete from user_roles where user_id = $1
 
 func (q *Queries) DeleteUserRoles(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
+	return err
+}
+
+const deleteUserSessions = `-- name: DeleteUserSessions :exec
+delete from sessions where user_id = $1
+`
+
+func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
+	_, err := q.db.Exec(ctx, deleteUserSessions, userID)
 	return err
 }
 
@@ -752,6 +845,40 @@ func (q *Queries) GetAdminUsers(ctx context.Context) ([]User, error) {
 	return items, nil
 }
 
+const getAllBadgeDefinitions = `-- name: GetAllBadgeDefinitions :many
+select id, code, name, description, icon, tier, category, criteria, created_at from badge_definitions order by id
+`
+
+func (q *Queries) GetAllBadgeDefinitions(ctx context.Context) ([]BadgeDefinition, error) {
+	rows, err := q.db.Query(ctx, getAllBadgeDefinitions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BadgeDefinition
+	for rows.Next() {
+		var i BadgeDefinition
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.Description,
+			&i.Icon,
+			&i.Tier,
+			&i.Category,
+			&i.Criteria,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAllLessonProgress = `-- name: GetAllLessonProgress :many
 select id, user_id, course_id, current_module, completed, score_pct, started_at, completed_at from lesson_progress where user_id = $1
 `
@@ -911,6 +1038,64 @@ func (q *Queries) GetAuditLogs(ctx context.Context, arg GetAuditLogsParams) ([]G
 	return items, nil
 }
 
+const getBadgeDefinitionByCode = `-- name: GetBadgeDefinitionByCode :one
+select id, code, name, description, icon, tier, category, criteria, created_at from badge_definitions where code = $1
+`
+
+func (q *Queries) GetBadgeDefinitionByCode(ctx context.Context, code string) (BadgeDefinition, error) {
+	row := q.db.QueryRow(ctx, getBadgeDefinitionByCode, code)
+	var i BadgeDefinition
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Description,
+		&i.Icon,
+		&i.Tier,
+		&i.Category,
+		&i.Criteria,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getCertificateByCode = `-- name: GetCertificateByCode :one
+select c.id, c.user_id, c.course_id, c.issued_at, c.certificate_code, c.score_pct, c.tier, co.title as course_title, u.name as user_name
+from certificates c
+join courses co on co.id = c.course_id
+join users u on u.id = c.user_id
+where c.certificate_code = $1
+`
+
+type GetCertificateByCodeRow struct {
+	ID              int64              `json:"id"`
+	UserID          int64              `json:"user_id"`
+	CourseID        int64              `json:"course_id"`
+	IssuedAt        pgtype.Timestamptz `json:"issued_at"`
+	CertificateCode string             `json:"certificate_code"`
+	ScorePct        pgtype.Numeric     `json:"score_pct"`
+	Tier            string             `json:"tier"`
+	CourseTitle     string             `json:"course_title"`
+	UserName        string             `json:"user_name"`
+}
+
+func (q *Queries) GetCertificateByCode(ctx context.Context, certificateCode string) (GetCertificateByCodeRow, error) {
+	row := q.db.QueryRow(ctx, getCertificateByCode, certificateCode)
+	var i GetCertificateByCodeRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.IssuedAt,
+		&i.CertificateCode,
+		&i.ScorePct,
+		&i.Tier,
+		&i.CourseTitle,
+		&i.UserName,
+	)
+	return i, err
+}
+
 const getCoachQueriesOverTime = `-- name: GetCoachQueriesOverTime :many
 select
   date_trunc('day', created_at)::date as day,
@@ -987,6 +1172,30 @@ func (q *Queries) GetCourseByID(ctx context.Context, id int64) (Course, error) {
 		&i.ReviewNotes,
 		&i.ApprovedBy,
 		&i.Capacity,
+	)
+	return i, err
+}
+
+const getCourseCertificate = `-- name: GetCourseCertificate :one
+select id, user_id, course_id, issued_at, certificate_code, score_pct, tier from certificates where user_id = $1 and course_id = $2
+`
+
+type GetCourseCertificateParams struct {
+	UserID   int64 `json:"user_id"`
+	CourseID int64 `json:"course_id"`
+}
+
+func (q *Queries) GetCourseCertificate(ctx context.Context, arg GetCourseCertificateParams) (Certificate, error) {
+	row := q.db.QueryRow(ctx, getCourseCertificate, arg.UserID, arg.CourseID)
+	var i Certificate
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.IssuedAt,
+		&i.CertificateCode,
+		&i.ScorePct,
+		&i.Tier,
 	)
 	return i, err
 }
@@ -1676,6 +1885,24 @@ func (q *Queries) GetMostFailedTopics(ctx context.Context, limit int32) ([]GetMo
 	return items, nil
 }
 
+const getPasswordResetToken = `-- name: GetPasswordResetToken :one
+select id, user_id, token, expires_at, used, created_at from password_reset_tokens where token = $1 and expires_at > now() and used = false
+`
+
+func (q *Queries) GetPasswordResetToken(ctx context.Context, token string) (PasswordResetToken, error) {
+	row := q.db.QueryRow(ctx, getPasswordResetToken, token)
+	var i PasswordResetToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.Used,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getPathCourses = `-- name: GetPathCourses :many
 select lpc.id, lpc.learning_path_id, lpc.course_id, lpc.sort_order, lpc.is_required, c.title as course_title, c.description as course_description, c.status as course_status
 from learning_path_courses lpc
@@ -1956,6 +2183,61 @@ func (q *Queries) GetSessionByToken(ctx context.Context, token string) (Session,
 	return i, err
 }
 
+const getUserBadges = `-- name: GetUserBadges :many
+select ba.id, ba.user_id, ba.badge_id, ba.earned_at, ba.metadata, bd.code as badge_code, bd.name as badge_name, bd.description as badge_description,
+       bd.icon as badge_icon, bd.tier as badge_tier, bd.category as badge_category
+from badge_awards ba
+join badge_definitions bd on bd.id = ba.badge_id
+where ba.user_id = $1
+order by ba.earned_at desc
+`
+
+type GetUserBadgesRow struct {
+	ID               int64              `json:"id"`
+	UserID           int64              `json:"user_id"`
+	BadgeID          int64              `json:"badge_id"`
+	EarnedAt         pgtype.Timestamptz `json:"earned_at"`
+	Metadata         []byte             `json:"metadata"`
+	BadgeCode        string             `json:"badge_code"`
+	BadgeName        string             `json:"badge_name"`
+	BadgeDescription string             `json:"badge_description"`
+	BadgeIcon        string             `json:"badge_icon"`
+	BadgeTier        string             `json:"badge_tier"`
+	BadgeCategory    string             `json:"badge_category"`
+}
+
+func (q *Queries) GetUserBadges(ctx context.Context, userID int64) ([]GetUserBadgesRow, error) {
+	rows, err := q.db.Query(ctx, getUserBadges, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUserBadgesRow
+	for rows.Next() {
+		var i GetUserBadgesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.BadgeID,
+			&i.EarnedAt,
+			&i.Metadata,
+			&i.BadgeCode,
+			&i.BadgeName,
+			&i.BadgeDescription,
+			&i.BadgeIcon,
+			&i.BadgeTier,
+			&i.BadgeCategory,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 select id, email, password_hash, name, role, created_at, updated_at from users where email = $1
 `
@@ -1992,6 +2274,56 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getUserCertificates = `-- name: GetUserCertificates :many
+select c.id, c.user_id, c.course_id, c.issued_at, c.certificate_code, c.score_pct, c.tier, co.title as course_title, co.description as course_description
+from certificates c
+join courses co on co.id = c.course_id
+where c.user_id = $1
+order by c.issued_at desc
+`
+
+type GetUserCertificatesRow struct {
+	ID                int64              `json:"id"`
+	UserID            int64              `json:"user_id"`
+	CourseID          int64              `json:"course_id"`
+	IssuedAt          pgtype.Timestamptz `json:"issued_at"`
+	CertificateCode   string             `json:"certificate_code"`
+	ScorePct          pgtype.Numeric     `json:"score_pct"`
+	Tier              string             `json:"tier"`
+	CourseTitle       string             `json:"course_title"`
+	CourseDescription string             `json:"course_description"`
+}
+
+func (q *Queries) GetUserCertificates(ctx context.Context, userID int64) ([]GetUserCertificatesRow, error) {
+	rows, err := q.db.Query(ctx, getUserCertificates, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUserCertificatesRow
+	for rows.Next() {
+		var i GetUserCertificatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CourseID,
+			&i.IssuedAt,
+			&i.CertificateCode,
+			&i.ScorePct,
+			&i.Tier,
+			&i.CourseTitle,
+			&i.CourseDescription,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getUserDepartments = `-- name: GetUserDepartments :many
@@ -2270,6 +2602,25 @@ func (q *Queries) GetUsersByDepartment(ctx context.Context, departmentID int64) 
 	return items, nil
 }
 
+const hasUserBadge = `-- name: HasUserBadge :one
+select count(*) > 0 as has_badge
+from badge_awards ba
+join badge_definitions bd on bd.id = ba.badge_id
+where ba.user_id = $1 and bd.code = $2
+`
+
+type HasUserBadgeParams struct {
+	UserID int64  `json:"user_id"`
+	Code   string `json:"code"`
+}
+
+func (q *Queries) HasUserBadge(ctx context.Context, arg HasUserBadgeParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasUserBadge, arg.UserID, arg.Code)
+	var has_badge bool
+	err := row.Scan(&has_badge)
+	return has_badge, err
+}
+
 const insertAuditLog = `-- name: InsertAuditLog :one
 insert into audit_log (user_id, action, details)
 values ($1, $2, $3)
@@ -2402,6 +2753,43 @@ func (q *Queries) InsertUserRole(ctx context.Context, arg InsertUserRoleParams) 
 	return err
 }
 
+const issueCertificate = `-- name: IssueCertificate :one
+insert into certificates (user_id, course_id, certificate_code, score_pct, tier)
+values ($1, $2, $3, $4, $5)
+on conflict (user_id, course_id) do update
+  set score_pct = $4, tier = $5, issued_at = now()
+returning id, user_id, course_id, issued_at, certificate_code, score_pct, tier
+`
+
+type IssueCertificateParams struct {
+	UserID          int64          `json:"user_id"`
+	CourseID        int64          `json:"course_id"`
+	CertificateCode string         `json:"certificate_code"`
+	ScorePct        pgtype.Numeric `json:"score_pct"`
+	Tier            string         `json:"tier"`
+}
+
+func (q *Queries) IssueCertificate(ctx context.Context, arg IssueCertificateParams) (Certificate, error) {
+	row := q.db.QueryRow(ctx, issueCertificate,
+		arg.UserID,
+		arg.CourseID,
+		arg.CertificateCode,
+		arg.ScorePct,
+		arg.Tier,
+	)
+	var i Certificate
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CourseID,
+		&i.IssuedAt,
+		&i.CertificateCode,
+		&i.ScorePct,
+		&i.Tier,
+	)
+	return i, err
+}
+
 const markNotificationRead = `-- name: MarkNotificationRead :one
 update notifications set is_read = true where id = $1 returning id, user_id, title, message, link, is_read, created_at
 `
@@ -2419,6 +2807,15 @@ func (q *Queries) MarkNotificationRead(ctx context.Context, id int64) (Notificat
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const markPasswordResetTokenUsed = `-- name: MarkPasswordResetTokenUsed :exec
+update password_reset_tokens set used = true where token = $1
+`
+
+func (q *Queries) MarkPasswordResetTokenUsed(ctx context.Context, token string) error {
+	_, err := q.db.Exec(ctx, markPasswordResetTokenUsed, token)
+	return err
 }
 
 const recordStreak = `-- name: RecordStreak :exec
@@ -3062,6 +3459,30 @@ func (q *Queries) UpdatePathCourseOrder(ctx context.Context, arg UpdatePathCours
 		&i.CourseID,
 		&i.SortOrder,
 		&i.IsRequired,
+	)
+	return i, err
+}
+
+const updateUserPassword = `-- name: UpdateUserPassword :one
+update users set password_hash = $2, updated_at = now() where id = $1 returning id, email, password_hash, name, role, created_at, updated_at
+`
+
+type UpdateUserPasswordParams struct {
+	ID           int64  `json:"id"`
+	PasswordHash string `json:"password_hash"`
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserPassword, arg.ID, arg.PasswordHash)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.Name,
+		&i.Role,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

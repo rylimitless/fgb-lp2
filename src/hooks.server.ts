@@ -1,7 +1,14 @@
 import { redirect, type Handle } from "@sveltejs/kit";
 
 // Public routes need no session. /welcome is the immersive marketing landing.
-const PUBLIC_ROUTES = ["/login", "/setup", "/welcome", "/certificates"];
+const PUBLIC_ROUTES = [
+  "/login",
+  "/setup",
+  "/welcome",
+  "/certificates",
+  "/forgot-password",
+  "/reset-password",
+];
 
 export const handle: Handle = async ({ event, resolve }) => {
   const sessionToken = event.cookies.get("session_token");

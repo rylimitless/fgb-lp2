@@ -415,3 +415,15 @@ INSERT INTO badge_definitions (code, name, description, icon, tier, category, cr
   ('total_xp_1000', 'XP Apprentice', 'Earn 1,000 total XP', 'trending-up', 'bronze', 'achievement', '{"type":"total_xp","count":1000}'),
   ('total_xp_5000', 'XP Expert', 'Earn 5,000 total XP', 'trending-up', 'silver', 'achievement', '{"type":"total_xp","count":5000}')
 ON CONFLICT (code) DO NOTHING;
+
+-- Password reset tokens: expiring tokens for forgot-password flow
+create table if not exists password_reset_tokens (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  token text not null unique,
+  expires_at timestamptz not null,
+  used boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_password_reset_token on password_reset_tokens(token);
+create index if not exists idx_password_reset_user on password_reset_tokens(user_id);

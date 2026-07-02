@@ -641,3 +641,20 @@ select count(*) from badge_awards where user_id = $1;
 
 -- name: CountCompletedCourses :one
 select count(*) from enrollments where user_id = $1 and status = 'completed';
+
+-- name: DeleteUserSessions :exec
+delete from sessions where user_id = $1;
+
+-- name: CreatePasswordResetToken :one
+insert into password_reset_tokens (user_id, token, expires_at)
+values ($1, $2, now() + interval '1 hour')
+returning *;
+
+-- name: GetPasswordResetToken :one
+select * from password_reset_tokens where token = $1 and expires_at > now() and used = false;
+
+-- name: MarkPasswordResetTokenUsed :exec
+update password_reset_tokens set used = true where token = $1;
+
+-- name: UpdateUserPassword :one
+update users set password_hash = $2, updated_at = now() where id = $1 returning *;

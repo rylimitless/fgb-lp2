@@ -18,8 +18,10 @@ import (
 	homehandler "fgb-lp/home_handler"
 	"fgb-lp/learning_paths"
 	"fgb-lp/lessons"
+	"fgb-lp/mailer"
 	"fgb-lp/middlewares"
 	"fgb-lp/notifications"
+	"fgb-lp/password_reset"
 	"fgb-lp/review"
 	"fgb-lp/users"
 	"fgb-lp/worker"
@@ -185,13 +187,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create the shared email sender
+	emailSender := mailer.NewResend()
+
 	docHandler := documents.NewHandler(queries, uploadDir)
 	docHandler.RegisterRoutes(protected)
 
 	aiHandler := ai.NewHandler(dbpool, queries)
 	aiHandler.RegisterRoutes(protected)
 
-	reviewHandler := review.NewHandler(queries)
+	reviewHandler := review.NewHandler(queries).WithMailer(emailSender)
 	reviewHandler.RegisterRoutes(approverGroup)
 
 	// Certificates and badges — created first so they can be wired into other handlers
@@ -202,10 +207,11 @@ func main() {
 	badgesHandler := badges.NewHandler(queries, dbpool)
 	badgesHandler.RegisterRoutes(protected)
 
-	// Lessons handler with certificates + badges integration for auto-issuing on course completion
+	// Lessons handler with certificates + badges + mailer for auto-issuing on course completion
 	lessonHandler := lessons.NewHandler(queries).
 		WithCertificates(certHandler).
-		WithBadges(badgesHandler)
+		WithBadges(badgesHandler).
+		WithMailer(emailSender)
 	lessonHandler.RegisterRoutes(protected)
 
 	gamificationHandler := gamification.NewHandler(queries)
@@ -223,14 +229,14 @@ func main() {
 	notifHandler := notifications.NewHandler(queries, dbpool)
 	notifHandler.RegisterRoutes(protected)
 
-	enrollmentHandler := enrollments.NewHandler(queries)
+	enrollmentHandler := enrollments.NewHandler(queries).WithMailer(emailSender)
 	enrollmentHandler.RegisterRoutes(protected)
 	enrollmentHandler.RegisterAdminRoutes(adminManagerGroup)
 
 	dashHandler := homehandler.NewDashboardHandler(dbpool)
 	protected.GET("/dashboard", dashHandler.GetDashboard)
 
-	userHandler := users.NewHandler(dbpool, queries)
+	userHandler := users.NewHandler(dbpool, queries).WithMailer(emailSender)
 	userHandler.RegisterRoutes(adminGroup)
 	userHandler.RegisterListRoute(adminManagerGroup)
 
@@ -243,6 +249,10 @@ func main() {
 
 	analyticsHandler := analytics.NewHandler(queries)
 	analyticsHandler.RegisterRoutes(adminGroup)
+
+	// Password reset (public routes — no auth required)
+	resetHandler := password_reset.NewHandler(dbpool, queries).WithMailer(emailSender)
+	resetHandler.RegisterRoutes(r.Group("/api"))
 
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())

@@ -17,6 +17,36 @@ type AuditLog struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type BadgeAward struct {
+	ID       int64              `json:"id"`
+	UserID   int64              `json:"user_id"`
+	BadgeID  int64              `json:"badge_id"`
+	EarnedAt pgtype.Timestamptz `json:"earned_at"`
+	Metadata []byte             `json:"metadata"`
+}
+
+type BadgeDefinition struct {
+	ID          int64              `json:"id"`
+	Code        string             `json:"code"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Icon        string             `json:"icon"`
+	Tier        string             `json:"tier"`
+	Category    string             `json:"category"`
+	Criteria    []byte             `json:"criteria"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Certificate struct {
+	ID              int64              `json:"id"`
+	UserID          int64              `json:"user_id"`
+	CourseID        int64              `json:"course_id"`
+	IssuedAt        pgtype.Timestamptz `json:"issued_at"`
+	CertificateCode string             `json:"certificate_code"`
+	ScorePct        pgtype.Numeric     `json:"score_pct"`
+	Tier            string             `json:"tier"`
+}
+
 type CoachQuery struct {
 	ID           int64              `json:"id"`
 	UserID       pgtype.Int8        `json:"user_id"`
@@ -192,6 +222,15 @@ type Notification struct {
 	Message   string             `json:"message"`
 	Link      string             `json:"link"`
 	IsRead    bool               `json:"is_read"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type PasswordResetToken struct {
+	ID        int64              `json:"id"`
+	UserID    int64              `json:"user_id"`
+	Token     string             `json:"token"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	Used      bool               `json:"used"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 

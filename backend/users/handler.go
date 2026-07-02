@@ -1,11 +1,16 @@
 package users
 
 import (
+	"encoding/csv"
 	"fgb-lp/audit"
 	database "fgb-lp/database/queries"
 	"fgb-lp/functions"
+	"fgb-lp/mailer"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +19,7 @@ import (
 type Handler struct {
 	Pool    *pgxpool.Pool
 	Queries *database.Queries
+	Mailer  mailer.Sender
 }
 
 func NewHandler(pool *pgxpool.Pool, queries *database.Queries) *Handler {
@@ -21,6 +27,12 @@ func NewHandler(pool *pgxpool.Pool, queries *database.Queries) *Handler {
 		Pool:    pool,
 		Queries: queries,
 	}
+}
+
+// WithMailer sets the email sender (fluent builder pattern).
+func (h *Handler) WithMailer(m mailer.Sender) *Handler {
+	h.Mailer = m
+	return h
 }
 
 func (h *Handler) ListUsers(c *gin.Context) {
@@ -262,6 +274,290 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "User deleted"})
 }
 
+// validRoles is the canonical set of accepted role identifiers.
+var validRoles = map[string]bool{
+	"end user":        true,
+	"content creator": true,
+	"admin":           true,
+	"approver":        true,
+	"manager":         true,
+	"auditor":         true,
+}
+
+// userRow is a uniform type used by both JSON and CSV paths.
+type userRow struct {
+	Name  string
+	Email string
+	Roles []string
+}
+
+// BulkCreateUsers creates multiple users via a JSON payload with
+// auto-generated passwords + welcome emails.
+func (h *Handler) BulkCreateUsers(c *gin.Context) {
+	type jsonInput struct {
+		Name  string   `json:"name" binding:"required"`
+		Email string   `json:"email" binding:"required,email"`
+		Roles []string `json:"roles"`
+	}
+
+	var body struct {
+		Users []jsonInput `json:"users" binding:"required,min=1,max=200"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	rows := make([]userRow, 0, len(body.Users))
+	for _, u := range body.Users {
+		roles := u.Roles
+		if len(roles) == 0 {
+			roles = []string{"end user"}
+		}
+		rows = append(rows, userRow{Name: u.Name, Email: u.Email, Roles: roles})
+	}
+
+	h.createUsersFromRows(c, rows)
+}
+
+// BulkCreateUsersCSV parses a CSV file upload and creates users.
+// Expects headers: Name,Email,Roles (Roles optional, semicolon-separated).
+// The form field name is "file". Maximum 200 rows.
+func (h *Handler) BulkCreateUsersCSV(c *gin.Context) {
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "CSV file is required (form field: file)"})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	// Read header row
+	headers, err := reader.Read()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read CSV header: " + err.Error()})
+		return
+	}
+
+	// Normalize headers to lowercase, strip whitespace
+	colIndex := map[string]int{}
+	for i, h := range headers {
+		colIndex[strings.ToLower(strings.TrimSpace(h))] = i
+	}
+
+	nameCol, hasName := colIndex["name"]
+	emailCol, hasEmail := colIndex["email"]
+	rolesCol, _ := colIndex["roles"]
+
+	if !hasName || !hasEmail {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "CSV must have 'Name' and 'Email' columns"})
+		return
+	}
+
+	var rows []userRow
+	line := 1 // line 1 is the header
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		line++
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Failed to read CSV line " + strconv.Itoa(line) + ": " + err.Error(),
+			})
+			return
+		}
+
+		if len(record) <= nameCol || len(record) <= emailCol {
+			continue // skip malformed rows silently; validation catches them
+		}
+
+		name := strings.TrimSpace(record[nameCol])
+		email := strings.TrimSpace(record[emailCol])
+
+		if name == "" || email == "" {
+			continue
+		}
+
+		roles := []string{"end user"}
+		if rolesCol >= 0 && rolesCol < len(record) {
+			raw := strings.TrimSpace(record[rolesCol])
+			if raw != "" {
+				parts := strings.Split(raw, ";")
+				parsed := make([]string, 0, len(parts))
+				for _, p := range parts {
+					r := strings.TrimSpace(strings.ToLower(p))
+					if r != "" && validRoles[r] {
+						parsed = append(parsed, r)
+					}
+				}
+				if len(parsed) > 0 {
+					roles = parsed
+				}
+			}
+		}
+
+		rows = append(rows, userRow{Name: name, Email: email, Roles: roles})
+	}
+
+	if len(rows) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No valid user rows found in CSV"})
+		return
+	}
+	if len(rows) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Maximum 200 users per upload (got " + strconv.Itoa(len(rows)) + ")"})
+		return
+	}
+
+	h.createUsersFromRows(c, rows)
+}
+
+// createUsersFromRows is the shared creation pipeline: validate, create in
+// a transaction, send welcome emails, audit, respond.
+func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
+	// Pre-validate
+	type rowError struct {
+		Index   int    `json:"index"`
+		Email   string `json:"email"`
+		Name    string `json:"name"`
+		Message string `json:"message"`
+	}
+	var validationErrors []rowError
+
+	for i, r := range rows {
+		for _, role := range r.Roles {
+			if !validRoles[role] {
+				validationErrors = append(validationErrors, rowError{
+					Index: i, Email: r.Email, Name: r.Name,
+					Message: "Invalid role: " + role,
+				})
+			}
+		}
+	}
+
+	if len(validationErrors) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Validation failed",
+			"details": validationErrors,
+		})
+		return
+	}
+
+	// Transaction
+	tx, err := h.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	txQueries := h.Queries.WithTx(tx)
+
+	type createdUser struct {
+		ID       int64    `json:"id"`
+		Name     string   `json:"name"`
+		Email    string   `json:"email"`
+		Password string   `json:"-"`
+		Roles    []string `json:"roles"`
+	}
+
+	created := make([]createdUser, 0, len(rows))
+
+	for _, r := range rows {
+		password := functions.MakeTokens()
+		hash := functions.MakeHash(password)
+
+		user, err := txQueries.CreateUser(c.Request.Context(), database.CreateUserParams{
+			Email:        r.Email,
+			PasswordHash: hash,
+			Name:         r.Name,
+			Role:         r.Roles[0],
+		})
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "Failed to create user",
+				"details": gin.H{"email": r.Email, "name": r.Name},
+			})
+			return
+		}
+
+		for _, role := range r.Roles {
+			_ = txQueries.InsertUserRole(c.Request.Context(), database.InsertUserRoleParams{
+				UserID: user.ID,
+				Role:   role,
+			})
+		}
+
+		created = append(created, createdUser{
+			ID:       user.ID,
+			Name:     user.Name,
+			Email:    user.Email,
+			Password: password,
+			Roles:    r.Roles,
+		})
+	}
+
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit bulk creation"})
+		return
+	}
+
+	// Send welcome emails synchronously so we can report per-user status.
+	// Resend API is fast enough for this to be acceptable (< 200ms per email).
+	type userResponse struct {
+		ID        int64    `json:"id"`
+		Name      string   `json:"name"`
+		Email     string   `json:"email"`
+		Roles     []string `json:"roles"`
+		EmailSent bool     `json:"email_sent"`
+	}
+
+	responseUsers := make([]userResponse, len(created))
+	emailSent := 0
+	emailFailed := 0
+
+	for i, cu := range created {
+		responseUsers[i] = userResponse{
+			ID:    cu.ID,
+			Name:  cu.Name,
+			Email: cu.Email,
+			Roles: cu.Roles,
+		}
+
+		if h.Mailer != nil {
+			err := h.Mailer.SendWelcome(c.Request.Context(), cu.Email, cu.Name, cu.Password)
+			if err != nil {
+				log.Printf("[users] failed to send welcome email to %s: %v", cu.Email, err)
+				emailFailed++
+				responseUsers[i].EmailSent = false
+			} else {
+				emailSent++
+				responseUsers[i].EmailSent = true
+			}
+		} else {
+			// No mailer configured — mark as not sent
+			emailFailed++
+			responseUsers[i].EmailSent = false
+		}
+	}
+
+	audit.Log(h.Queries, c, "users_bulk_created", map[string]any{
+		"created_count": len(created),
+		"emails_sent":   emailSent,
+		"emails_failed": emailFailed,
+	})
+
+	c.JSON(http.StatusCreated, gin.H{
+		"created_count": len(created),
+		"emails_sent":   emailSent,
+		"emails_failed": emailFailed,
+		"users":         responseUsers,
+	})
+}
+
 // getUserRoles fetches all roles for a user from the user_roles junction table
 func (h *Handler) getUserRoles(c *gin.Context, userID int64) []string {
 	roles, err := h.Queries.GetUserRoles(c.Request.Context(), userID)
@@ -273,6 +569,8 @@ func (h *Handler) getUserRoles(c *gin.Context, userID int64) []string {
 
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/admin/users", h.CreateUser)
+	r.POST("/admin/users/bulk", h.BulkCreateUsers)
+	r.POST("/admin/users/bulk/csv", h.BulkCreateUsersCSV)
 	r.PUT("/admin/users/:id/roles", h.UpdateUserRoles)
 	r.DELETE("/admin/users/:id", h.DeleteUser)
 }

@@ -43,10 +43,14 @@ services:
       dockerfile: Dockerfile
     container_name: fgb-backend1
     environment:
+      environment:
+      RESEND_FROM: noreply@fgbacademy.rybuildstuff.dev
       DATABASE_URL: postgres://postgres:password@db:5432/example_db
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: https://api.deepseek.com
       EMBEDDINGS_URL: http://embeddings:7100/embeddings
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      APP_URL: ${APP_URL:-http://localhost:5173}
     ports:
       - "5556:5555"
     volumes:

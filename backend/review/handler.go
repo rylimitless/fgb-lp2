@@ -4,7 +4,9 @@ import (
 	"context"
 	"fgb-lp/audit"
 	database "fgb-lp/database/queries"
+	"fgb-lp/mailer"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,10 +17,16 @@ import (
 
 type Handler struct {
 	Queries *database.Queries
+	Mailer  mailer.Sender
 }
 
 func NewHandler(queries *database.Queries) *Handler {
 	return &Handler{Queries: queries}
+}
+
+func (h *Handler) WithMailer(m mailer.Sender) *Handler {
+	h.Mailer = m
+	return h
 }
 
 // reviewerIdentity returns "Name (Role)" for the currently authenticated user.
@@ -178,6 +186,22 @@ func (h *Handler) ReviewDocument(c *gin.Context) {
 	// Notify the document owner
 	h.sendDocNotification(doc, body.ReviewStatus)
 
+	// Send review decision email (fire-and-forget)
+	if h.Mailer != nil && doc.UploadedBy.Valid {
+		ownerID := doc.UploadedBy.Int64
+		go func() {
+			owner, err := h.Queries.GetUserByID(context.Background(), ownerID)
+			if err == nil {
+				if sendErr := h.Mailer.SendReviewDecision(context.Background(), owner.Email, owner.Name, "document", doc.Title, body.ReviewStatus, body.ReviewNotes); sendErr != nil {
+					log.Printf("[review] failed to send review email to %s: %v", owner.Email, sendErr)
+					audit.Logf(h.Queries, nil, "email_review_failed", "to=%s item=document title=%q decision=%s error=%v", owner.Email, doc.Title, body.ReviewStatus, sendErr)
+				} else {
+					audit.Logf(h.Queries, nil, "email_review_sent", "to=%s item=document title=%q decision=%s", owner.Email, doc.Title, body.ReviewStatus)
+				}
+			}
+		}()
+	}
+
 	audit.Log(h.Queries, c, "document_reviewed", map[string]any{
 		"document_id":   id,
 		"title":         doc.Title,
@@ -246,6 +270,21 @@ func (h *Handler) ReviewCourse(c *gin.Context) {
 
 	// Notify the course owner
 	h.sendCourseNotification(course, body.ReviewStatus)
+
+	// Send review decision email (fire-and-forget)
+	if h.Mailer != nil {
+		go func() {
+			owner, err := h.Queries.GetUserByID(context.Background(), course.CreatedBy)
+			if err == nil {
+				if sendErr := h.Mailer.SendReviewDecision(context.Background(), owner.Email, owner.Name, "course", course.Title, body.ReviewStatus, body.ReviewNotes); sendErr != nil {
+					log.Printf("[review] failed to send review email to %s: %v", owner.Email, sendErr)
+					audit.Logf(h.Queries, nil, "email_review_failed", "to=%s item=course title=%q decision=%s error=%v", owner.Email, course.Title, body.ReviewStatus, sendErr)
+				} else {
+					audit.Logf(h.Queries, nil, "email_review_sent", "to=%s item=course title=%q decision=%s", owner.Email, course.Title, body.ReviewStatus)
+				}
+			}
+		}()
+	}
 
 	audit.Log(h.Queries, c, "course_reviewed", map[string]any{
 		"course_id":     id,

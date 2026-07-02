@@ -248,6 +248,21 @@ func (h *Handler) RegisterRoutesPublic(r *gin.Engine) {
 	r.GET("/api/certificates/:code", h.GetCertificateByCode)
 }
 
+// GetCourseCert returns the certificate for a user/course pair (programmatic, not an HTTP handler).
+func (h *Handler) GetCourseCert(ctx context.Context, userID, courseID int64) *Certificate {
+	var cert Certificate
+	err := h.Pool.QueryRow(ctx, `
+		SELECT id, user_id, course_id, certificate_code, score_pct, tier, issued_at
+		FROM certificates
+		WHERE user_id = $1 AND course_id = $2`, userID, courseID).Scan(
+		&cert.ID, &cert.UserID, &cert.CourseID, &cert.CertificateCode,
+		&cert.ScorePct, &cert.Tier, &cert.IssuedAt)
+	if err != nil {
+		return nil
+	}
+	return &cert
+}
+
 // RegisterRoutes registers protected certificate routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/certificates", h.ListCertificates)

@@ -1,12 +1,16 @@
 package enrollments
 
 import (
+	"context"
 	"encoding/json"
 	"fgb-lp/audit"
 	database "fgb-lp/database/queries"
+	"fgb-lp/mailer"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,10 +19,16 @@ import (
 
 type Handler struct {
 	Queries *database.Queries
+	Mailer  mailer.Sender
 }
 
 func NewHandler(queries *database.Queries) *Handler {
 	return &Handler{Queries: queries}
+}
+
+func (h *Handler) WithMailer(m mailer.Sender) *Handler {
+	h.Mailer = m
+	return h
 }
 
 // ListMyEnrollments returns all enrollments for the authenticated user
@@ -174,6 +184,21 @@ func (h *Handler) EnrollSelf(c *gin.Context) {
 		"course_id":    body.CourseID,
 		"course_title": course.Title,
 	})
+
+	// Send enrollment confirmation email (fire-and-forget)
+	if h.Mailer != nil {
+		user, err := h.Queries.GetUserByID(c.Request.Context(), userID)
+		if err == nil {
+			go func() {
+				if err := h.Mailer.SendEnrollmentConfirmation(context.Background(), user.Email, user.Name, course.Title, course.ID); err != nil {
+					log.Printf("[enrollments] failed to send enrollment email to %s: %v", user.Email, err)
+					audit.Logf(h.Queries, nil, "email_enrollment_failed", "to=%s course=%q error=%v", user.Email, course.Title, err)
+				} else {
+					audit.Logf(h.Queries, nil, "email_enrollment_sent", "to=%s course=%q course_id=%d", user.Email, course.Title, course.ID)
+				}
+			}()
+		}
+	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"id":          enrollment.ID,
@@ -365,12 +390,111 @@ func (h *Handler) AdminEnrollUser(c *gin.Context) {
 		"course_title":      course.Title,
 	})
 
+	// Send enrollment confirmation email to the enrolled user (fire-and-forget)
+	if h.Mailer != nil {
+		go func() {
+			if err := h.Mailer.SendEnrollmentConfirmation(context.Background(), targetUser.Email, targetUser.Name, course.Title, course.ID); err != nil {
+				log.Printf("[enrollments] failed to send enrollment email to %s: %v", targetUser.Email, err)
+				audit.Logf(h.Queries, nil, "email_enrollment_failed", "to=%s course=%q error=%v", targetUser.Email, course.Title, err)
+			} else {
+				audit.Logf(h.Queries, nil, "email_enrollment_sent", "to=%s course=%q course_id=%d", targetUser.Email, course.Title, course.ID)
+			}
+		}()
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"id":          enrollment.ID,
 		"user_id":     enrollment.UserID,
 		"course_id":   enrollment.CourseID,
 		"status":      enrollment.Status,
 		"enrolled_at": enrollment.EnrolledAt.Time.Format("2006-01-02 15:04"),
+	})
+}
+
+// BulkEnrollUsers lets an admin enroll many users in a course at once.
+// Accepts { "user_ids": [1, 2, 3], "course_id": 7 }. Tracks enrolled, skipped,
+// and errored users. Skips users that don't exist or are already enrolled.
+func (h *Handler) BulkEnrollUsers(c *gin.Context) {
+	var body struct {
+		UserIDs  []int64 `json:"user_ids" binding:"required"`
+		CourseID int64   `json:"course_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Verify course exists
+	course, err := h.Queries.GetCourseByID(c.Request.Context(), body.CourseID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	var enrolledCount, skippedCount, errorCount int
+	var errorDetails []map[string]any
+
+	for _, uid := range body.UserIDs {
+		// Verify user exists
+		_, err := h.Queries.GetUserByID(c.Request.Context(), uid)
+		if err != nil {
+			skippedCount++
+			errorDetails = append(errorDetails, map[string]any{
+				"user_id": uid,
+				"reason":  "User not found",
+			})
+			continue
+		}
+
+		// Create enrollment
+		_, err = h.Queries.CreateEnrollment(c.Request.Context(),
+			database.CreateEnrollmentParams{UserID: uid, CourseID: body.CourseID})
+		if err != nil {
+			errStr := strings.ToLower(err.Error())
+			// Check for duplicate / already-enrolled
+			if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "unique") || strings.Contains(errStr, "already") {
+				skippedCount++
+				errorDetails = append(errorDetails, map[string]any{
+					"user_id": uid,
+					"reason":  "Already enrolled",
+				})
+				// Still ensure lesson_progress exists
+				_ = h.Queries.EnrollInCourse(c.Request.Context(),
+					database.EnrollInCourseParams{UserID: uid, CourseID: body.CourseID})
+				continue
+			}
+
+			errorCount++
+			errorDetails = append(errorDetails, map[string]any{
+				"user_id": uid,
+				"reason":  fmt.Sprintf("CreateEnrollment failed: %s", errStr),
+			})
+			continue
+		}
+
+		// Ensure lesson_progress row for backward compatibility
+		_ = h.Queries.EnrollInCourse(c.Request.Context(),
+			database.EnrollInCourseParams{UserID: uid, CourseID: body.CourseID})
+
+		enrolledCount++
+	}
+
+	// Write a single audit log entry
+	audit.Log(h.Queries, c, "bulk_enrollment", map[string]any{
+		"course_id":       body.CourseID,
+		"course_title":    course.Title,
+		"enrolled_count":  enrolledCount,
+		"skipped_count":   skippedCount,
+		"error_count":     errorCount,
+		"total_requested": len(body.UserIDs),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"enrolled_count": enrolledCount,
+		"skipped_count":  skippedCount,
+		"error_count":    errorCount,
+		"course_title":   course.Title,
+		"errors":         errorDetails,
 	})
 }
 
@@ -450,5 +574,6 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 func (h *Handler) RegisterAdminRoutes(r *gin.RouterGroup) {
 	r.GET("/admin/enrollments/course/:course_id", h.GetCourseEnrollmentDetails)
 	r.POST("/admin/enrollments", h.AdminEnrollUser)
+	r.POST("/admin/enrollments/bulk", h.BulkEnrollUsers)
 	r.DELETE("/admin/enrollments/:id", h.AdminRemoveEnrollment)
 }
