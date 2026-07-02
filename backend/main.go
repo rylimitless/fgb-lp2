@@ -186,7 +186,7 @@ func main() {
 	docHandler := documents.NewHandler(queries, uploadDir)
 	docHandler.RegisterRoutes(protected)
 
-	aiHandler := ai.NewHandler(queries)
+	aiHandler := ai.NewHandler(dbpool, queries)
 	aiHandler.RegisterRoutes(protected)
 
 	reviewHandler := review.NewHandler(queries)
@@ -217,7 +217,7 @@ func main() {
 	dashHandler := homehandler.NewDashboardHandler(dbpool)
 	protected.GET("/dashboard", dashHandler.GetDashboard)
 
-	userHandler := users.NewHandler(queries)
+	userHandler := users.NewHandler(dbpool, queries)
 	userHandler.RegisterRoutes(adminGroup)
 	userHandler.RegisterListRoute(adminManagerGroup)
 

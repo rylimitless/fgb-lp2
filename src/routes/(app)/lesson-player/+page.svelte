@@ -72,6 +72,7 @@
     let settingsEditOpen = $state(false);
     let editMaxAttempts = $state<number | null>(null);
     let editDaysToComplete = $state<number | null>(null);
+    let editGraded = $state(false);
     let settingsSaving = $state(false);
     let settingsSaveError = $state("");
     let settingsSaved = $state(false);
@@ -88,6 +89,7 @@
         const s = parseCourseSettings(enrolledCourse?.settings);
         editMaxAttempts = s.max_attempts ?? null;
         editDaysToComplete = s.days_to_complete ?? null;
+        editGraded = s.graded === true;
         settingsEditOpen = true;
         settingsSaveError = "";
         settingsSaved = false;
@@ -103,6 +105,7 @@
                 clean.max_attempts = editMaxAttempts;
             if (editDaysToComplete && editDaysToComplete > 0)
                 clean.days_to_complete = editDaysToComplete;
+            clean.graded = editGraded;
             const res = await fetch(
                 `/api/courses/${enrolledCourse.id}/settings`,
                 {
@@ -129,8 +132,15 @@
 
     // Answers: { [itemId]: answer }
     let answers = $state<Record<number, any>>({});
-    // Which items have had their answer revealed via inline Check button
-    let checkedRevealed = $state<Record<number, boolean>>({});
+    // Which items have had their answer checked (correct/incorrect shown)
+    let checked = $state<Record<number, boolean>>({});
+    // Which items have had their correct answer revealed (separate from check in learning mode)
+    let revealed = $state<Record<number, boolean>>({});
+
+    // Derived: is the course in learning (non-graded) mode?
+    let isGraded = $derived(
+        parseCourseSettings(enrolledCourse?.settings).graded === true,
+    );
 
     $effect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -222,7 +232,8 @@
         enrolledCourse = null;
         currentModuleIdx = 0;
         answers = {};
-        checkedRevealed = {};
+        checked = {};
+        revealed = {};
         showResults = false;
         // Check if this is a retake (course was previously completed)
         const existing = courses.find((c: any) => c.id === courseId);
@@ -248,6 +259,9 @@
                         for (const item of mod.items) {
                             if (item.saved_answer !== undefined) {
                                 answers[item.id] = item.saved_answer;
+                                // If previously answered, mark as checked and revealed
+                                checked[item.id] = true;
+                                revealed[item.id] = true;
                             }
                         }
                     }
@@ -1042,6 +1056,23 @@
                                 />
                             </label>
                         </div>
+                        <label
+                            class="flex items-center gap-2.5 cursor-pointer select-none"
+                        >
+                            <input
+                                type="checkbox"
+                                bind:checked={editGraded}
+                                class="size-4 rounded border-input"
+                            />
+                            <span class="text-sm text-foreground">
+                                Graded course
+                            </span>
+                            <span class="text-xs text-muted-foreground">
+                                — controls are marked immediately on check;
+                                otherwise learners can reveal answers
+                                separately.
+                            </span>
+                        </label>
                         {#if settingsSaveError}
                             <p class="text-xs text-destructive">
                                 {settingsSaveError}
@@ -1326,20 +1357,19 @@
                                             </label>
                                         {/each}
                                     </div>
-                                    {#if !showResults && !checkedRevealed[item.id]}
+                                    {#if !showResults && !checked[item.id]}
                                         <button
                                             class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={answers[item.id] ===
                                                 undefined}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <CheckCircle class="size-3" />
                                             Check
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if !showResults && checked[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1353,6 +1383,41 @@
                                             correctAnswer={correctAnswerLabel(
                                                 item,
                                             )}
+                                            revealAnswer={isGraded ||
+                                                revealed[item.id]}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation && (isGraded || revealed[item.id])}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                        {#if !isGraded && !revealed[item.id] && !isCorrect(item, answers[item.id])}
+                                            <button
+                                                class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors"
+                                                onclick={() =>
+                                                    (revealed[item.id] = true)}
+                                            >
+                                                <Eye class="size-3" />
+                                                Reveal answer
+                                            </button>
+                                        {/if}
+                                    {/if}
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                            revealAnswer={true}
                                         >
                                             {#snippet explanation()}
                                                 {#if item.data?.explanation}
@@ -1428,20 +1493,19 @@
                                             </label>
                                         {/each}
                                     </div>
-                                    {#if !showResults && !checkedRevealed[item.id]}
+                                    {#if !showResults && !checked[item.id]}
                                         <button
                                             class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={(answers[item.id] ?? [])
                                                 .length === 0}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <CheckCircle class="size-3" />
                                             Check
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if !showResults && checked[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1455,6 +1519,35 @@
                                             correctAnswer={correctAnswerLabel(
                                                 item,
                                             )}
+                                            revealAnswer={isGraded ||
+                                                revealed[item.id]}
+                                        />
+                                        {#if !isGraded && !revealed[item.id] && !isCorrect(item, answers[item.id])}
+                                            <button
+                                                class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors"
+                                                onclick={() =>
+                                                    (revealed[item.id] = true)}
+                                            >
+                                                <Eye class="size-3" />
+                                                Reveal answer
+                                            </button>
+                                        {/if}
+                                    {/if}
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                            revealAnswer={true}
                                         />
                                     {/if}
                                 </div>
@@ -1482,20 +1575,19 @@
                                             </button>
                                         {/each}
                                     </div>
-                                    {#if !showResults && !checkedRevealed[item.id]}
+                                    {#if !showResults && !checked[item.id]}
                                         <button
                                             class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={answers[item.id] ===
                                                 undefined}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <CheckCircle class="size-3" />
                                             Check
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if !showResults && checked[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1509,6 +1601,35 @@
                                             correctAnswer={correctAnswerLabel(
                                                 item,
                                             )}
+                                            revealAnswer={isGraded ||
+                                                revealed[item.id]}
+                                        />
+                                        {#if !isGraded && !revealed[item.id] && !isCorrect(item, answers[item.id])}
+                                            <button
+                                                class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors"
+                                                onclick={() =>
+                                                    (revealed[item.id] = true)}
+                                            >
+                                                <Eye class="size-3" />
+                                                Reveal answer
+                                            </button>
+                                        {/if}
+                                    {/if}
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                            revealAnswer={true}
                                         />
                                     {/if}
                                 </div>
@@ -1547,21 +1668,20 @@
                                             />
                                         {/each}
                                     </div>
-                                    {#if !showResults && !checkedRevealed[item.id]}
+                                    {#if !showResults && !checked[item.id]}
                                         <button
                                             class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={!answers[item.id] ||
                                                 (answers[item.id] ?? [])
                                                     .length === 0}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <CheckCircle class="size-3" />
                                             Check
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if !showResults && checked[item.id]}
                                         <AnswerFeedback
                                             status={!answers[item.id]
                                                 ? "unanswered"
@@ -1574,6 +1694,40 @@
                                             correctAnswer={correctAnswerLabel(
                                                 item,
                                             )}
+                                            revealAnswer={isGraded ||
+                                                revealed[item.id]}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation && (isGraded || revealed[item.id])}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                        {#if !isGraded && !revealed[item.id] && !isCorrect(item, answers[item.id])}
+                                            <button
+                                                class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors"
+                                                onclick={() =>
+                                                    (revealed[item.id] = true)}
+                                            >
+                                                <Eye class="size-3" />
+                                                Reveal answer
+                                            </button>
+                                        {/if}
+                                    {/if}
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={!answers[item.id]
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                            revealAnswer={true}
                                         >
                                             {#snippet explanation()}
                                                 {#if item.data?.explanation}
@@ -1605,19 +1759,18 @@
                                         placeholder="Type your answer..."
                                         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                                     ></textarea>
-                                    {#if !showResults && !checkedRevealed[item.id] && item.data?.sample_answer}
+                                    {#if !showResults && !checked[item.id] && item.data?.sample_answer}
                                         <button
-                                            class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                            class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={!answers[item.id]}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <Eye class="size-3" />
                                             Reveal sample
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if showResults || checked[item.id]}
                                         <p
                                             class="mt-2 text-xs text-muted-foreground"
                                         >
@@ -1640,23 +1793,23 @@
                                         data={item.data}
                                         value={answers[item.id]}
                                         reveal={showResults ||
-                                            checkedRevealed[item.id]}
+                                            (isGraded && checked[item.id]) ||
+                                            revealed[item.id]}
                                         onChange={(v) => setAnswer(item.id, v)}
                                     />
-                                    {#if !showResults && !checkedRevealed[item.id]}
+                                    {#if !showResults && !checked[item.id]}
                                         <button
                                             class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={answers[item.id] ===
                                                 undefined}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <CheckCircle class="size-3" />
                                             Check
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if !showResults && checked[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1670,6 +1823,41 @@
                                             correctAnswer={correctAnswerLabel(
                                                 item,
                                             )}
+                                            revealAnswer={isGraded ||
+                                                revealed[item.id]}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation && (isGraded || revealed[item.id])}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                        {#if !isGraded && !revealed[item.id] && !isCorrect(item, answers[item.id])}
+                                            <button
+                                                class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors"
+                                                onclick={() =>
+                                                    (revealed[item.id] = true)}
+                                            >
+                                                <Eye class="size-3" />
+                                                Reveal answer
+                                            </button>
+                                        {/if}
+                                    {/if}
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                            revealAnswer={true}
                                         >
                                             {#snippet explanation()}
                                                 {#if item.data?.explanation}
@@ -1693,23 +1881,23 @@
                                         data={item.data}
                                         value={answers[item.id]}
                                         reveal={showResults ||
-                                            checkedRevealed[item.id]}
+                                            (isGraded && checked[item.id]) ||
+                                            revealed[item.id]}
                                         onChange={(v) => setAnswer(item.id, v)}
                                     />
-                                    {#if !showResults && !checkedRevealed[item.id]}
+                                    {#if !showResults && !checked[item.id]}
                                         <button
                                             class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={answers[item.id] ===
                                                 undefined}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <CheckCircle class="size-3" />
                                             Check
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if !showResults && checked[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1723,6 +1911,41 @@
                                             correctAnswer={correctAnswerLabel(
                                                 item,
                                             )}
+                                            revealAnswer={isGraded ||
+                                                revealed[item.id]}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation && (isGraded || revealed[item.id])}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                        {#if !isGraded && !revealed[item.id] && !isCorrect(item, answers[item.id])}
+                                            <button
+                                                class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors"
+                                                onclick={() =>
+                                                    (revealed[item.id] = true)}
+                                            >
+                                                <Eye class="size-3" />
+                                                Reveal answer
+                                            </button>
+                                        {/if}
+                                    {/if}
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                            revealAnswer={true}
                                         >
                                             {#snippet explanation()}
                                                 {#if item.data?.explanation}
@@ -1746,23 +1969,23 @@
                                         data={item.data}
                                         value={answers[item.id]}
                                         reveal={showResults ||
-                                            checkedRevealed[item.id]}
+                                            (isGraded && checked[item.id]) ||
+                                            revealed[item.id]}
                                         onChange={(v) => setAnswer(item.id, v)}
                                     />
-                                    {#if !showResults && !checkedRevealed[item.id]}
+                                    {#if !showResults && !checked[item.id]}
                                         <button
                                             class="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={answers[item.id] ===
                                                 undefined}
                                             onclick={() =>
-                                                (checkedRevealed[item.id] =
-                                                    true)}
+                                                (checked[item.id] = true)}
                                         >
                                             <CheckCircle class="size-3" />
                                             Check
                                         </button>
                                     {/if}
-                                    {#if showResults || checkedRevealed[item.id]}
+                                    {#if !showResults && checked[item.id]}
                                         <AnswerFeedback
                                             status={answers[item.id] ===
                                             undefined
@@ -1776,6 +1999,41 @@
                                             correctAnswer={correctAnswerLabel(
                                                 item,
                                             )}
+                                            revealAnswer={isGraded ||
+                                                revealed[item.id]}
+                                        >
+                                            {#snippet explanation()}
+                                                {#if item.data?.explanation && (isGraded || revealed[item.id])}
+                                                    {item.data.explanation}
+                                                {/if}
+                                            {/snippet}
+                                        </AnswerFeedback>
+                                        {#if !isGraded && !revealed[item.id] && !isCorrect(item, answers[item.id])}
+                                            <button
+                                                class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-info hover:text-info transition-colors"
+                                                onclick={() =>
+                                                    (revealed[item.id] = true)}
+                                            >
+                                                <Eye class="size-3" />
+                                                Reveal answer
+                                            </button>
+                                        {/if}
+                                    {/if}
+                                    {#if showResults}
+                                        <AnswerFeedback
+                                            status={answers[item.id] ===
+                                            undefined
+                                                ? "unanswered"
+                                                : isCorrect(
+                                                        item,
+                                                        answers[item.id],
+                                                    )
+                                                  ? "correct"
+                                                  : "incorrect"}
+                                            correctAnswer={correctAnswerLabel(
+                                                item,
+                                            )}
+                                            revealAnswer={true}
                                         >
                                             {#snippet explanation()}
                                                 {#if item.data?.explanation}

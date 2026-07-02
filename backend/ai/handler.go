@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ---- System prompts ----
@@ -314,6 +315,7 @@ func ensureIRTParams(data json.RawMessage, itemType string) []byte {
 }
 
 type Handler struct {
+	Pool      *pgxpool.Pool
 	Queries   *database.Queries
 	LLM       *LLMClient
 	EmbClient *embeddings.Client
@@ -321,12 +323,13 @@ type Handler struct {
 	Worker    *Worker
 }
 
-func NewHandler(queries *database.Queries) *Handler {
+func NewHandler(pool *pgxpool.Pool, queries *database.Queries) *Handler {
 	llm := NewLLMClient()
 	emb := embeddings.NewClient()
 	store := newJobStore(queries)
 	worker := newWorker(store, queries, llm, emb)
 	return &Handler{
+		Pool:      pool,
 		Queries:   queries,
 		LLM:       llm,
 		EmbClient: emb,
@@ -824,35 +827,49 @@ Apply these edits and return the FULL modified course JSON (not just the changes
 		return
 	}
 
-	// Update course title/description
-	_, err = h.Queries.UpdateCourseMeta(c.Request.Context(), database.UpdateCourseMetaParams{
+	// Begin transaction for the delete+recreate operation
+	tx, err := h.Pool.Begin(c.Request.Context())
+	if err != nil {
+		log.Printf("[ai] begin tx: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	txQueries := h.Queries.WithTx(tx)
+
+	// Update course title/description within tx
+	_, err = txQueries.UpdateCourseMeta(c.Request.Context(), database.UpdateCourseMetaParams{
 		ID:          id,
 		Title:       gen.Title,
 		Description: gen.Description,
 	})
 	if err != nil {
 		log.Printf("[ai] update course: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update course"})
+		return
 	}
 
-	// Replace modules and items
-	h.Queries.DeleteCourseItems(c.Request.Context(), id)
-	h.Queries.DeleteCourseModules(c.Request.Context(), id)
+	// Replace modules and items within tx
+	txQueries.DeleteCourseItems(c.Request.Context(), id)
+	txQueries.DeleteCourseModules(c.Request.Context(), id)
 
 	modulesResult := make([]gin.H, 0)
 	for mi, mod := range gen.Modules {
-		module, err := h.Queries.CreateModule(c.Request.Context(), database.CreateModuleParams{
+		module, err := txQueries.CreateModule(c.Request.Context(), database.CreateModuleParams{
 			CourseID:    id,
 			Title:       mod.Title,
 			Description: mod.Description,
 			SortOrder:   int32(mi),
 		})
 		if err != nil {
-			continue
+			log.Printf("[ai] create module: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create module"})
+			return
 		}
 		itemsResult := make([]gin.H, 0)
 		for ii, item := range mod.Items {
 			itemData := ensureIRTParams(item.Data, item.Type)
-			ci, err := h.Queries.CreateCourseItem(c.Request.Context(), database.CreateCourseItemParams{
+			ci, err := txQueries.CreateCourseItem(c.Request.Context(), database.CreateCourseItemParams{
 				CourseID:  id,
 				ModuleID:  pgtype.Int8{Int64: module.ID, Valid: true},
 				ItemType:  item.Type,
@@ -860,7 +877,9 @@ Apply these edits and return the FULL modified course JSON (not just the changes
 				Data:      itemData,
 			})
 			if err != nil {
-				continue
+				log.Printf("[ai] create item: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create item"})
+				return
 			}
 			itemsResult = append(itemsResult, gin.H{
 				"id":         ci.ID,
@@ -876,6 +895,13 @@ Apply these edits and return the FULL modified course JSON (not just the changes
 			"sort_order":  module.SortOrder,
 			"items":       itemsResult,
 		})
+	}
+
+	// Commit transaction
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		log.Printf("[ai] commit tx: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit changes"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{

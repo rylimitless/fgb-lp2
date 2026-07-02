@@ -8,14 +8,17 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
+	Pool    *pgxpool.Pool
 	Queries *database.Queries
 }
 
-func NewHandler(queries *database.Queries) *Handler {
+func NewHandler(pool *pgxpool.Pool, queries *database.Queries) *Handler {
 	return &Handler{
+		Pool:    pool,
 		Queries: queries,
 	}
 }
@@ -182,21 +185,37 @@ func (h *Handler) UpdateUserRoles(c *gin.Context) {
 		return
 	}
 
-	// Delete all existing roles and re-insert
-	h.Queries.DeleteUserRoles(c.Request.Context(), id)
+	// Begin transaction for atomic role update
+	tx, err := h.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	txQueries := h.Queries.WithTx(tx)
 
+	// Delete all existing roles
+	txQueries.DeleteUserRoles(c.Request.Context(), id)
+
+	// Re-insert roles
 	for _, r := range body.Roles {
-		h.Queries.InsertUserRole(c.Request.Context(), database.InsertUserRoleParams{
+		txQueries.InsertUserRole(c.Request.Context(), database.InsertUserRoleParams{
 			UserID: id,
 			Role:   r,
 		})
 	}
 
 	// Update the primary role column to the first role
-	h.Queries.UpdateUserPrimaryRole(c.Request.Context(), database.UpdateUserPrimaryRoleParams{
+	txQueries.UpdateUserPrimaryRole(c.Request.Context(), database.UpdateUserPrimaryRoleParams{
 		ID:   id,
 		Role: body.Roles[0],
 	})
+
+	// Commit transaction
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit role changes"})
+		return
+	}
 
 	audit.Log(h.Queries, c, "user_roles_updated", map[string]any{
 		"target_user_id": id,
