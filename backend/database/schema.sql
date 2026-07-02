@@ -359,3 +359,59 @@ create table if not exists learning_path_enrollments (
 );
 create index if not exists idx_lpe_user on learning_path_enrollments(user_id);
 create index if not exists idx_lpe_path on learning_path_enrollments(learning_path_id);
+
+-- Certificates: issued when a user completes a course
+create table if not exists certificates (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  course_id bigint not null references courses(id) on delete cascade,
+  issued_at timestamptz not null default now(),
+  certificate_code text not null unique,  -- UUID-based unique code for verification
+  score_pct numeric(5,2) not null default 0,
+  tier text not null default 'bronze' check (tier in ('bronze', 'silver', 'gold')),
+  unique(user_id, course_id)
+);
+create index if not exists idx_certificates_user on certificates(user_id);
+create index if not exists idx_certificates_course on certificates(course_id);
+create index if not exists idx_certificates_code on certificates(certificate_code);
+
+-- Badges: milestone achievements that can be earned (not scoped to a single course)
+create table if not exists badge_definitions (
+  id bigserial primary key,
+  code text not null unique,           -- e.g. 'first_course', 'streak_7', 'speed_demon'
+  name text not null,
+  description text not null default '',
+  icon text not null default 'star',   -- lucide icon name
+  tier text not null default 'bronze' check (tier in ('bronze', 'silver', 'gold')),
+  category text not null default 'achievement' check (category in ('achievement', 'streak', 'milestone', 'speed', 'skill')),
+  criteria jsonb not null default '{}', -- e.g. {"type":"courses_completed","count":1}
+  created_at timestamptz not null default now()
+);
+
+-- Badge awards: which user earned which badge
+create table if not exists badge_awards (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  badge_id bigint not null references badge_definitions(id) on delete cascade,
+  earned_at timestamptz not null default now(),
+  metadata jsonb not null default '{}', -- e.g. {"course_id": 5, "streak_count": 7}
+  unique(user_id, badge_id)
+);
+create index if not exists idx_badge_awards_user on badge_awards(user_id);
+create index if not exists idx_badge_awards_badge on badge_awards(badge_id);
+
+-- Seed badge definitions
+INSERT INTO badge_definitions (code, name, description, icon, tier, category, criteria) VALUES
+  ('first_course', 'First Steps', 'Complete your first course', 'footprints', 'bronze', 'milestone', '{"type":"courses_completed","count":1}'),
+  ('five_courses', 'Scholar', 'Complete 5 courses', 'graduation-cap', 'silver', 'milestone', '{"type":"courses_completed","count":5}'),
+  ('ten_courses', 'Master Learner', 'Complete 10 courses', 'award', 'gold', 'milestone', '{"type":"courses_completed","count":10}'),
+  ('streak_3', 'Consistent', 'Maintain a 3-day streak', 'flame', 'bronze', 'streak', '{"type":"streak","count":3}'),
+  ('streak_7', 'Dedicated', 'Maintain a 7-day streak', 'flame', 'silver', 'streak', '{"type":"streak","count":7}'),
+  ('streak_30', 'Unstoppable', 'Maintain a 30-day streak', 'flame', 'gold', 'streak', '{"type":"streak","count":30}'),
+  ('perfect_score', 'Perfect Score', 'Score 100% on any course', 'target', 'gold', 'achievement', '{"type":"perfect_score","count":1}'),
+  ('gold_course', 'Gold Standard', 'Score 90%+ on a course', 'star', 'gold', 'achievement', '{"type":"score_above","threshold":90}'),
+  ('speed_demon', 'Speed Demon', 'Complete a course in 1 day', 'zap', 'silver', 'speed', '{"type":"speed_days","max_days":1}'),
+  ('quick_learner', 'Quick Learner', 'Complete a course in 3 days', 'clock', 'bronze', 'speed', '{"type":"speed_days","max_days":3}'),
+  ('total_xp_1000', 'XP Apprentice', 'Earn 1,000 total XP', 'trending-up', 'bronze', 'achievement', '{"type":"total_xp","count":1000}'),
+  ('total_xp_5000', 'XP Expert', 'Earn 5,000 total XP', 'trending-up', 'silver', 'achievement', '{"type":"total_xp","count":5000}')
+ON CONFLICT (code) DO NOTHING;

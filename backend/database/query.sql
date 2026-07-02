@@ -582,3 +582,62 @@ returning *;
 
 -- name: CountPathCourses :one
 select count(*)::int from learning_path_courses where learning_path_id = $1;
+
+-- name: IssueCertificate :one
+insert into certificates (user_id, course_id, certificate_code, score_pct, tier)
+values ($1, $2, $3, $4, $5)
+on conflict (user_id, course_id) do update
+  set score_pct = $4, tier = $5, issued_at = now()
+returning *;
+
+-- name: GetUserCertificates :many
+select c.*, co.title as course_title, co.description as course_description
+from certificates c
+join courses co on co.id = c.course_id
+where c.user_id = $1
+order by c.issued_at desc;
+
+-- name: GetCertificateByCode :one
+select c.*, co.title as course_title, u.name as user_name
+from certificates c
+join courses co on co.id = c.course_id
+join users u on u.id = c.user_id
+where c.certificate_code = $1;
+
+-- name: GetCourseCertificate :one
+select * from certificates where user_id = $1 and course_id = $2;
+
+-- name: CountUserCertificates :one
+select count(*) from certificates where user_id = $1;
+
+-- name: GetAllBadgeDefinitions :many
+select * from badge_definitions order by id;
+
+-- name: GetBadgeDefinitionByCode :one
+select * from badge_definitions where code = $1;
+
+-- name: AwardBadge :one
+insert into badge_awards (user_id, badge_id, metadata)
+values ($1, $2, $3)
+on conflict (user_id, badge_id) do nothing
+returning *;
+
+-- name: GetUserBadges :many
+select ba.*, bd.code as badge_code, bd.name as badge_name, bd.description as badge_description,
+       bd.icon as badge_icon, bd.tier as badge_tier, bd.category as badge_category
+from badge_awards ba
+join badge_definitions bd on bd.id = ba.badge_id
+where ba.user_id = $1
+order by ba.earned_at desc;
+
+-- name: HasUserBadge :one
+select count(*) > 0 as has_badge
+from badge_awards ba
+join badge_definitions bd on bd.id = ba.badge_id
+where ba.user_id = $1 and bd.code = $2;
+
+-- name: CountUserBadges :one
+select count(*) from badge_awards where user_id = $1;
+
+-- name: CountCompletedCourses :one
+select count(*) from enrollments where user_id = $1 and status = 'completed';

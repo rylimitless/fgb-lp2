@@ -27,6 +27,7 @@
         X,
         Building2,
         Layers,
+        Award,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
@@ -133,6 +134,12 @@
             icon: ClipboardList,
             href: "/audit-log",
             roles: ["admin", "auditor"],
+        },
+        {
+            label: "Certificates",
+            icon: Award,
+            href: "/certificates",
+            roles: [] as string[],
         },
     ];
     let nav = $derived(

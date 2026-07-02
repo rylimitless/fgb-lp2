@@ -11,6 +11,8 @@ export const load: PageServerLoad = async (event) => {
     scoreRes,
     dashRes,
     enrollmentsRes,
+    certsRes,
+    badgesCountRes,
   ] = await Promise.all([
     apiFetch(event, "/api/documents"),
     apiFetch(event, "/api/courses"),
@@ -20,6 +22,8 @@ export const load: PageServerLoad = async (event) => {
     apiFetch(event, "/api/gamification/score"),
     apiFetch(event, "/api/dashboard"),
     apiFetch(event, "/api/enrollments"),
+    apiFetch(event, "/api/certificates"),
+    apiFetch(event, "/api/badges/earned-count"),
   ]);
 
   const docs = docsRes.ok ? await docsRes.json() : [];
@@ -93,5 +97,9 @@ export const load: PageServerLoad = async (event) => {
     },
     dashboard,
     enrollments: enrollmentsRes.ok ? await enrollmentsRes.json() : [],
+    certificates: certsRes.ok ? await certsRes.json() : [],
+    badgesEarnedCount: badgesCountRes.ok
+      ? (((await badgesCountRes.json()) as any).count ?? 0)
+      : 0,
   };
 };

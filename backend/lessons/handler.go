@@ -1,9 +1,13 @@
 package lessons
 
 import (
+	"context"
 	"encoding/json"
+	"fgb-lp/badges"
+	"fgb-lp/certificates"
 	database "fgb-lp/database/queries"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,11 +18,25 @@ import (
 )
 
 type Handler struct {
-	Queries *database.Queries
+	Queries      *database.Queries
+	Certificates *certificates.Handler
+	Badges       *badges.Handler
 }
 
 func NewHandler(queries *database.Queries) *Handler {
 	return &Handler{Queries: queries}
+}
+
+// WithCertificates sets the certificate issuer for auto-issuing on course completion.
+func (h *Handler) WithCertificates(cert *certificates.Handler) *Handler {
+	h.Certificates = cert
+	return h
+}
+
+// WithBadges sets the badge evaluator for auto-evaluating on course completion.
+func (h *Handler) WithBadges(b *badges.Handler) *Handler {
+	h.Badges = b
+	return h
 }
 
 func (h *Handler) ListPublished(c *gin.Context) {
@@ -312,8 +330,45 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 	enrollment, _ := h.Queries.GetCourseEnrollment(c.Request.Context(),
 		database.GetCourseEnrollmentParams{UserID: userID, CourseID: body.CourseID})
 	if enrollment.ID != 0 {
-		_, _ = h.Queries.UpdateEnrollmentProgress(c.Request.Context(),
-			database.UpdateEnrollmentProgressParams{ID: enrollment.ID, ProgressPct: pct})
+		enrPct := pct
+		updatedEnr, _ := h.Queries.UpdateEnrollmentProgress(c.Request.Context(),
+			database.UpdateEnrollmentProgressParams{ID: enrollment.ID, ProgressPct: enrPct})
+
+		// Mark enrollment as completed if course is completed
+		if body.Completed {
+			h.Queries.UpdateEnrollmentStatus(c.Request.Context(),
+				database.UpdateEnrollmentStatusParams{ID: enrollment.ID, Status: "completed"})
+
+			// Auto-issue certificate on course completion (fire-and-forget)
+			if h.Certificates != nil {
+				go func() {
+					scoreVal := 0.0
+					if body.ScorePct != "" {
+						fmt.Sscanf(body.ScorePct, "%f", &scoreVal)
+					}
+					_, created, err := h.Certificates.IssueCertificate(context.Background(), userID, body.CourseID, scoreVal)
+					if err != nil {
+						log.Printf("[lessons] certificate issuance failed for user=%d course=%d: %v", userID, body.CourseID, err)
+					} else if created {
+						log.Printf("[lessons] certificate issued for user=%d course=%d score=%.1f", userID, body.CourseID, scoreVal)
+					}
+				}()
+			}
+
+			// Auto-evaluate badges on course completion (fire-and-forget)
+			if h.Badges != nil {
+				go func() {
+					newBadges, err := h.Badges.EvaluateBadges(context.Background(), userID)
+					if err != nil {
+						log.Printf("[lessons] badge evaluation failed for user=%d: %v", userID, err)
+					} else {
+						log.Printf("[lessons] badges evaluated for user=%d, new=%d", userID, len(newBadges))
+					}
+				}()
+			}
+		}
+
+		_ = updatedEnr
 	}
 
 	c.JSON(http.StatusOK, progress)
