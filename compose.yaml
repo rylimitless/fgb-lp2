@@ -43,7 +43,6 @@ services:
       dockerfile: Dockerfile
     container_name: fgb-backend1
     environment:
-      environment:
       RESEND_FROM: noreply@fgbacademy.rybuildstuff.dev
       DATABASE_URL: postgres://postgres:password@db:5432/example_db
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}

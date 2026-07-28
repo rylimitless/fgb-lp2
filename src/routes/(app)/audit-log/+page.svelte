@@ -4,10 +4,13 @@
         Search,
         ChevronLeft,
         ChevronRight,
+        ChevronDown,
+        Filter,
     } from "@lucide/svelte";
     import { goto } from "$app/navigation";
-    import { PageHeader, PremiumTable } from "$lib/components/brand";
+    import { PageHeader, PremiumTable, DotPattern } from "$lib/components/brand";
     import * as Button from "$lib/components/ui/button";
+    import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 
     let { data } = $props();
     let auditLog = $derived(data.auditLog ?? []);
@@ -36,6 +39,10 @@
 
     let selectedAction = $state(filters.action);
     let searchQuery = $state("");
+    let selectedActionLabel = $derived(
+        ACTION_OPTIONS.find((o) => o.value === selectedAction)?.label ??
+            "All actions",
+    );
 
     function gotoPage(offset: number) {
         const params = new URLSearchParams();
@@ -45,7 +52,8 @@
         goto(`/audit-log?${params.toString()}`);
     }
 
-    function applyFilter() {
+    function applyFilter(value?: string) {
+        if (value !== undefined) selectedAction = value;
         const params = new URLSearchParams();
         params.set("limit", "50");
         params.set("offset", "0");
@@ -115,7 +123,10 @@
     </PageHeader>
 
     <!-- Filters -->
-    <div class="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-3">
+    <div
+        class="relative flex flex-wrap items-center gap-3 rounded-2xl border border-border-strong bg-card p-3 overflow-hidden"
+    >
+        <DotPattern gap={22} radius={1} class="opacity-60" />
         <div class="relative flex-1 min-w-[200px] max-w-xs">
             <Search
                 class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground"
@@ -123,19 +134,40 @@
             <input
                 type="text"
                 placeholder="Search…"
+                aria-label="Search audit log"
                 bind:value={searchQuery}
-                class="w-full pl-8 pr-3 py-1.5 text-sm border border-border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                class="w-full pl-8 pr-3 py-1.5 text-sm border border-border-strong rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
         </div>
-        <select
-            bind:value={selectedAction}
-            onchange={applyFilter}
-            class="text-sm border border-border rounded-lg bg-background text-foreground px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary"
-        >
-            {#each ACTION_OPTIONS as opt}
-                <option value={opt.value}>{opt.label}</option>
-            {/each}
-        </select>
+        <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+                {#snippet child({ props })}
+                    <button
+                        {...props}
+                        aria-label="Filter by action"
+                        class="inline-flex items-center gap-2 text-sm border border-border-strong rounded-lg bg-background text-foreground px-3 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                    >
+                        <Filter class="size-3.5 text-muted-foreground" />
+                        <span>{selectedActionLabel}</span>
+                        <ChevronDown class="size-3.5 text-muted-foreground" />
+                    </button>
+                {/snippet}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content class="w-56 max-h-[60vh] overflow-y-auto" align="start">
+                <DropdownMenu.Label>Filter by action</DropdownMenu.Label>
+                <DropdownMenu.Separator />
+                <DropdownMenu.RadioGroup
+                    value={selectedAction}
+                    onValueChange={(v) => applyFilter(v)}
+                >
+                    {#each ACTION_OPTIONS as opt (opt.value)}
+                        <DropdownMenu.RadioItem value={opt.value}>
+                            {opt.label}
+                        </DropdownMenu.RadioItem>
+                    {/each}
+                </DropdownMenu.RadioGroup>
+            </DropdownMenu.Content>
+        </DropdownMenu.Root>
     </div>
 
     <!-- Table -->

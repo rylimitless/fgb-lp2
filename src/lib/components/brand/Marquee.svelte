@@ -23,6 +23,9 @@
 	Lightweight marquee inspired by Magic UI's `marquee`, native to our stack.
 	Renders the children twice in a row, then loops the whole strip horizontally.
 -->
+<!-- aria-live="off" so screen readers don't announce the endlessly scrolling
+	 content — the marquee is decorative discovery ribbon, not live status.
+	 See ACCESSIBILITY.md §4.2. -->
 <div
 	class={cn(
 		"mq-root relative w-full overflow-hidden",
@@ -31,6 +34,8 @@
 	)}
 	style:--mq-speed="{speed}s"
 	data-pause-hover={pauseOnHover}
+	aria-live="off"
+	role="marquee"
 >
 	<div class="mq-track">
 		<div class="mq-group">{@render children()}</div>

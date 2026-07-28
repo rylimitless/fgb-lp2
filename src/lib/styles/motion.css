@@ -152,6 +152,13 @@
 	.motion-scroll-cue { animation: none; }
 }
 
+/* User-opt-in reduced motion (Settings toggle). Mirrors the OS media query so
+   users on shared machines can suppress motion without changing system prefs.
+   See `src/lib/preferences.svelte.ts` for the source of the attribute. */
+:root[data-reduced-motion="true"] .text-aurora { animation: none; }
+:root[data-reduced-motion="true"] .motion-float { animation: none; }
+:root[data-reduced-motion="true"] .motion-scroll-cue { animation: none; }
+
 /* Stagger helpers — combine with motion-rise-in */
 .motion-stagger-1 { animation-delay: 40ms; }
 .motion-stagger-2 { animation-delay: 80ms; }
@@ -196,6 +203,17 @@
 		transform: none;
 	}
 }
+
+:root[data-reduced-motion="true"] .motion-rise-in,
+:root[data-reduced-motion="true"] .motion-fade-in,
+:root[data-reduced-motion="true"] .motion-bump,
+:root[data-reduced-motion="true"] .motion-glow,
+:root[data-reduced-motion="true"] .motion-spin-slow,
+:root[data-reduced-motion="true"] .motion-shimmer {
+	animation: none !important;
+}
+:root[data-reduced-motion="true"] .lift:hover { transform: none; }
+:root[data-reduced-motion="true"] .press:active { transform: none; }
 
 /* ---- Print helpers ---- */
 

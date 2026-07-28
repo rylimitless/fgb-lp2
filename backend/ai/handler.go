@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 )
 
 // ---- System prompts ----
@@ -36,6 +37,78 @@ CRITICAL RULES:
 4. Base ALL module topics strictly on the provided source material. Every topic must be directly traceable to the source. If there isn't enough material to justify a distinct module, don't create one.
 5. Make titles and descriptions specific, academic, and substantive — not generic.
 6. The course overview should reflect the ACTUAL scope of the source — if the source is narrow, the overview should be 1-2 sentences, not inflated.
+
+OUTPUT FORMAT:
+# Course Title: [Insert Compelling Title]
+[Insert a course overview explaining what the learner will master — length proportional to source scope.]
+
+## Module 1: [Module Title]
+**Description:** [2-3 sentences describing what this module covers and its specific learning objectives.]
+
+## Module 2: [Module Title]
+**Description:** [2-3 sentences describing what this module covers and its specific learning objectives.]`
+
+// Discovery prompt — the Stage-0 flow. Before the user commits to a course
+// description, this prompt looks at what's actually in the source material and
+// proposes distinct angles they could take. Honest about scope: if the docs
+// are thin, it says so rather than inflating the description.
+const discoveryPrompt = `You are an expert instructional designer helping a course author explore what's possible with their source material.
+
+You will receive:
+- The author's topic or area of interest (may be vague or empty)
+- Retrieved source material (may be sparse if no relevant docs exist)
+
+Your job:
+1. Summarize what's ACTUALLY in the source material — its scope, depth, and themes. Be honest. If the material is thin or narrow, say so plainly. Do not inflate.
+2. Propose 2-4 DISTINCT course angles the author could take. Each angle must be a genuinely different framing — not minor variations of the same idea. If the source is thin, fewer angles is fine.
+3. For each angle, explain why it works given the source material.
+
+CRITICAL RULES:
+- Base angles strictly on what's in the source material. Do not invent topics that aren't supported.
+- If there's little or no source material, be honest: say so in the summary and propose angles based on the author's topic using general knowledge, clearly noting which angles need additional source material.
+- Titles should be specific and compelling, not generic.
+- Descriptions should be 2-3 sentences describing what the course would cover.
+
+Output ONLY valid JSON — no markdown, no surrounding text:
+
+{
+  "summary": "2-4 sentence honest assessment of what the source material covers and its depth.",
+  "angles": [
+    {
+      "title": "Compelling Course Title",
+      "description": "What this course would cover and the learner would master.",
+      "rationale": "Why this angle fits the source material."
+    }
+  ]
+}`
+
+// coursePlanRevisionPrompt is used when the user asks the AI to revise an
+// existing outline ("fewer modules", "more practical", "add a module on X").
+// It produces the same Markdown format as coursePlanSystemPrompt but is
+// instructed to keep what already works and only apply the requested changes
+// — a full re-outline would discard the user's curation so far.
+const coursePlanRevisionPrompt = `You are an expert instructional designer revising an existing course outline based on author feedback.
+
+You will receive:
+- The CURRENT outline (title, description, list of modules)
+- FEEDBACK from the course author
+- Source material statistics and content
+
+Apply the feedback faithfully. Keep modules that already work; only change what the feedback asks for. Do not throw out good structure just to seem responsive — if the feedback is "add a module on X", add that module and leave the rest alone.
+
+CRITICAL RULES:
+1. Structure your output EXACTLY like the Markdown example below. Do NOT use JSON, and do not write any introductory or concluding conversational filler.
+2. Module count must still be proportional to the source material (see scale below). If the feedback asks for fewer modules, merge related ones rather than deleting content outright. If it asks for more, split overstuffed modules — don't invent material that isn't in the source.
+   - Under 1,000 chars of source → 1 module
+   - 1,000–8,000 chars → 2-3 modules
+   - 8,000–30,000 chars → 4-6 modules
+   - 30,000–80,000 chars → 7-12 modules
+   - 80,000–200,000 chars → 13-20 modules
+   - Over 200,000 chars → up to 25 modules
+3. Order modules logically — foundational concepts first, then advanced applications.
+4. Base ALL module topics strictly on the provided source material. Every topic must be directly traceable to the source.
+5. Make titles and descriptions specific, academic, and substantive — not generic.
+6. The course overview should reflect the ACTUAL scope of the source.
 
 OUTPUT FORMAT:
 # Course Title: [Insert Compelling Title]
@@ -78,6 +151,12 @@ CRITICAL RULES:
 // Step 3: Per-Section Question Generator — produces 1-3 assessment items
 // that test the content JUST covered in one section. Used inside the per-section
 // loop so questions are interleaved with content, not batched at the end.
+//
+// The prompt explicitly asks the model to skip question types it cannot
+// produce faithfully for this section, and to record the reason in a
+// `limitations` array. The worker collects these across sections and stores
+// them on the module row so the user can see why e.g. "matching" was skipped
+// for a conceptual section that has no natural pairs.
 const perSectionQuestionPrompt = `You are an expert assessment designer. Given ONE section of educational content, generate 1-3 high-quality assessment items that test understanding of THIS section specifically.
 
 CRITICAL RULES:
@@ -97,18 +176,31 @@ CRITICAL RULES:
     - irt_beta: item difficulty from -3 (trivially easy) to +3 (extremely hard). Estimate based on Bloom's Taxonomy level of the question — simple recall = -2 to -1, comprehension = -1 to 0, application = 0 to +1, analysis/synthesis = +1 to +2, evaluation = +2 to +3.
     - irt_alpha: item discrimination from 0.5 (poor discriminator — everyone gets it right or wrong) to 2.5 (excellent discriminator — sharply separates strong from weak learners). Most well-written questions are around 1.0-1.5.
 
-Output ONLY a valid JSON array — no markdown, no surrounding text:
+BE HONEST ABOUT QUESTION TYPES THAT DON'T FIT:
+If a requested question type cannot be produced faithfully for THIS section, DO NOT force it. Forcing a bad question is worse than skipping it. Examples:
+  - "matching" requires at least 4 natural pairs in the content — skip if the section is a single concept or definition.
+  - "drag_sort" / "sequence" requires a clear ordered process — skip if the content is conceptual with no inherent ordering.
+  - "hotspot" REQUIRES a real image with spatial regions to click. Since you are generating TEXT content with no actual images, you CANNOT produce a valid hotspot question. ALWAYS skip "hotspot" and add it to the limitations array with reason "hotspot requires a real image; text-only content has no clickable regions".
+  - "fb" works best for factual recall (names, terms, numbers) — skip if the section is purely conceptual prose.
+For each requested type you skip, add an entry to the "limitations" array explaining why.
 
-[
-  {
-    "type": "mc",
-    "data": { "question": "...", "options": ["...","...","...","..."], "correct": 0, "explanation": "...", "irt_beta": 0.5, "irt_alpha": 1.2 }
-  },
-  {
-    "type": "tf",
-    "data": { "statement": "...", "answer": true, "explanation": "...", "irt_beta": -0.3, "irt_alpha": 1.0 }
-  }
-]`
+Output ONLY valid JSON — no markdown, no surrounding text — in this shape:
+
+{
+  "items": [
+    {
+      "type": "mc",
+      "data": { "question": "...", "options": ["...","...","...","..."], "correct": 0, "explanation": "...", "irt_beta": 0.5, "irt_alpha": 1.2 }
+    },
+    {
+      "type": "tf",
+      "data": { "statement": "...", "answer": true, "explanation": "...", "irt_beta": -0.3, "irt_alpha": 1.0 }
+    }
+  ],
+  "limitations": [
+    { "type": "matching", "reason": "Section defines a single concept with no natural pairs to match." }
+  ]
+}`
 
 // Step 3 (legacy): Question Generator — produces a batch of 8 mixed-format items
 // from a content summary. The full content is NOT sent to the LLM — only a summary
@@ -371,12 +463,45 @@ type plan struct {
 
 // ---- Request types ----
 
+// JobStage identifies which pipeline a GenerationJob should run.
+//   - "full"    legacy one-shot: outline + every module in one job.
+//   - "outline" outline only: produce the courses/modules rows and stop.
+//     Modules are created with status='pending' so the user can
+//     review/edit before any content is generated.
+//   - "module"  generate content + items for ONE existing module row.
+//     ModuleID must be set.
+type JobStage string
+
+const (
+	StageFull    JobStage = "full"
+	StageOutline JobStage = "outline"
+	StageModule  JobStage = "module"
+)
+
 type GenerateCourseRequest struct {
 	Title         string   `json:"title"`
 	Description   string   `json:"description"`
 	SourceDocIDs  []int64  `json:"source_doc_ids"`
 	QuestionTypes []string `json:"question_types,omitempty"`
 	CreatedBy     int64    `json:"created_by,omitempty"`
+
+	// Stage selects which pipeline runs. Defaults to "full" for backwards
+	// compatibility — existing callers that omit it get the old one-shot flow.
+	Stage JobStage `json:"stage,omitempty"`
+
+	// CourseID is set for StageOutline (when regenerating an outline into an
+	// existing course) and required for StageModule jobs.
+	CourseID int64 `json:"course_id,omitempty"`
+
+	// ModuleID is required for StageModule jobs — it identifies the existing
+	// modules row whose content/items should be (re)generated.
+	ModuleID int64 `json:"module_id,omitempty"`
+
+	// Feedback drives outline revision. When set together with CourseID, the
+	// outline job runs against an existing course: it loads the current
+	// outline, applies the user's feedback (e.g. "fewer modules", "more
+	// practical", "add a module on X"), and replaces the modules + items.
+	Feedback string `json:"feedback,omitempty"`
 }
 
 // ---- SSE writer ----
@@ -555,7 +680,7 @@ func (h *Handler) GetCourse(c *gin.Context) {
 		return
 	}
 
-	modules, _ := h.Queries.GetModulesByCourse(c.Request.Context(), id)
+	modules, _ := h.Queries.GetModulesByCourseWithStatus(c.Request.Context(), id)
 	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
 
 	// Parse sources from settings
@@ -586,12 +711,25 @@ func (h *Handler) GetCourse(c *gin.Context) {
 		if modItems == nil {
 			modItems = []gin.H{}
 		}
+		var qt any
+		if len(m.QuestionTypes) > 0 {
+			qt = m.QuestionTypes
+		} else {
+			qt = nil
+		}
+		limits := m.Limitations
+		if limits == nil {
+			limits = []map[string]any{}
+		}
 		modulesResult = append(modulesResult, gin.H{
-			"id":          m.ID,
-			"title":       m.Title,
-			"description": m.Description,
-			"sort_order":  m.SortOrder,
-			"items":       modItems,
+			"id":             m.ID,
+			"title":          m.Title,
+			"description":    m.Description,
+			"sort_order":     m.SortOrder,
+			"status":         m.Status,
+			"question_types": qt,
+			"limitations":    limits,
+			"items":          modItems,
 		})
 	}
 
@@ -731,9 +869,633 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	})
 }
 
+// ---- Staged course builder endpoints ----
+// These complement the legacy one-shot POST /courses/generate flow.
+// They allow a course to be built up one module at a time after the outline
+// is created.
+
+// UpdateCourseMetaHandler updates a course's title and/or description.
+// Unlike PUT /courses/:id/edit (which runs an AI edit), this is a plain
+// authoring write — what the user types is exactly what gets stored.
+func (h *Handler) UpdateCourseMetaHandler(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	course, err := h.Queries.GetCourseByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	var body struct {
+		Title       *string `json:"title,omitempty"`
+		Description *string `json:"description,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	title := course.Title
+	if body.Title != nil {
+		title = strings.TrimSpace(*body.Title)
+		if title == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "title cannot be empty"})
+			return
+		}
+	}
+	desc := course.Description
+	if body.Description != nil {
+		desc = strings.TrimSpace(*body.Description)
+	}
+
+	updated, err := h.Queries.UpdateCourseMeta(c.Request.Context(), database.UpdateCourseMetaParams{
+		ID:          id,
+		Title:       title,
+		Description: desc,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update course"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":          updated.ID,
+		"title":       updated.Title,
+		"description": updated.Description,
+		"status":      updated.Status,
+	})
+}
+
+// Discover is the Stage-0 flow: before the user commits to a course description,
+// this endpoint explores the source material and proposes distinct course
+// angles. Stateless — creates no course or job rows. Returns a summary of
+// what's in the docs plus 2-4 angle cards the user can pick from.
+//
+// Synchronous (single LLM call) rather than an SSE job: the response is small
+// and the operation is one embed + one retrieve + one chat, which matches the
+// pattern used by AiEditItem / EditCourse.
+func (h *Handler) Discover(c *gin.Context) {
+	var body struct {
+		Topic        string  `json:"topic"`
+		SourceDocIDs []int64 `json:"source_doc_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	topic := strings.TrimSpace(body.Topic)
+	// We need something to embed for retrieval. Fall back to a broad query
+	// if the user gave no topic — the retrieval will still find the most
+	// central chunks across approved docs.
+	embedInput := topic
+	if embedInput == "" {
+		// Use the titles of the selected docs (or just "overview") so the
+		// embedding has something to work with.
+		if len(body.SourceDocIDs) > 0 {
+			var titles []string
+			for _, did := range body.SourceDocIDs {
+				if d, err := h.Queries.GetDocumentByID(c.Request.Context(), did); err == nil {
+					titles = append(titles, d.Title)
+				}
+			}
+			embedInput = strings.Join(titles, " ")
+		}
+		if embedInput == "" {
+			embedInput = "overview introduction fundamentals concepts"
+		}
+	}
+
+	embeddings, err := h.EmbClient.Embed([]string{embedInput})
+	if err != nil {
+		log.Printf("[discover] embed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to analyze source material"})
+		return
+	}
+	promptVec := pgvector.NewVector(float64ToFloat32(embeddings[0]))
+
+	chunks, err := h.Queries.SearchDocumentChunks(c.Request.Context(), database.SearchDocumentChunksParams{
+		Embedding: promptVec,
+		Limit:     60, // focused: enough to assess scope without flooding the prompt
+	})
+	if err != nil {
+		log.Printf("[discover] search: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search documents"})
+		return
+	}
+
+	sourceContext := buildDiscoveryChunkContext(chunks)
+
+	discoverUserPrompt := fmt.Sprintf(`Author's topic or area of interest: %s
+
+Source material (%d chunks retrieved):
+%s
+
+Summarize what's here and propose course angles.`, quoteOrEmpty(topic), len(chunks), sourceContext)
+
+	resp, err := h.LLM.Chat(discoveryPrompt, discoverUserPrompt)
+	if err != nil {
+		log.Printf("[discover] llm: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Discovery failed"})
+		return
+	}
+
+	jsonStr := stripMarkdownFences(resp)
+	var result struct {
+		Summary string `json:"summary"`
+		Angles  []struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			Rationale   string `json:"rationale"`
+		} `json:"angles"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		log.Printf("[discover] parse: %v — raw: %s", err, resp)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse discovery response"})
+		return
+	}
+
+	// Include a compact list of the docs the chunks came from so the UI can
+	// show the user which sources were actually consulted.
+	sourceDocs := buildDiscoverySourceDocs(chunks)
+
+	c.JSON(http.StatusOK, gin.H{
+		"summary":     result.Summary,
+		"angles":      result.Angles,
+		"chunks_seen": len(chunks),
+		"source_docs": sourceDocs,
+	})
+}
+
+// quoteOrEmpty wraps a string in quotes for prompt embedding, or returns
+// "(none provided)" for empty input so the LLM sees the distinction.
+func quoteOrEmpty(s string) string {
+	if s == "" {
+		return "(none provided)"
+	}
+	return "\"" + s + "\""
+}
+
+// buildDiscoveryChunkContext renders retrieved chunks compactly for the
+// discovery prompt. Less verbose than buildChunkContext (no "Source:" labels
+// per chunk) since discovery is about breadth, not citation.
+func buildDiscoveryChunkContext(chunks []database.SearchDocumentChunksRow) string {
+	var b strings.Builder
+	for i, ch := range chunks {
+		b.WriteString(fmt.Sprintf("\n--- Chunk %d (from \"%s\") ---\n%s\n",
+			i+1, ch.DocumentTitle, ch.Content))
+	}
+	return b.String()
+}
+
+// buildDiscoverySourceDocs returns a deduplicated list of {id, title} pairs
+// for the documents the retrieved chunks came from.
+func buildDiscoverySourceDocs(chunks []database.SearchDocumentChunksRow) []gin.H {
+	seen := make(map[int64]bool)
+	out := make([]gin.H, 0)
+	for _, ch := range chunks {
+		if !seen[ch.DocumentID] {
+			seen[ch.DocumentID] = true
+			out = append(out, gin.H{"id": ch.DocumentID, "title": ch.DocumentTitle})
+		}
+	}
+	return out
+}
+
+// ReorderModulesHandler takes an array of module IDs in the desired order and
+// reassigns sort_order accordingly. Module IDs not in the array keep their
+// existing positions. Atomic single-query update.
+func (h *Handler) ReorderModulesHandler(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	if _, err := h.Queries.GetCourseByID(c.Request.Context(), courseID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	var body struct {
+		ModuleIDs []int64 `json:"module_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(body.ModuleIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "module_ids is required"})
+		return
+	}
+
+	// Guard against a generating module being moved while its job is mid-flight
+	// — the worker would otherwise set sort_order back from the stale module
+	// row it loaded at job start. Generating modules are pinned in place.
+	mods, err := h.Queries.GetModulesByCourseWithStatus(c.Request.Context(), courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load modules"})
+		return
+	}
+	statusByID := make(map[int64]string, len(mods))
+	for _, m := range mods {
+		statusByID[m.ID] = m.Status
+	}
+	for _, id := range body.ModuleIDs {
+		if statusByID[id] == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "module does not belong to this course"})
+			return
+		}
+		if statusByID[id] == "generating" {
+			c.JSON(http.StatusConflict, gin.H{"error": "cannot reorder while a module is generating"})
+			return
+		}
+	}
+
+	if err := h.Queries.ReorderModules(c.Request.Context(), courseID, body.ModuleIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reorder modules"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "reordered", "module_ids": body.ModuleIDs})
+}
+
+// GenerateOutline enqueues an outline-only job. It runs the same Step-1
+// pipeline as the one-shot generator but stops after creating the course and
+// module rows (each with status='pending'). Per-module generation is then
+// driven by the client via POST /courses/:id/modules/:moduleId/generate.
+func (h *Handler) GenerateOutline(c *gin.Context) {
+	var req GenerateCourseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.Description) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Description is required"})
+		return
+	}
+	userIDsrc, ok := c.Get("user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	createdBy, ok := userIDsrc.(int64)
+	if !ok || createdBy == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user session"})
+		return
+	}
+	req.CreatedBy = createdBy
+	req.Stage = StageOutline
+
+	job := h.Jobs.create(req)
+	h.Worker.enqueue(job)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"job_id": job.ID,
+		"status": job.Status,
+		"stage":  job.Stage,
+	})
+}
+
+// RegenerateOutline enqueues an outline-revision job against an existing
+// course. The body carries natural-language feedback (e.g. "fewer modules",
+// "add a module on X", "make it more practical"). The worker wipes the
+// course's current modules + items and replaces them with the AI's revised
+// outline — this is destructive by design, so the frontend should confirm.
+func (h *Handler) RegenerateOutline(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	if _, err := h.Queries.GetCourseByID(c.Request.Context(), courseID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	var body struct {
+		Instructions string `json:"instructions"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(body.Instructions) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "instructions are required"})
+		return
+	}
+
+	userIDsrc, ok := c.Get("user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	createdBy, ok := userIDsrc.(int64)
+	if !ok || createdBy == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user session"})
+		return
+	}
+
+	req := GenerateCourseRequest{
+		CreatedBy: createdBy,
+		Stage:     StageOutline,
+		CourseID:  courseID,
+		Feedback:  strings.TrimSpace(body.Instructions),
+	}
+	job := h.Jobs.create(req)
+	h.Worker.enqueue(job)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"job_id": job.ID,
+		"status": job.Status,
+		"stage":  job.Stage,
+	})
+}
+
+// GenerateModule enqueues a single-module generation job. The module must
+// already exist as an outline row (created by GenerateOutline or created
+// manually). The job streams progress like any other generation job and the
+// caller should subscribe via GET /courses/generate/:id/stream.
+func (h *Handler) GenerateModule(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	moduleID, err := strconv.ParseInt(c.Param("moduleId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid module ID"})
+		return
+	}
+
+	// Verify module belongs to the course.
+	mod, err := h.Queries.GetModule(c.Request.Context(), moduleID)
+	if err != nil || mod.CourseID != courseID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Module not found in this course"})
+		return
+	}
+	if mod.Status == "generating" {
+		c.JSON(http.StatusConflict, gin.H{"error": "This module is already being generated"})
+		return
+	}
+
+	userIDsrc, ok := c.Get("user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	createdBy, ok := userIDsrc.(int64)
+	if !ok || createdBy == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user session"})
+		return
+	}
+
+	var body struct {
+		QuestionTypes []string `json:"question_types,omitempty"`
+		Title         string   `json:"title,omitempty"`
+		Description   string   `json:"description,omitempty"`
+	}
+	_ = c.ShouldBindJSON(&body)
+
+	// Allow caller to rename the module inline before generating.
+	title := mod.Title
+	if strings.TrimSpace(body.Title) != "" {
+		title = strings.TrimSpace(body.Title)
+	}
+	desc := mod.Description
+	if strings.TrimSpace(body.Description) != "" {
+		desc = strings.TrimSpace(body.Description)
+	}
+	if title != mod.Title || desc != mod.Description {
+		if err := h.Queries.UpdateModuleMeta(c.Request.Context(), moduleID, title, desc, mod.SortOrder, nil); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update module"})
+			return
+		}
+	}
+
+	req := GenerateCourseRequest{
+		Title:         title,
+		Description:   desc,
+		QuestionTypes: body.QuestionTypes,
+		CreatedBy:     createdBy,
+		Stage:         StageModule,
+		CourseID:      courseID,
+		ModuleID:      moduleID,
+	}
+	job := h.Jobs.create(req)
+	h.Worker.enqueue(job)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"job_id":    job.ID,
+		"status":    job.Status,
+		"stage":     job.Stage,
+		"module_id": moduleID,
+	})
+}
+
+// CreateModuleHandler adds a new (status='pending') module row to an existing
+// course. Used when the user manually adds a module to an outline that the AI
+// didn't propose.
+func (h *Handler) CreateModuleHandler(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	if _, err := h.Queries.GetCourseByID(c.Request.Context(), courseID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	var body struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		SortOrder   *int32 `json:"sort_order,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(body.Title) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required"})
+		return
+	}
+
+	var order int32
+	if body.SortOrder != nil {
+		order = *body.SortOrder
+	} else {
+		// Append after the highest existing sort_order.
+		existing, _ := h.Queries.GetModulesByCourseWithStatus(c.Request.Context(), courseID)
+		for _, m := range existing {
+			if m.SortOrder >= order {
+				order = m.SortOrder + 1
+			}
+		}
+	}
+
+	mod, err := h.Queries.CreateModule(c.Request.Context(), database.CreateModuleParams{
+		CourseID:    courseID,
+		Title:       strings.TrimSpace(body.Title),
+		Description: strings.TrimSpace(body.Description),
+		SortOrder:   order,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create module"})
+		return
+	}
+	_ = h.Queries.UpdateModuleStatus(c.Request.Context(), mod.ID, "pending")
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":          mod.ID,
+		"course_id":   mod.CourseID,
+		"title":       mod.Title,
+		"description": mod.Description,
+		"sort_order":  mod.SortOrder,
+		"status":      "pending",
+		"items":       []gin.H{},
+	})
+}
+
+// UpdateModuleHandler edits an existing module's outline fields
+// (title/description/sort_order). It is only meaningful for modules that
+// haven't been generated yet, but is allowed regardless so the user can fix
+// typos in generated modules too.
+func (h *Handler) UpdateModuleHandler(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	moduleID, err := strconv.ParseInt(c.Param("moduleId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid module ID"})
+		return
+	}
+	mod, err := h.Queries.GetModule(c.Request.Context(), moduleID)
+	if err != nil || mod.CourseID != courseID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Module not found in this course"})
+		return
+	}
+
+	var body struct {
+		Title       *string `json:"title,omitempty"`
+		Description *string `json:"description,omitempty"`
+		SortOrder   *int32  `json:"sort_order,omitempty"`
+		// Pointer-to-slice so we can distinguish "omitted" (nil → leave
+		// unchanged) from "explicitly cleared" (non-nil empty slice → all types).
+		QuestionTypes *[]string `json:"question_types,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	title := mod.Title
+	if body.Title != nil {
+		title = strings.TrimSpace(*body.Title)
+		if title == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "title cannot be empty"})
+			return
+		}
+	}
+	desc := mod.Description
+	if body.Description != nil {
+		desc = strings.TrimSpace(*body.Description)
+	}
+	order := mod.SortOrder
+	if body.SortOrder != nil {
+		order = *body.SortOrder
+	}
+
+	// Question types are only written when the caller includes the field at
+	// all — omitting it preserves whatever allowlist was previously set so
+	// a rename doesn't accidentally wipe a user-curated type set.
+	var questionTypesJSON []byte
+	if body.QuestionTypes != nil {
+		// Normalise: lowercase, trim, drop unknowns, dedupe.
+		known := map[string]bool{
+			"mc": true, "ma": true, "tf": true, "fb": true, "sa": true,
+			"matching": true, "drag_sort": true, "hotspot": true,
+		}
+		seen := make(map[string]bool)
+		clean := make([]string, 0, len(*body.QuestionTypes))
+		for _, qt := range *body.QuestionTypes {
+			qt = strings.ToLower(strings.TrimSpace(qt))
+			if known[qt] && !seen[qt] {
+				seen[qt] = true
+				clean = append(clean, qt)
+			}
+		}
+		questionTypesJSON, _ = json.Marshal(clean)
+	}
+
+	if err := h.Queries.UpdateModuleMeta(c.Request.Context(), moduleID, title, desc, order, questionTypesJSON); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update module"})
+		return
+	}
+
+	// Re-read so the response reflects the actual stored allowlist (which may
+	// have been pruned of unknown types above).
+	updated, _ := h.Queries.GetModule(c.Request.Context(), moduleID)
+	respTypes := body.QuestionTypes
+	if updated != nil {
+		respTypes = &updated.QuestionTypes
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":             moduleID,
+		"course_id":      courseID,
+		"title":          title,
+		"description":    desc,
+		"sort_order":     order,
+		"status":         mod.Status,
+		"question_types": respTypes,
+	})
+}
+
+// DeleteModuleHandler removes a module and its items from a course. Blocked
+// if the module is currently generating, since that would race with the
+// worker.
+func (h *Handler) DeleteModuleHandler(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	moduleID, err := strconv.ParseInt(c.Param("moduleId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid module ID"})
+		return
+	}
+	mod, err := h.Queries.GetModule(c.Request.Context(), moduleID)
+	if err != nil || mod.CourseID != courseID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Module not found in this course"})
+		return
+	}
+	if mod.Status == "generating" {
+		c.JSON(http.StatusConflict, gin.H{"error": "Cannot delete a module that is currently generating"})
+		return
+	}
+
+	// Items are ON DELETE SET NULL on module_id, so we have to delete them
+	// explicitly to actually purge content.
+	if err := h.Queries.DeleteCourseItemsByModule(c.Request.Context(), pgtype.Int8{Int64: moduleID, Valid: true}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete module items"})
+		return
+	}
+	if err := h.Queries.DeleteModule(c.Request.Context(), moduleID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete module"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "module_id": moduleID})
+}
+
 // RegisterRoutes adds course generation routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/courses/generate", middlewares.WrapRequireRole(h.GenerateCourse, "content creator"))
+	r.POST("/courses/discover", middlewares.WrapRequireRole(h.Discover, "content creator"))
+	r.POST("/courses/outline", middlewares.WrapRequireRole(h.GenerateOutline, "content creator"))
+	r.POST("/courses/:id/outline/regenerate", middlewares.WrapRequireRole(h.RegenerateOutline, "content creator"))
 	r.GET("/courses/generate/active", h.ListActiveJobs)
 	r.POST("/courses/generate/:id/cancel", middlewares.WrapRequireRole(h.CancelGeneration, "content creator"))
 	r.GET("/courses/generate/:id", h.GetJobStatus)
@@ -743,6 +1505,15 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/courses/:id/preview", h.PreviewCourse)
 	r.PUT("/courses/:id/edit", middlewares.WrapRequireRole(h.EditCourse, "content creator"))
 	r.PUT("/courses/:id/settings", middlewares.WrapRequireRole(h.UpdateSettings, "content creator"))
+	r.PUT("/courses/:id/meta", middlewares.WrapRequireRole(h.UpdateCourseMetaHandler, "content creator"))
+
+	// Staged course builder: per-module management.
+	r.POST("/courses/:id/modules", middlewares.WrapRequireRole(h.CreateModuleHandler, "content creator"))
+	r.PUT("/courses/:id/modules/reorder", middlewares.WrapRequireRole(h.ReorderModulesHandler, "content creator"))
+	r.POST("/courses/:id/modules/:moduleId/generate", middlewares.WrapRequireRole(h.GenerateModule, "content creator"))
+	r.PUT("/courses/:id/modules/:moduleId", middlewares.WrapRequireRole(h.UpdateModuleHandler, "content creator"))
+	r.DELETE("/courses/:id/modules/:moduleId", middlewares.WrapRequireRole(h.DeleteModuleHandler, "content creator"))
+
 	r.POST("/items/:itemId/ai-edit", middlewares.WrapRequireRole(h.AiEditItem, "content creator"))
 	r.PUT("/items/:itemId", middlewares.WrapRequireRole(h.UpdateItemData, "content creator"))
 	r.DELETE("/items/:itemId", middlewares.WrapRequireRole(h.DeleteItem, "content creator"))

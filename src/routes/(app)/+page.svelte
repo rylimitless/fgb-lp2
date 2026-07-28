@@ -27,6 +27,7 @@
         AlertTriangle,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import * as Tabs from "$lib/components/ui/tabs";
     import {
         GiaAvatar,
         Spotlight,
@@ -39,6 +40,8 @@
         BorderBeam,
         AnimatedList,
         Marquee,
+        CourseCover,
+        SparkleText,
     } from "$lib/components/brand";
 
     Chart.register(...registerables);
@@ -115,6 +118,15 @@
         stats.theta !== undefined
             ? Math.round((((stats.theta + 3) / 6) * 100) % 100)
             : 0,
+    );
+
+    // XP required to reach the next level — computed from the live
+    // gamification score, not a placeholder. The formula mirrors the
+    // display bar: each level covers ~1250 XP; the deficit is the delta
+    // from the current score to the next level threshold.
+    const XP_PER_LEVEL = 1250;
+    let xpToNextLevel = $derived(
+        Math.max(0, XP_PER_LEVEL - (gamification.totalScore % XP_PER_LEVEL)),
     );
 
     // Continue learning — live from dashboard only, no fallback
@@ -313,9 +325,35 @@
     function statusIcon(s: string) {
         return s === "Completed" ? Check : s === "In Progress" ? Play : Lock;
     }
+
+    // Progressive-disclosure tabs — Overview / Progress / Community.
+    // Overview is the default; users only scan the panel they care about.
+    let dashboardTab = $state("overview");
+
+    // Gia state on the hero card. Celebrate when the learner completed
+    // something today (achievements returned server-side and completedN > 0);
+    // otherwise idle. Thinking is reserved for surfaces that actively wait on
+    // Gia — the coach page, the AI generator, etc.
+    let heroGiaState = $derived<"idle" | "thinking" | "celebrating">(
+        completedN > 0 && achievements.length > 0 ? "celebrating" : "idle",
+    );
+
+    // Full weekday labels for the streak bars' tooltip + aria-label. Kept as
+    // a script-level const because `{@const}` cannot live directly under a
+    // `<div>` in Svelte 5's template grammar.
+    const dayLabels = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
 </script>
 
 <div class="flex w-full max-w-7xl mx-auto flex-col gap-5">
+    <h1 class="sr-only">Dashboard</h1>
     <!-- ===== GIA HERO PANEL ===== -->
     <section
         class="relative overflow-hidden rounded-3xl border border-border brand-gradient text-primary-foreground motion-rise-in"
@@ -337,12 +375,14 @@
                     class="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent"
                     >25 Years of Excellence</span
                 >
-                <h1
+                <h2
                     class="mt-2 text-display-md font-bold tracking-tight text-primary-foreground"
                 >
                     {timeOfDayGreeting()}, {firstName}!
-                    <span class="inline-block motion-float">👋</span>
-                </h1>
+                    <span class="inline-block motion-float" aria-hidden="true"
+                        >👋</span
+                    >
+                </h2>
                 <p class="mt-2 text-sm text-primary-foreground/80">
                     Let's continue your learning journey.
                 </p>
@@ -364,7 +404,10 @@
                     </Button.Root>
                 </div>
             </div>
-            <!-- Gia character + speech bubble -->
+            <!-- Gia character + speech bubble.
+                 If the learner just completed a course today, celebrate. Else idle.
+                 State switching lives in `heroGiaState` — future work can trigger
+                 `thinking` when a background job is running. -->
             <div class="relative shrink-0">
                 <div
                     class="absolute -left-44 top-2 hidden lg:block w-40 rounded-2xl rounded-br-sm bg-card text-card-foreground p-3 shadow-lg"
@@ -381,10 +424,11 @@
                 <div
                     class="relative size-32 md:size-40 rounded-full overflow-hidden ring-4 ring-accent/30 bg-surface-1 motion-float"
                 >
-                    <img
-                        src="/brand/gia/gia-3d.png"
-                        alt="Gia, your AI learning coach"
-                        class="size-full object-cover"
+                    <GiaAvatar
+                        state={heroGiaState}
+                        size={160}
+                        halo={false}
+                        class="size-full"
                     />
                 </div>
                 <span
@@ -393,36 +437,6 @@
                 >
             </div>
         </div>
-    </section>
-
-    <!-- ===== FEATURED LEARNING MARQUEE ===== -->
-    <section
-        class="rounded-3xl border border-border bg-card p-4 lift motion-rise-in"
-    >
-        <div class="mb-3 flex items-center justify-between">
-            <h3
-                class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
-            >
-                <Sparkles class="size-4 text-accent" /> Featured learning
-            </h3>
-            <span
-                class="text-[10px] uppercase tracking-wider text-muted-foreground"
-            >
-                Live in the Academy
-            </span>
-        </div>
-        <Marquee speed={34} class="py-1">
-            {#snippet children()}
-                {#each featuredLearning as item}
-                    <span
-                        class="inline-flex min-w-max items-center gap-2 rounded-full border border-border bg-surface-1 px-4 py-2 text-xs font-medium text-foreground"
-                    >
-                        <BookOpen class="size-3.5 text-primary" />
-                        {item}
-                    </span>
-                {/each}
-            {/snippet}
-        </Marquee>
     </section>
 
     <!-- ===== PROGRESS TRIO ===== -->
@@ -496,15 +510,21 @@
                 </h3>
                 <StreakFlame count={gamification.streakDays} size="sm" />
             </div>
-            <div class="flex items-end justify-between gap-2 h-20">
-                {#each weeklyBars as b}
+            <div
+                class="flex items-end justify-between gap-2 h-20"
+                role="group"
+                aria-label="Learning activity this week"
+            >
+                {#each weeklyBars as b, i}
                     <div
                         class="flex-1 rounded-t-md bg-gradient-to-t from-primary to-accent min-h-1"
                         style:height="{b}%"
+                        title={`${dayLabels[i]} — ${b}% of daily goal`}
+                        aria-label={`${dayLabels[i]}: ${b}% of daily goal`}
                     ></div>
                 {/each}
             </div>
-            <div class="flex justify-between gap-2 mt-1.5">
+            <div class="flex justify-between gap-2 mt-1.5" aria-hidden="true">
                 {#each ["M", "T", "W", "T", "F", "S", "S"] as d}
                     <span
                         class="flex-1 text-center text-[9px] text-muted-foreground"
@@ -547,7 +567,7 @@
                 ></div>
             </div>
             <p class="mt-2 text-[11px] text-muted-foreground tabular">
-                1,250 XP to Level {levelNum + 1}
+                {xpToNextLevel.toLocaleString()} XP to Level {levelNum + 1}
             </p>
         </div>
     </div>
@@ -566,15 +586,12 @@
                     )}
             >
                 <BorderBeam size={140} duration={9} color="var(--accent)" />
-                <div class="relative aspect-[16/10] w-full overflow-hidden">
-                    <img
-                        src={continueImage}
-                        alt=""
-                        class="size-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        onerror={(e) =>
-                            ((
-                                e.currentTarget as HTMLImageElement
-                            ).style.display = "none")}
+                <div class="relative w-full overflow-hidden">
+                    <CourseCover
+                        title={continueTitle || "Continue learning"}
+                        image={continueImage}
+                        aspect="16/10"
+                        class="transition-transform duration-500 group-hover:scale-105"
                     />
                     <div
                         class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"
@@ -663,17 +680,12 @@
                                     : "/lesson-player",
                             )}
                     >
-                        <div
-                            class="relative aspect-video w-full overflow-hidden"
-                        >
-                            <img
-                                src={rec.image}
-                                alt=""
-                                class="size-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                onerror={(e) =>
-                                    ((
-                                        e.currentTarget as HTMLImageElement
-                                    ).style.display = "none")}
+                        <div class="relative w-full overflow-hidden">
+                            <CourseCover
+                                title={rec.title}
+                                image={rec.image}
+                                aspect="video"
+                                class="transition-transform duration-500 group-hover:scale-105"
                             />
                             <div
                                 class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"
@@ -704,216 +716,276 @@
         </div>
     </div>
 
-    <!-- ===== LEARNING PATH ===== -->
+    <!-- ===== FEATURED LEARNING MARQUEE (secondary discovery ribbon) ===== -->
     <section
-        class="rounded-3xl border border-border bg-card p-5 md:p-6 lift motion-rise-in"
+        class="rounded-3xl border border-border bg-card p-4 lift motion-rise-in"
     >
-        <div class="flex items-center justify-between mb-6">
-            <div>
-                <h3
-                    class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
-                >
-                    <Target class="size-4 text-accent" /> Your Learning Path
-                </h3>
-                <p class="text-[11px] text-muted-foreground mt-0.5">
-                    Leadership Excellence Path
-                </p>
-            </div>
-            <button
-                class="text-xs font-medium text-primary hover:underline inline-flex items-center gap-1"
-                onclick={() => goto("/adaptive-room")}
-                >See full path <ChevronRight class="size-3" /></button
+        <div class="mb-3 flex items-center justify-between">
+            <h3
+                class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
             >
+                <Sparkles class="size-4 text-accent" /> Featured learning
+            </h3>
+            <span
+                class="text-[10px] uppercase tracking-wider text-muted-foreground"
+            >
+                Live in the Academy
+            </span>
         </div>
-        <ol class="flex flex-col md:flex-row md:items-start gap-4 md:gap-0">
-            {#each learningPath as step, i}
-                {@const Icon = statusIcon(step.status)}
-                {@const done = step.status === "Completed"}
-                {@const current = step.status === "In Progress"}
-                <li
-                    class="relative flex md:flex-col md:flex-1 items-center gap-3 md:gap-2 md:text-center"
-                >
-                    {#if i < learningPath.length - 1}
-                        <span
-                            class="hidden md:block absolute top-5 left-1/2 w-full h-0.5 {done
-                                ? 'bg-accent'
-                                : 'bg-border'}"
-                        ></span>
-                    {/if}
+        <Marquee speed={34} class="py-1">
+            {#snippet children()}
+                {#each featuredLearning as item}
                     <span
-                        class={`relative z-10 flex size-10 items-center justify-center rounded-full border-2 shrink-0 ${done ? "bg-accent border-accent text-accent-foreground" : current ? "bg-primary border-primary text-primary-foreground shadow-glow motion-glow" : "bg-card border-border text-muted-foreground"}`}
+                        class="inline-flex min-w-max items-center gap-2 rounded-full border border-border bg-surface-1 px-4 py-2 text-xs font-medium text-foreground"
                     >
-                        <Icon class="size-4" />
+                        <BookOpen class="size-3.5 text-primary" />
+                        {item}
                     </span>
-                    <div class="md:px-2">
-                        <p
-                            class={`text-xs font-medium ${current ? "text-foreground" : "text-muted-foreground"}`}
-                        >
-                            {step.label}
-                        </p>
-                        <p
-                            class={`text-[10px] mt-0.5 ${done ? "text-success" : current ? "text-primary" : "text-muted-foreground/60"}`}
-                        >
-                            {step.status}
-                        </p>
-                    </div>
-                </li>
-            {/each}
-        </ol>
+                {/each}
+            {/snippet}
+        </Marquee>
     </section>
 
-    <!-- ===== ACHIEVEMENTS + RADAR + LEADERBOARD ===== -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <!-- Achievements -->
-        <div
-            class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-1"
-        >
-            <div class="flex items-center justify-between mb-4">
-                <h3
-                    class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+    <!-- ===== DEEP DASHBOARD TABS =====
+         Everything below the fold lives here. Users only render the panel they
+         care about — cutting the vertical scroll from 9 blocks to 2 per tab. -->
+    <Tabs.Root bind:value={dashboardTab} class="w-full motion-rise-in">
+        <Tabs.List class="w-full sm:w-fit">
+            <Tabs.Trigger value="overview">Overview</Tabs.Trigger>
+            <Tabs.Trigger value="progress">Progress</Tabs.Trigger>
+            <Tabs.Trigger value="community">Community</Tabs.Trigger>
+        </Tabs.List>
+
+        <!-- ---------- Overview: what needs your attention now ---------- -->
+        <Tabs.Content value="overview" class="flex flex-col gap-5">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div
+                    class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-1"
                 >
-                    <Trophy class="size-4 text-accent" /> Achievements
-                </h3>
-                <span
-                    class="text-[10px] uppercase tracking-wider text-muted-foreground"
-                    >Recent</span
-                >
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-                {#each achievements as a}
-                    <div
-                        class="flex flex-col items-center gap-2 rounded-2xl border border-border bg-surface-1 p-3 text-center"
+                    <h3
+                        class="text-sm font-semibold text-foreground inline-flex items-center gap-2 mb-4"
                     >
-                        <BadgeMedal tier={a.tier} size={48} />
-                        <span
-                            class="text-[11px] font-medium text-foreground leading-tight"
-                            >{a.label}</span
-                        >
-                    </div>
-                {/each}
-            </div>
-        </div>
-
-        <!-- Skill Radar -->
-        <div
-            class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-2"
-        >
-            <div class="flex items-center justify-between mb-2">
-                <h3
-                    class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+                        <Calendar class="size-4 text-warning" /> Course Deadlines
+                    </h3>
+                    {#if deadlines.length > 0}
+                        <ul class="flex flex-col" role="list">
+                            {#each deadlines as d}
+                                <li
+                                    class="flex items-center gap-3 py-2.5 border-b border-border/40 last:border-0"
+                                >
+                                    <span
+                                        class="flex size-8 items-center justify-center rounded-lg shrink-0 {d.isOverdue
+                                            ? 'bg-destructive/10 text-destructive'
+                                            : 'bg-warning/10 text-warning'}"
+                                        ><d.icon class="size-4" /></span
+                                    >
+                                    <span
+                                        class="text-sm text-foreground flex-1 truncate"
+                                        >{d.title}</span
+                                    >
+                                    <span
+                                        class="text-[11px] shrink-0 tabular {d.isOverdue
+                                            ? 'text-destructive font-semibold'
+                                            : 'text-muted-foreground'}"
+                                        >{d.due}</span
+                                    >
+                                </li>
+                            {/each}
+                        </ul>
+                    {:else}
+                        <p class="text-sm text-muted-foreground py-2">
+                            No upcoming deadlines — you're on track.
+                        </p>
+                    {/if}
+                </div>
+                <div
+                    class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-2"
                 >
-                    <Brain class="size-4 text-primary" /> Skill Radar
-                </h3>
-                <span
-                    class="text-[10px] uppercase tracking-wider text-muted-foreground"
-                    >Top skills</span
-                >
-            </div>
-            <div class="h-52"><canvas bind:this={radarCanvas}></canvas></div>
-        </div>
-
-        <!-- Leaderboard -->
-        <div
-            class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-3"
-        >
-            <div class="flex items-center justify-between mb-4">
-                <h3
-                    class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
-                >
-                    <Star class="size-4 text-accent" /> Leaderboard
-                </h3>
-                <span
-                    class="text-[10px] uppercase tracking-wider text-muted-foreground"
-                    >This month</span
-                >
-            </div>
-            <ol class="flex flex-col gap-1.5">
-                {#each leaderboard as row, i}
-                    <li
-                        class={`flex items-center gap-3 rounded-xl px-3 py-2 ${row.me ? "bg-accent-soft border border-accent/30" : ""}`}
+                    <h3
+                        class="text-sm font-semibold text-foreground inline-flex items-center gap-2 mb-4"
                     >
-                        <span
-                            class={`flex size-6 items-center justify-center rounded-full text-[11px] font-bold tabular shrink-0 ${i === 0 ? "bg-accent text-accent-foreground" : row.me ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
-                            >{i + 1}</span
-                        >
-                        <span
-                            class={`text-sm truncate flex-1 ${row.me ? "font-semibold text-foreground" : "text-foreground"}`}
-                            >{row.name}{row.me ? " (You)" : ""}</span
-                        >
-                        <span
-                            class="text-xs font-bold tabular text-muted-foreground"
-                            >{row.xp.toLocaleString()}</span
-                        >
-                    </li>
-                {/each}
-            </ol>
-        </div>
-    </div>
+                        <Bell class="size-4 text-info" /> What's New
+                    </h3>
+                    <AnimatedList
+                        items={whatsNew}
+                        getKey={(n, i) => `${n.title}-${i}`}
+                    >
+                        {#snippet children(n, _i)}
+                            <div class="flex items-center gap-3 py-2.5">
+                                <span
+                                    class="flex size-8 items-center justify-center rounded-lg bg-info/10 text-info shrink-0"
+                                    ><n.icon class="size-4" /></span
+                                >
+                                <span
+                                    class="text-sm text-foreground flex-1 truncate"
+                                    >{n.title}</span
+                                >
+                                <span
+                                    class="text-[11px] text-muted-foreground shrink-0"
+                                    >{n.meta}</span
+                                >
+                            </div>
+                        {/snippet}
+                    </AnimatedList>
+                </div>
+            </div>
+        </Tabs.Content>
 
-    <!-- ===== DEADLINES + WHAT'S NEW ===== -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <div
-            class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-1"
-        >
-            <h3
-                class="text-sm font-semibold text-foreground inline-flex items-center gap-2 mb-4"
+        <!-- ---------- Progress: your journey and skills ---------- -->
+        <Tabs.Content value="progress" class="flex flex-col gap-5">
+            <section
+                class="rounded-3xl border border-border bg-card p-5 md:p-6 lift motion-rise-in"
             >
-                <Calendar class="size-4 text-warning" /> Course Deadlines
-            </h3>
-            {#if deadlines.length > 0}
-                <ul class="flex flex-col">
-                    {#each deadlines as d}
-                        <li
-                            class="flex items-center gap-3 py-2.5 border-b border-border/40 last:border-0"
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h3
+                            class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
                         >
+                            <Target class="size-4 text-accent" /> Your Learning
+                            Path
+                        </h3>
+                        <p class="text-[11px] text-muted-foreground mt-0.5">
+                            Leadership Excellence Path
+                        </p>
+                    </div>
+                    <button
+                        class="text-xs font-medium text-primary hover:underline inline-flex items-center gap-1"
+                        onclick={() => goto("/adaptive-room")}
+                        >See full path <ChevronRight class="size-3" /></button
+                    >
+                </div>
+                <ol
+                    class="flex flex-col md:flex-row md:items-start gap-4 md:gap-0"
+                    role="list"
+                >
+                    {#each learningPath as step, i}
+                        {@const Icon = statusIcon(step.status)}
+                        {@const done = step.status === "Completed"}
+                        {@const current = step.status === "In Progress"}
+                        <li
+                            class="relative flex md:flex-col md:flex-1 items-center gap-3 md:gap-2 md:text-center"
+                        >
+                            {#if i < learningPath.length - 1}
+                                <span
+                                    class="hidden md:block absolute top-5 left-1/2 w-full h-0.5 {done
+                                        ? 'bg-accent'
+                                        : 'bg-border'}"
+                                ></span>
+                            {/if}
                             <span
-                                class="flex size-8 items-center justify-center rounded-lg shrink-0 {d.isOverdue
-                                    ? 'bg-destructive/10 text-destructive'
-                                    : 'bg-warning/10 text-warning'}"
-                                ><d.icon class="size-4" /></span
+                                class={`relative z-10 flex size-10 items-center justify-center rounded-full border-2 shrink-0 ${done ? "bg-accent border-accent text-accent-foreground" : current ? "bg-primary border-primary text-primary-foreground shadow-glow motion-glow" : "bg-card border-border-strong text-muted-foreground"}`}
                             >
-                            <span
-                                class="text-sm text-foreground flex-1 truncate"
-                                >{d.title}</span
-                            >
-                            <span
-                                class="text-[11px] shrink-0 tabular {d.isOverdue
-                                    ? 'text-destructive font-semibold'
-                                    : 'text-muted-foreground'}">{d.due}</span
-                            >
+                                <Icon class="size-4" />
+                            </span>
+                            <div class="md:px-2">
+                                <p
+                                    class={`text-xs font-medium ${current ? "text-foreground" : "text-muted-foreground"}`}
+                                >
+                                    {step.label}
+                                </p>
+                                <p
+                                    class={`text-[10px] mt-0.5 ${done ? "text-success" : current ? "text-primary" : "text-muted-foreground/60"}`}
+                                >
+                                    {step.status}
+                                </p>
+                            </div>
                         </li>
                     {/each}
-                </ul>
-            {:else}
-                <p class="text-sm text-muted-foreground py-2">
-                    No upcoming deadlines — you're on track.
-                </p>
-            {/if}
-        </div>
-        <div
-            class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-2"
-        >
-            <h3
-                class="text-sm font-semibold text-foreground inline-flex items-center gap-2 mb-4"
+                </ol>
+            </section>
+
+            <div
+                class="rounded-3xl border border-border bg-card p-5 md:p-6 lift motion-rise-in motion-stagger-1"
             >
-                <Bell class="size-4 text-info" /> What's New
-            </h3>
-            <AnimatedList items={whatsNew} getKey={(n, i) => `${n.title}-${i}`}>
-                {#snippet children(n, _i)}
-                    <div class="flex items-center gap-3 py-2.5">
+                <div class="flex items-center justify-between mb-2">
+                    <h3
+                        class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+                    >
+                        <Brain class="size-4 text-primary" /> Skill Radar
+                    </h3>
+                    <span
+                        class="text-[10px] uppercase tracking-wider text-muted-foreground"
+                        >Top skills</span
+                    >
+                </div>
+                <div class="h-72 md:h-80">
+                    <canvas bind:this={radarCanvas}></canvas>
+                </div>
+            </div>
+        </Tabs.Content>
+
+        <!-- ---------- Community: leaderboard + achievements ---------- -->
+        <Tabs.Content value="community" class="flex flex-col gap-5">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <!-- Leaderboard -->
+                <div
+                    class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-1"
+                >
+                    <div class="flex items-center justify-between mb-4">
+                        <h3
+                            class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+                        >
+                            <Star class="size-4 text-accent" /> Leaderboard
+                        </h3>
                         <span
-                            class="flex size-8 items-center justify-center rounded-lg bg-info/10 text-info shrink-0"
-                            ><n.icon class="size-4" /></span
-                        >
-                        <span class="text-sm text-foreground flex-1 truncate"
-                            >{n.title}</span
-                        >
-                        <span class="text-[11px] text-muted-foreground shrink-0"
-                            >{n.meta}</span
+                            class="text-[10px] uppercase tracking-wider text-muted-foreground"
+                            >This month</span
                         >
                     </div>
-                {/snippet}
-            </AnimatedList>
-        </div>
-    </div>
+                    <ol class="flex flex-col gap-1.5" role="list">
+                        {#each leaderboard as row, i}
+                            <li
+                                class={`flex items-center gap-3 rounded-xl px-3 py-2 ${row.me ? "bg-accent-soft border border-accent/30" : ""}`}
+                            >
+                                <span
+                                    class={`flex size-6 items-center justify-center rounded-full text-[11px] font-bold tabular shrink-0 ${i === 0 ? "bg-accent text-accent-foreground" : row.me ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+                                    >{i + 1}</span
+                                >
+                                <span
+                                    class={`text-sm truncate flex-1 ${row.me ? "font-semibold text-foreground" : "text-foreground"}`}
+                                    >{row.name}{row.me ? " (You)" : ""}</span
+                                >
+                                <span
+                                    class="text-xs font-bold tabular text-muted-foreground"
+                                    >{row.xp.toLocaleString()}</span
+                                >
+                            </li>
+                        {/each}
+                    </ol>
+                </div>
+
+                <!-- Achievements -->
+                <div
+                    class="rounded-3xl border border-border bg-card p-5 lift motion-rise-in motion-stagger-2"
+                >
+                    <div class="flex items-center justify-between mb-4">
+                        <h3
+                            class="text-sm font-semibold text-foreground inline-flex items-center gap-2"
+                        >
+                            <Trophy class="size-4 text-accent" /> Achievements
+                        </h3>
+                        <span
+                            class="text-[10px] uppercase tracking-wider text-muted-foreground"
+                            >Recent</span
+                        >
+                    </div>
+                    <div class="grid grid-cols-2 gap-3" role="list">
+                        {#each achievements as a}
+                            <div
+                                class="flex flex-col items-center gap-2 rounded-2xl border border-border bg-surface-1 p-3 text-center"
+                                role="listitem"
+                            >
+                                <BadgeMedal tier={a.tier} size={48} />
+                                <SparkleText
+                                    text={a.label}
+                                    class="text-[11px] font-medium text-foreground leading-tight"
+                                />
+                            </div>
+                        {/each}
+                    </div>
+                </div>
+            </div>
+        </Tabs.Content>
+    </Tabs.Root>
+
 </div>

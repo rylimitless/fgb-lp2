@@ -74,6 +74,21 @@ func (h *Handler) UnreadCount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"unread": count})
 }
 
+// MarkAllRead flips every unread notification for the current user to read.
+// Uses raw SQL through the pool because the auto-generated queries do not
+// (yet) expose a bulk mark endpoint.
+func (h *Handler) MarkAllRead(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	uid := userID.(int64)
+	tag, err := h.Pool.Exec(c.Request.Context(),
+		`UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false`, uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to mark notifications as read"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"updated": tag.RowsAffected()})
+}
+
 // CreateForAdmins creates a notification for every admin user.
 func (h *Handler) CreateForAdmins(title, message, link string) {
 	admins, err := h.Queries.GetAdminUsers(context.Background())
@@ -179,4 +194,5 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/notifications", h.ListNotifications)
 	r.GET("/notifications/unread-count", h.UnreadCount)
 	r.PUT("/notifications/:id/read", h.MarkRead)
+	r.PUT("/notifications/read-all", h.MarkAllRead)
 }

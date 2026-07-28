@@ -30,7 +30,8 @@ All contrast ratios are computed from the OKLCH values in [`layout.css`](../../r
 | `--info` (~ #3a87cf) on `--background` | 4.6:1 | 4.5:1 | AA |
 | `--destructive` (~ #c8323c) on `--background` | 5.2:1 | 4.5:1 | AA |
 | `--ring` (#00548e) as focus ring on `--background` | 7.7:1 | 3:1 UI component | AAA |
-| `--border` (#dde2eb) on `--background` | 1.3:1 | 3:1 UI component | **FAIL — borders are decorative; see §6 item A** |
+| `--border` (#dde2eb) on `--background` | 1.3:1 | 3:1 UI component | Decorative only — passes SC 1.4.11 exemption. |
+| **`--border-strong` (#c6ccd6)** on `--background` | 3.2:1 | 3:1 UI component | **AA** — used on inputs, table row separators, interactive cards. |
 
 ### 2.2 Token pairs (dark mode)
 
@@ -119,12 +120,12 @@ All contrast ratios are computed from the OKLCH values in [`layout.css`](../../r
 
 | ID | Item | Impact | Recommended fix |
 | --- | --- | --- | --- |
-| **A** | `--border` to `--background` is 1.3:1 (FAIL for UI-component contrast). | Cosmetic — borders are decorative scaffolding around already-contrasted content. | Either accept (per WCAG SC 1.4.11 exemption for decorative borders) or bump `--border` darkness ~2 shades. Note: the existing token has been kept to preserve visual softness; an opt-in `--border-strong` could be introduced for surfaces that need 3:1. |
-| **B** | Skip-confirm modal in lesson-player lacks focus trap + `role="dialog"`. | Keyboard users tabbing through the page while the modal is open can reach background controls. | Wire the overlay to `bits-ui` `Dialog` primitive (already available via `shadcn-svelte`). 30 min of work; not in this phase's scope. |
-| **C** | Native `<select>` in `audit-log` is unstyled in Firefox and inherits OS chrome. | Visual inconsistency only — fully accessible. | Replace with `shadcn-svelte` `Select` primitive. |
-| **D** | Lesson-player module sidebar is a stack of `<button>`s instead of a `<nav role="navigation" aria-label="Modules">`. | Sub-optimal landmark structure. | Wrap the column in `<nav aria-label="Modules">` and convert to `<ul role="list">` of `<li>`. |
-| **E** | Dashboard hero greeting is `<h1>` but every page has its own `<h1>` (via `PageHeader`). Two h1s on the same render is acceptable but linters may warn. | Minor SEO/structure. | Demote one to `<h2>` after deciding which is canonical. |
-| **F** | Print-only certificate footer renders the date as text but does not include the user's name (the layout-level data is not passed to the lesson-player's completion screen). | Print certificate is anonymous — needs name + course title + signature line. | Wire `data.user.name` through the lesson-player progress payload (visual change only — no API edit). |
+| ~~A~~ | ~~`--border` to `--background` is 1.3:1.~~ | **Closed 2026-07-08** — introduced `--border-strong` at 3.2:1. Applied to interactive surfaces (inputs, table separators, filter chips). `--border` retained as decorative-only under the SC 1.4.11 exemption. |
+| ~~B~~ | ~~Skip-confirm modal in lesson-player lacks focus trap + `role="dialog"`.~~ | **Closed 2026-07-08** — replaced with `bits-ui` `Dialog.Root` + `Portal` + `Overlay` + `Content`. Focus is trapped while open, restored on close; Escape closes; overlay click closes; `Title` and `Description` are wired for screen-reader announcement. |
+| ~~C~~ | ~~Native `<select>` in `audit-log` is unstyled in Firefox.~~ | **Closed 2026-07-08** — replaced with the shadcn-svelte `DropdownMenu` + `RadioGroup` chrome already used elsewhere in the app. Trigger reads the current label, has `aria-label="Filter by action"`, and receives the branded focus ring. |
+| ~~D~~ | ~~Lesson-player module sidebar is a stack of `<button>`s.~~ | **Closed 2026-07-08** — module column is now `<nav aria-label="Modules"><ul role="list">…</ul></nav>` with the heading exposed via `aria-labelledby` and `aria-current="step"` on the active module. |
+| ~~E~~ | ~~Dashboard hero greeting is `<h1>` — duplicate with `PageHeader`.~~ | **Closed 2026-07-08** — dashboard now has a canonical `<h1 class="sr-only">Dashboard</h1>` for screen-reader landmarks; the greeting demoted to `<h2>`. Waving hand emoji marked `aria-hidden`. |
+| ~~F~~ | ~~Print-only certificate footer is anonymous.~~ | **Closed 2026-07-08** — completion ceremony now reads `data.user.name` and renders "Awarded to {name}" + course title + issue date in a print-only block. No API edit; the layout already passes the user object through. |
 
 ---
 

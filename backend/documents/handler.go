@@ -53,9 +53,10 @@ func (h *Handler) UploadDocument(c *gin.Context) {
 		title = header.Filename
 	}
 
-	ext := filepath.Ext(header.Filename)
-	if ext != ".pdf" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only PDF files are supported"})
+	if !worker.IsSupportedExtension(header.Filename) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Unsupported file type — accepts PDF, TXT, and Markdown.",
+		})
 		return
 	}
 

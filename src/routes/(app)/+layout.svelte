@@ -11,6 +11,7 @@
         GraduationCap,
         PenTool,
         Sparkles,
+        Wand2,
         ClipboardCheck,
         Library,
         Users,
@@ -35,6 +36,7 @@
     import BrandLogo from "$lib/components/brand/BrandLogo.svelte";
     import GiaAvatar from "$lib/components/brand/GiaAvatar.svelte";
     import CommandPalette from "$lib/components/brand/CommandPalette.svelte";
+    import MobileDock from "$lib/components/brand/MobileDock.svelte";
     import ToastViewport from "$lib/components/brand/ToastViewport.svelte";
 
     let { children, data } = $props();
@@ -42,6 +44,10 @@
     let loggingOut = $state(false);
     let mobileNavOpen = $state(false);
     let commandOpen = $state(false);
+    // Live header-search state. Typing here defers opening the palette until
+    // the first keystroke, at which point the palette takes over with the
+    // seeded query. Save the round-trip of "click button, then type again".
+    let headerQuery = $state("");
 
     let userRoles: string[] = $derived(data?.user?.roles ?? []);
     function hasRole(...roles: string[]): boolean {
@@ -49,104 +55,147 @@
         return roles.some((r) => userRoles.includes(r));
     }
 
-    // Sidebar nav — real routes + role gating, styled to the reference.
-    const allNav = [
+    // Sidebar nav — grouped into semantic clusters (Learn / Discover / Create /
+    // Operate) so admins with the widest role set never see a flat wall of 15
+    // buttons. Groups collapse silently when every child is filtered out by the
+    // user's roles. See MCP_REVIEW.md item H1.
+    type NavItem = {
+        label: string;
+        icon: any;
+        href: string;
+        roles: string[];
+    };
+    type NavGroup = { label: string; items: NavItem[] };
+
+    const navGroups: NavGroup[] = [
         {
-            label: "Dashboard",
-            icon: LayoutDashboard,
-            href: "/",
-            roles: [] as string[],
+            label: "Learn",
+            items: [
+                { label: "Dashboard", icon: LayoutDashboard, href: "/", roles: [] },
+                {
+                    label: "My Learning",
+                    icon: GraduationCap,
+                    href: "/lesson-player",
+                    roles: ["end user", "content creator", "approver"],
+                },
+                {
+                    label: "Adaptive Room",
+                    icon: Brain,
+                    href: "/adaptive-room",
+                    roles: ["end user", "content creator", "approver"],
+                },
+                {
+                    label: "Gia Coach",
+                    icon: Bot,
+                    href: "/gia-coach",
+                    roles: ["end user", "content creator", "approver"],
+                },
+                {
+                    label: "Learning Paths",
+                    icon: Layers,
+                    href: "/learning-paths",
+                    roles: [],
+                },
+                {
+                    label: "Certificates",
+                    icon: Award,
+                    href: "/certificates",
+                    roles: [],
+                },
+            ],
         },
         {
-            label: "My Learning",
-            icon: GraduationCap,
-            href: "/lesson-player",
-            roles: ["end user", "content creator", "approver"],
+            label: "Discover",
+            items: [
+                {
+                    label: "Catalog",
+                    icon: Library,
+                    href: "/content-repository",
+                    roles: [],
+                },
+            ],
         },
         {
-            label: "Adaptive Room",
-            icon: Brain,
-            href: "/adaptive-room",
-            roles: ["end user", "content creator", "approver"],
+            label: "Create",
+            items: [
+                {
+                    label: "Content Studio",
+                    icon: PenTool,
+                    href: "/content-studio",
+                    roles: ["content creator"],
+                },
+                {
+                    label: "AI Generator",
+                    icon: Sparkles,
+                    href: "/ai-content-generator",
+                    roles: ["content creator"],
+                },
+                {
+                    label: "Course Builder",
+                    icon: Wand2,
+                    href: "/course-builder",
+                    roles: ["content creator"],
+                },
+                {
+                    label: "Path Mgmt",
+                    icon: Layers,
+                    href: "/learning-path-management",
+                    roles: ["admin", "manager", "content creator"],
+                },
+                {
+                    label: "Review Queue",
+                    icon: ClipboardCheck,
+                    href: "/review-queue",
+                    roles: ["approver"],
+                },
+            ],
         },
         {
-            label: "Gia Coach",
-            icon: Bot,
-            href: "/gia-coach",
-            roles: ["end user", "content creator", "approver"],
-        },
-        {
-            label: "Catalog",
-            icon: Library,
-            href: "/content-repository",
-            roles: [] as string[],
-        },
-        {
-            label: "Content Studio",
-            icon: PenTool,
-            href: "/content-studio",
-            roles: ["content creator"],
-        },
-        {
-            label: "AI Generator",
-            icon: Sparkles,
-            href: "/ai-content-generator",
-            roles: ["content creator"],
-        },
-        {
-            label: "Review Queue",
-            icon: ClipboardCheck,
-            href: "/review-queue",
-            roles: ["approver"],
-        },
-        {
-            label: "Reports",
-            icon: BarChart3,
-            href: "/analytics",
-            roles: ["admin", "manager", "auditor"],
-        },
-        {
-            label: "Team",
-            icon: Users,
-            href: "/user-management",
-            roles: ["admin"],
-        },
-        {
-            label: "Learning Paths",
-            icon: Layers,
-            href: "/learning-paths",
-            roles: [] as string[],
-        },
-        {
-            label: "Path Mgmt",
-            icon: Layers,
-            href: "/learning-path-management",
-            roles: ["admin", "manager", "content creator"],
-        },
-        {
-            label: "Departments",
-            icon: Building2,
-            href: "/department-management",
-            roles: ["admin", "manager"],
-        },
-        {
-            label: "Audit Log",
-            icon: ClipboardList,
-            href: "/audit-log",
-            roles: ["admin", "auditor"],
-        },
-        {
-            label: "Certificates",
-            icon: Award,
-            href: "/certificates",
-            roles: [] as string[],
+            label: "Operate",
+            items: [
+                {
+                    label: "Reports",
+                    icon: BarChart3,
+                    href: "/analytics",
+                    roles: ["admin", "manager", "auditor"],
+                },
+                {
+                    label: "Team",
+                    icon: Users,
+                    href: "/user-management",
+                    roles: ["admin"],
+                },
+                {
+                    label: "Departments",
+                    icon: Building2,
+                    href: "/department-management",
+                    roles: ["admin", "manager"],
+                },
+                {
+                    label: "Audit Log",
+                    icon: ClipboardList,
+                    href: "/audit-log",
+                    roles: ["admin", "auditor"],
+                },
+            ],
         },
     ];
-    let nav = $derived(
-        allNav.filter((t) => t.roles.length === 0 || hasRole(...t.roles)),
+
+    let visibleGroups = $derived(
+        navGroups
+            .map((g) => ({
+                label: g.label,
+                items: g.items.filter(
+                    (i) => i.roles.length === 0 || hasRole(...i.roles),
+                ),
+            }))
+            .filter((g) => g.items.length > 0),
     );
+
+    // Flat list retained for the command palette + mobile fallback.
+    let flatNav = $derived(visibleGroups.flatMap((g) => g.items));
     let commandItems = $derived([
-        ...nav.map((item) => ({
+        ...flatNav.map((item) => ({
             label: item.label,
             href: item.href,
             description: "Navigate",
@@ -213,6 +262,23 @@
             notifications = notifications.map((n: any) =>
                 n.id === id ? { ...n, is_read: true } : n,
             );
+        } catch {
+            /* ignore */
+        }
+    }
+    async function markAllRead() {
+        try {
+            const res = await fetch(`/api/notifications/read-all`, {
+                method: "PUT",
+                credentials: "include",
+            });
+            if (res.ok) {
+                unreadCount = 0;
+                notifications = notifications.map((n: any) => ({
+                    ...n,
+                    is_read: true,
+                }));
+            }
         } catch {
             /* ignore */
         }
@@ -317,24 +383,49 @@
 
             <!-- nav -->
             <nav
-                class="relative z-10 flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-0.5"
+                class="sidebar-nav relative z-10 flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1"
+                aria-label="Primary"
             >
-                {#each nav as item}
-                    {@const active = isActive(item.href)}
-                    <button
-                        onclick={() => navTo(item.href)}
-                        class="group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all press {active
-                            ? 'bg-accent text-accent-foreground shadow-glow'
-                            : 'text-primary-foreground/70 hover:bg-primary-foreground/10 hover:text-primary-foreground'}"
-                    >
-                        {#if active}
-                            <span
-                                class="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-accent-foreground/40"
-                            ></span>
-                        {/if}
-                        <item.icon class="size-4 shrink-0" />
-                        <span class="truncate">{item.label}</span>
-                    </button>
+                {#each visibleGroups as group, gi (group.label)}
+                    <div class="flex flex-col gap-0.5" class:mt-3={gi > 0}>
+                        <span
+                            class="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground/45"
+                            id={"nav-group-" + group.label.toLowerCase()}
+                        >
+                            {group.label}
+                        </span>
+                        <ul
+                            class="flex flex-col gap-0.5"
+                            role="list"
+                            aria-labelledby={"nav-group-" +
+                                group.label.toLowerCase()}
+                        >
+                            {#each group.items as item (item.href)}
+                                {@const active = isActive(item.href)}
+                                <li>
+                                    <button
+                                        onclick={() => navTo(item.href)}
+                                        aria-current={active
+                                            ? "page"
+                                            : undefined}
+                                        class="group relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-all press {active
+                                            ? 'bg-accent text-accent-foreground shadow-glow'
+                                            : 'text-primary-foreground/75 hover:bg-primary-foreground/10 hover:text-primary-foreground'}"
+                                    >
+                                        {#if active}
+                                            <span
+                                                class="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-accent-foreground/40"
+                                            ></span>
+                                        {/if}
+                                        <item.icon class="size-4 shrink-0" />
+                                        <span class="truncate">
+                                            {item.label}
+                                        </span>
+                                    </button>
+                                </li>
+                            {/each}
+                        </ul>
+                    </div>
                 {/each}
             </nav>
 
@@ -344,9 +435,9 @@
             >
                 <button
                     class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-primary-foreground/70 hover:bg-primary-foreground/10 hover:text-primary-foreground transition-colors press"
-                    onclick={() => goto("/content-repository")}
+                    onclick={() => goto("/help")}
                 >
-                    <LifeBuoy class="size-4" /> Help Center
+                    <LifeBuoy class="size-4" /> Help &amp; support
                 </button>
                 <button
                     class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-primary-foreground/70 hover:bg-primary-foreground/10 hover:text-primary-foreground transition-colors press"
@@ -389,30 +480,48 @@
                 <Menu class="size-5" />
             </button>
 
-            <!-- search -->
+            <!-- search — live input. Typing straight in opens the palette
+                 with the query pre-seeded; clicking opens with empty state.
+                 Ctrl/Cmd K still works from anywhere via the global listener. -->
             <div class="relative flex-1 max-w-md">
                 <Search
                     class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 />
-                <button
-                    type="button"
-                    class="h-9 w-full rounded-full border border-border bg-card pl-9 pr-14 text-left text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
-                    aria-label="Open search"
-                    onclick={() => (commandOpen = true)}
-                >
-                    Search courses, skills, topics…
-                </button>
+                <input
+                    type="search"
+                    inputmode="search"
+                    autocomplete="off"
+                    spellcheck="false"
+                    value={headerQuery}
+                    placeholder="Search courses, documents, people…"
+                    aria-label="Search FGB Academy"
+                    class="h-9 w-full rounded-full border border-border-strong bg-card pl-9 pr-14 text-sm text-foreground placeholder:text-muted-foreground outline-none transition-colors hover:border-primary/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                    onfocus={() => (commandOpen = true)}
+                    onkeydown={(e) => {
+                        if (e.key === "Enter" || /^[a-zA-Z0-9]$/.test(e.key)) {
+                            if (e.key.length === 1) headerQuery = e.key;
+                            commandOpen = true;
+                        }
+                    }}
+                    oninput={(e) => {
+                        headerQuery = (e.currentTarget as HTMLInputElement).value;
+                        commandOpen = true;
+                    }}
+                />
                 <kbd
-                    class="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:block"
+                    class="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-border-strong bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:block"
                 >
                     Ctrl K
                 </kbd>
             </div>
 
             <div class="ml-auto flex items-center gap-2 md:gap-3">
-                <!-- XP -->
-                <div
-                    class="hidden sm:flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent-soft px-3 py-1.5"
+                <!-- XP (compact on mobile, full pill on ≥sm) -->
+                <button
+                    type="button"
+                    onclick={() => goto("/settings")}
+                    aria-label={`${xpPoints.toLocaleString()} XP earned`}
+                    class="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent-soft px-2 py-1 sm:px-3 sm:py-1.5 press hover:border-accent/60 transition-colors"
                 >
                     <Trophy class="size-3.5 text-accent-foreground" />
                     <span
@@ -420,23 +529,26 @@
                         >{xpPoints.toLocaleString()}</span
                     >
                     <span
-                        class="text-[10px] uppercase tracking-wider text-accent-foreground/70"
+                        class="hidden sm:inline text-[10px] uppercase tracking-wider text-accent-foreground/70"
                         >XP</span
                     >
-                </div>
-                <!-- streak -->
-                <div
-                    class="hidden sm:flex items-center gap-1.5 rounded-full border border-streak/30 bg-streak/10 px-3 py-1.5"
+                </button>
+                <!-- streak (compact on mobile, full pill on ≥sm) -->
+                <button
+                    type="button"
+                    onclick={() => goto("/")}
+                    aria-label={`${streakDays} day learning streak`}
+                    class="flex items-center gap-1.5 rounded-full border border-streak/30 bg-streak/10 px-2 py-1 sm:px-3 sm:py-1.5 press hover:border-streak/60 transition-colors"
                 >
                     <Flame class="size-3.5 text-streak fill-streak/40" />
                     <span class="text-xs font-bold text-streak tabular"
                         >{streakDays}</span
                     >
                     <span
-                        class="text-[10px] uppercase tracking-wider text-streak/80"
+                        class="hidden sm:inline text-[10px] uppercase tracking-wider text-streak/80"
                         >day</span
                     >
-                </div>
+                </button>
 
                 <!-- notifications -->
                 <DropdownMenu.Root
@@ -466,10 +578,33 @@
                         {/snippet}
                     </DropdownMenu.Trigger>
                     <DropdownMenu.Content class="w-80" align="end">
-                        <div class="px-3 py-2 border-b border-border">
+                        <div
+                            class="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-strong"
+                        >
                             <span class="text-sm font-semibold text-foreground"
                                 >Notifications</span
                             >
+                            <div class="flex items-center gap-1">
+                                {#if unreadCount > 0}
+                                    <button
+                                        type="button"
+                                        class="text-[11px] font-medium text-primary hover:underline"
+                                        onclick={markAllRead}
+                                    >
+                                        Mark all read
+                                    </button>
+                                {/if}
+                                <button
+                                    type="button"
+                                    class="text-[11px] font-medium text-muted-foreground hover:text-foreground hover:underline"
+                                    onclick={() => {
+                                        notifOpen = false;
+                                        goto("/notifications");
+                                    }}
+                                >
+                                    View all
+                                </button>
+                            </div>
                         </div>
                         <div class="max-h-72 overflow-y-auto">
                             {#if notifLoading}
@@ -546,16 +681,45 @@
         </header>
 
         <!-- content -->
-        <main class="flex flex-1 p-4 md:p-6">
+        <main class="flex flex-1 p-4 pb-24 md:p-6 lg:pb-6">
             {@render children()}
         </main>
     </div>
 </div>
 
+<MobileDock />
+
 <CommandPalette
     open={commandOpen}
     items={commandItems}
-    onOpenChange={(open) => (commandOpen = open)}
+    initialQuery={headerQuery}
+    onOpenChange={(open) => {
+        commandOpen = open;
+        if (!open) headerQuery = "";
+    }}
 />
 
 <ToastViewport />
+
+<style>
+    /* Sidebar scrollbar — kept flush inside the dark navy card so the gutter
+       never bleeds out into the pale surface-2 background. Thin, brand-tinted,
+       auto-appears only when the nav overflows the viewport. */
+    :global(.sidebar-nav) {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+    }
+    :global(.sidebar-nav::-webkit-scrollbar) {
+        width: 6px;
+    }
+    :global(.sidebar-nav::-webkit-scrollbar-track) {
+        background: transparent;
+    }
+    :global(.sidebar-nav::-webkit-scrollbar-thumb) {
+        background-color: rgba(255, 255, 255, 0.18);
+        border-radius: 9999px;
+    }
+    :global(.sidebar-nav:hover::-webkit-scrollbar-thumb) {
+        background-color: rgba(255, 255, 255, 0.28);
+    }
+</style>

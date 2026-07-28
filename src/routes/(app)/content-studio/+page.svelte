@@ -82,8 +82,10 @@
             return;
         }
 
-        if (!file.name.toLowerCase().endsWith(".pdf")) {
-            uploadError = "Only PDF files are supported.";
+        const ACCEPTED = [".pdf", ".txt", ".md"];
+        const lower = file.name.toLowerCase();
+        if (!ACCEPTED.some((ext) => lower.endsWith(ext))) {
+            uploadError = "Accepts PDF, TXT, or Markdown files.";
             uploadStatus = "error";
             return;
         }
@@ -310,13 +312,18 @@
                                     class="size-6 text-muted-foreground mb-1.5"
                                 />
                                 <p class="text-xs text-muted-foreground mb-2">
-                                    Drag & drop or click to browse
+                                    Drag &amp; drop or click to browse
+                                </p>
+                                <p
+                                    class="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-2"
+                                >
+                                    PDF · TXT · Markdown
                                 </p>
                                 <input
                                     id="file-upload"
                                     type="file"
                                     name="file"
-                                    accept=".pdf"
+                                    accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
                                     class="block w-full text-xs text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
                                 />
                             </div>

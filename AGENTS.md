@@ -2,7 +2,7 @@
 
 ## Dev environment tips
 - The whole stack runs with a single `docker compose up`. The frontend (SvelteKit/Vite) and backend (Go/Air) both watch for file changes and reload automatically.
-- Frontend runs on `http://localhost:5173`, backend on `http://localhost:5555`, and the database on port `5440`.
+- Host ports (see `compose.yaml`): frontend `http://localhost:3039`, backend `http://localhost:5556`, database `localhost:5441`, embeddings `http://localhost:7101`. Inside the containers these are the standard ports (5173, 5555, 5432, 7100).
 - Source mounts in `compose.yaml` keep `./src`, `./static`, `./vite.config.ts`, and `./backend` synced so hot-reload works out of the box.
 - The database schema in `./backend/database/schema.sql` is applied automatically on first start via the Docker entrypoint.
 

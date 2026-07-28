@@ -140,6 +140,20 @@ create table if not exists modules (
   title text not null,
   description text not null default '',
   sort_order int not null default 0,
+  -- Per-module generation status for the staged course builder.
+  -- pending = outline-only, no content/items yet
+  -- generating = a module-generation job is currently running
+  -- ready = content + items have been generated
+  -- failed = the last generation attempt failed
+  status text not null default 'pending'
+    check (status in ('pending', 'generating', 'ready', 'failed')),
+  -- Per-module question type allowlist (null/empty = allow all types).
+  -- Set by the user during outline review before generation.
+  question_types jsonb,
+  -- AI-reported limitations captured during generation: which requested
+  -- question types were skipped because the section material didn't fit
+  -- them, and why. Surfaced to the user as warnings after generation.
+  limitations jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -248,12 +262,20 @@ create table if not exists course_generation_jobs (
   id text primary key,
   status text not null default 'pending'
     check (status in ('pending', 'running', 'completed', 'failed')),
+  -- Which stage of the staged builder this job represents:
+  -- full = legacy one-shot (outline + all modules)
+  -- outline = outline only, stops after module rows are created
+  -- module = single module content/items generation
+  stage text not null default 'full'
+    check (stage in ('full', 'outline', 'module')),
   request jsonb not null,
   steps jsonb not null default '[]',
   modules jsonb not null default '[]',
   result jsonb,
   error text,
   course_id bigint references courses(id) on delete set null,
+  -- For stage='module' jobs, which module row this job is filling in.
+  module_id bigint references modules(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

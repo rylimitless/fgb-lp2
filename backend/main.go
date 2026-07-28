@@ -269,6 +269,22 @@ func runMigrations(dbpool *pgxpool.Pool) {
 	migrations := []string{
 		// Certificates and badges migrations are in scripts/01_certificates_badges_v1.sql
 		// (run manually or via docker-entrypoint-initdb.d)
+
+		// Staged course builder: track per-module generation status separately
+		// from the course's overall draft/published status. Allows modules to
+		// be generated one at a time after the outline is approved.
+		`alter table modules add column if not exists status text not null default 'pending'
+			check (status in ('pending', 'generating', 'ready', 'failed'))`,
+
+		// Per-module question type allowlist + AI-reported limitations.
+		`alter table modules add column if not exists question_types jsonb`,
+		`alter table modules add column if not exists limitations jsonb`,
+
+		// Staged course builder: distinguish one-shot 'full' jobs from 'outline'
+		// and per-module jobs, and remember which module a module-stage job owns.
+		`alter table course_generation_jobs add column if not exists stage text not null default 'full'
+			check (stage in ('full', 'outline', 'module'))`,
+		`alter table course_generation_jobs add column if not exists module_id bigint references modules(id) on delete set null`,
 	}
 
 	for _, m := range migrations {

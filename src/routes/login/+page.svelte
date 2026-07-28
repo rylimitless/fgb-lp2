@@ -6,6 +6,7 @@
     import BrandLogo from "$lib/components/brand/BrandLogo.svelte";
     import AnimatedGradient from "$lib/components/brand/AnimatedGradient.svelte";
     import Spotlight from "$lib/components/brand/Spotlight.svelte";
+    import ShimmerButton from "$lib/components/brand/ShimmerButton.svelte";
 
     let email = $state("");
     let password = $state("");
@@ -245,11 +246,10 @@
                     </p>
                 {/if}
 
-                <!-- Submit -->
-                <Button.Root
+                <!-- Submit — celebration CTA, use shimmer treatment -->
+                <ShimmerButton
                     type="submit"
-                    size="lg"
-                    class="w-full"
+                    class="w-full h-10"
                     disabled={loading}
                 >
                     {#if loading}
@@ -260,7 +260,7 @@
                         <LogIn class="size-4" />
                     {/if}
                     {loading ? "Signing in…" : "Sign in"}
-                </Button.Root>
+                </ShimmerButton>
             </form>
 
             <p

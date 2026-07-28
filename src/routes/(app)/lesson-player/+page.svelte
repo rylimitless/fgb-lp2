@@ -23,6 +23,7 @@
         Settings,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import { Dialog as DialogPrimitive } from "bits-ui";
     import {
         AnswerFeedback,
         BadgeMedal,
@@ -39,6 +40,7 @@
         QuestionMatching,
         QuestionOrdering,
         QuestionHotspot,
+        ScrollProgress,
     } from "$lib/components/brand";
 
     let { data } = $props();
@@ -46,6 +48,7 @@
     let isContentCreator = $derived(
         userRoles.includes("content creator") || userRoles.includes("admin"),
     );
+    let userName: string = $derived((data as any)?.user?.name ?? "");
 
     let courses = $state<any[]>([]);
     let loading = $state(true);
@@ -573,42 +576,72 @@
     });
 </script>
 
-{#if skipConfirmOpen}
-    <!-- Skip Confirmation Dialog -->
-    <div
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-    >
-        <div
-            class="rounded-xl border border-border bg-card p-6 max-w-md w-full mx-4 shadow-xl"
+<!-- Skip Confirmation Dialog.
+     Uses bits-ui Dialog primitive so we get:
+     - role="dialog" + aria-modal="true"
+     - focus trap while open, focus restore on close
+     - Escape-to-close and click-scrim-to-close
+     - Portal + overlay + close-on-outside-click semantics
+     Closes ACCESSIBILITY.md open item B. -->
+<DialogPrimitive.Root
+    bind:open={skipConfirmOpen}
+    onOpenChange={(open) => {
+        if (!open) cancelSkip();
+    }}
+>
+    <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay
+            class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+        />
+        <DialogPrimitive.Content
+            class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border-strong bg-card p-6 shadow-lg outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
         >
             <div class="flex items-start gap-3 mb-4">
-                <AlertTriangle class="size-5 text-warning shrink-0 mt-0.5" />
-                <div>
-                    <h3 class="text-sm font-semibold text-foreground">
-                        Unanswered Questions
-                    </h3>
-                    <p class="text-sm text-muted-foreground mt-1">
+                <span
+                    class="flex size-9 items-center justify-center rounded-full bg-warning/10 text-warning shrink-0"
+                    aria-hidden="true"
+                >
+                    <AlertTriangle class="size-4" />
+                </span>
+                <div class="min-w-0">
+                    <DialogPrimitive.Title
+                        class="text-sm font-semibold text-foreground"
+                    >
+                        Unanswered questions
+                    </DialogPrimitive.Title>
+                    <DialogPrimitive.Description
+                        class="text-sm text-muted-foreground mt-1 leading-relaxed"
+                    >
                         You have {unansweredCount(
                             enrolledCourse?.modules?.[currentModuleIdx],
                         )} unanswered question{unansweredCount(
                             enrolledCourse?.modules?.[currentModuleIdx],
                         ) !== 1
                             ? "s"
-                            : ""} in this module. Are you sure you want to skip them?
-                    </p>
+                            : ""} in this module. Skip them and continue?
+                    </DialogPrimitive.Description>
                 </div>
             </div>
             <div class="flex justify-end gap-3">
-                <Button.Root variant="outline" size="sm" onclick={cancelSkip}>
-                    Go Back
-                </Button.Root>
+                <DialogPrimitive.Close>
+                    {#snippet child({ props })}
+                        <Button.Root
+                            {...props}
+                            variant="outline"
+                            size="sm"
+                            onclick={cancelSkip}
+                        >
+                            Go back
+                        </Button.Root>
+                    {/snippet}
+                </DialogPrimitive.Close>
                 <Button.Root size="sm" onclick={confirmSkip}>
-                    Skip & Continue
+                    Skip &amp; continue
                 </Button.Root>
             </div>
-        </div>
-    </div>
-{/if}
+        </DialogPrimitive.Content>
+    </DialogPrimitive.Portal>
+</DialogPrimitive.Root>
 
 <!-- Course List -->
 {#if !enrolledCourse}
@@ -913,15 +946,32 @@
                 <p class="text-[11px] text-primary-foreground/60">
                     Your progress has been saved.
                 </p>
-                <!-- Print-only certificate footer; hidden in screen view -->
-                <p
-                    class="print-only text-[10px] text-primary-foreground/60 mt-2 tabular"
+                <!-- Print-only certificate footer; hidden in screen view.
+                     Includes the learner's name so a printed page is a valid
+                     personal record, not an anonymous artifact. Closes
+                     ACCESSIBILITY.md open item F. -->
+                <div
+                    class="print-only mt-4 flex flex-col items-center gap-1 text-primary-foreground/80"
                 >
-                    Issued by FGB Academy · {new Date().toLocaleDateString(
-                        undefined,
-                        { year: "numeric", month: "long", day: "numeric" },
-                    )}
-                </p>
+                    {#if userName}
+                        <p class="text-[10px] uppercase tracking-[0.16em]">
+                            Awarded to
+                        </p>
+                        <p class="text-sm font-semibold tabular">
+                            {userName}
+                        </p>
+                    {/if}
+                    <p class="text-[10px] tabular mt-1">
+                        {enrolledCourse.title} · Issued by FGB Academy · {new Date().toLocaleDateString(
+                            undefined,
+                            {
+                                year: "numeric",
+                                month: "long",
+                                day: "numeric",
+                            },
+                        )}
+                    </p>
+                </div>
             </div>
         </section>
 
@@ -956,6 +1006,11 @@
         </div>
     </div>
 {:else}
+    <!-- Reading progress bar — helps learners gauge how much of a long module
+         is still ahead of them. Not shown when the "blocked" state renders. -->
+    {#if !enrolledCourse.blocked}
+        <ScrollProgress />
+    {/if}
     <div class="flex w-full max-w-6xl mx-auto flex-col gap-4">
         {#if enrolledCourse.blocked}
             <div
@@ -1103,11 +1158,13 @@
                 >
                     <ChevronLeft class="size-3.5" /> All courses
                 </button>
-                <div
+                <nav
                     class="rounded-2xl border border-border bg-card p-3 flex flex-col gap-1"
+                    aria-label="Modules"
                 >
                     <h3
                         class="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-2 pt-1 pb-2"
+                        id="lesson-modules-heading"
                     >
                         Modules
                     </h3>
@@ -1116,59 +1173,72 @@
                     >
                         {enrolledCourse.title}
                     </p>
-                    {#each enrolledCourse.modules as mod, mi}
-                        {@const mp = moduleProgress(mod)}
-                        {@const isLast =
-                            mi === enrolledCourse.modules.length - 1}
-                        {@const isCurrent = mi === currentModuleIdx}
-                        <button
-                            class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors {isCurrent
-                                ? 'bg-primary/10 text-foreground font-medium'
-                                : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-                            onclick={() => (currentModuleIdx = mi)}
-                        >
-                            {#if mp.pct === 100 && isLast}
-                                <span class="shrink-0" aria-hidden="true">
-                                    <BadgeMedal tier="gold" size={24} />
-                                </span>
-                            {:else if mp.total > 0}
-                                <span class="shrink-0" aria-hidden="true">
-                                    <XpRing
-                                        value={mp.pct}
-                                        size={24}
-                                        stroke={3}
-                                        ring={mp.pct === 100
-                                            ? "success"
-                                            : "primary"}
-                                    >
-                                        {#snippet center()}
-                                            {#if mp.pct === 100}
-                                                <CheckCircle
-                                                    class="size-3 text-success"
-                                                />
-                                            {:else}
-                                                <span
-                                                    class="text-[9px] font-bold tabular text-muted-foreground"
-                                                >
-                                                    {mi + 1}
-                                                </span>
-                                            {/if}
-                                        {/snippet}
-                                    </XpRing>
-                                </span>
-                            {:else}
-                                <span
-                                    class="size-6 rounded-full border border-border flex items-center justify-center shrink-0 text-[10px] font-bold {isCurrent
-                                        ? 'border-primary text-primary'
-                                        : 'text-muted-foreground'}"
+                    <ul
+                        class="flex flex-col gap-1"
+                        role="list"
+                        aria-labelledby="lesson-modules-heading"
+                    >
+                        {#each enrolledCourse.modules as mod, mi}
+                            {@const mp = moduleProgress(mod)}
+                            {@const isLast =
+                                mi === enrolledCourse.modules.length - 1}
+                            {@const isCurrent = mi === currentModuleIdx}
+                            <li>
+                                <button
+                                    class="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors {isCurrent
+                                        ? 'bg-primary/10 text-foreground font-medium'
+                                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+                                    aria-current={isCurrent
+                                        ? "step"
+                                        : undefined}
+                                    onclick={() => (currentModuleIdx = mi)}
                                 >
-                                    {mi + 1}
-                                </span>
-                            {/if}
-                            <span class="truncate text-xs">{mod.title}</span>
-                        </button>
-                    {/each}
-                </div>
+                                    {#if mp.pct === 100 && isLast}
+                                        <span class="shrink-0" aria-hidden="true">
+                                            <BadgeMedal tier="gold" size={24} />
+                                        </span>
+                                    {:else if mp.total > 0}
+                                        <span class="shrink-0" aria-hidden="true">
+                                            <XpRing
+                                                value={mp.pct}
+                                                size={24}
+                                                stroke={3}
+                                                ring={mp.pct === 100
+                                                    ? "success"
+                                                    : "primary"}
+                                            >
+                                                {#snippet center()}
+                                                    {#if mp.pct === 100}
+                                                        <CheckCircle
+                                                            class="size-3 text-success"
+                                                        />
+                                                    {:else}
+                                                        <span
+                                                            class="text-[9px] font-bold tabular text-muted-foreground"
+                                                        >
+                                                            {mi + 1}
+                                                        </span>
+                                                    {/if}
+                                                {/snippet}
+                                            </XpRing>
+                                        </span>
+                                    {:else}
+                                        <span
+                                            class="size-6 rounded-full border border-border-strong flex items-center justify-center shrink-0 text-[10px] font-bold {isCurrent
+                                                ? 'border-primary text-primary'
+                                                : 'text-muted-foreground'}"
+                                        >
+                                            {mi + 1}
+                                        </span>
+                                    {/if}
+                                    <span class="truncate text-xs"
+                                        >{mod.title}</span
+                                    >
+                                </button>
+                            </li>
+                        {/each}
+                    </ul>
+                </nav>
             </aside>
 
             <!-- Main Content -->

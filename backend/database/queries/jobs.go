@@ -9,20 +9,25 @@ import (
 type GenerationJobRow struct {
 	ID        string
 	Status    string
+	Stage     string
 	Request   json.RawMessage
 	Steps     json.RawMessage
 	Modules   json.RawMessage
 	Result    json.RawMessage
 	Error     string
 	CourseID  *int64
+	ModuleID  *int64
 	CreatedAt string // timestamptz returned as string by pgx
 }
 
 // CreateGenerationJob inserts a new pending job.
-func (q *Queries) CreateGenerationJob(ctx context.Context, id string, request []byte) error {
+// stage controls which pipeline runs: 'full' (one-shot), 'outline', or 'module'.
+// moduleID is only used for 'module'-stage jobs.
+func (q *Queries) CreateGenerationJob(ctx context.Context, id, stage string, request []byte, moduleID *int64) error {
 	_, err := q.db.Exec(ctx,
-		`INSERT INTO course_generation_jobs (id, status, request) VALUES ($1, 'pending', $2)`,
-		id, request,
+		`INSERT INTO course_generation_jobs (id, status, stage, request, module_id)
+		 VALUES ($1, 'pending', $2, $3, $4)`,
+		id, stage, request, moduleID,
 	)
 	return err
 }
@@ -45,10 +50,15 @@ func (q *Queries) UpdateGenerationJobProgress(ctx context.Context, id string, st
 	return err
 }
 
-// CompleteGenerationJob marks a job as completed with the result and course ID.
+// CompleteGenerationJob marks a job as completed with the result.
+// courseID is required for 'full' and 'outline' jobs (the course being
+// created/owned); for 'module' jobs it should be the course the module
+// belongs to, so the job row stays linked to the right course.
 func (q *Queries) CompleteGenerationJob(ctx context.Context, id string, result []byte, courseID int64) error {
 	_, err := q.db.Exec(ctx,
-		`UPDATE course_generation_jobs SET status = 'completed', result = $3, course_id = $4, updated_at = now() WHERE id = $1 AND status = 'running'`,
+		`UPDATE course_generation_jobs
+		   SET status = 'completed', result = $3, course_id = $4, updated_at = now()
+		 WHERE id = $1 AND status = 'running'`,
 		id, result, courseID,
 	)
 	return err
@@ -66,11 +76,13 @@ func (q *Queries) FailGenerationJob(ctx context.Context, id string, errMsg strin
 // GetGenerationJob fetches a single job by ID.
 func (q *Queries) GetGenerationJob(ctx context.Context, id string) (*GenerationJobRow, error) {
 	row := q.db.QueryRow(ctx,
-		`SELECT id, status, request, steps, modules, result, COALESCE(error, ''), course_id, created_at::text FROM course_generation_jobs WHERE id = $1`,
+		`SELECT id, status, stage, request, steps, modules, result,
+		        COALESCE(error, ''), course_id, module_id, created_at::text
+		 FROM course_generation_jobs WHERE id = $1`,
 		id,
 	)
 	var j GenerationJobRow
-	err := row.Scan(&j.ID, &j.Status, &j.Request, &j.Steps, &j.Modules, &j.Result, &j.Error, &j.CourseID, &j.CreatedAt)
+	err := row.Scan(&j.ID, &j.Status, &j.Stage, &j.Request, &j.Steps, &j.Modules, &j.Result, &j.Error, &j.CourseID, &j.ModuleID, &j.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +92,9 @@ func (q *Queries) GetGenerationJob(ctx context.Context, id string) (*GenerationJ
 // ListActiveGenerationJobs returns jobs that are pending or running.
 func (q *Queries) ListActiveGenerationJobs(ctx context.Context) ([]*GenerationJobRow, error) {
 	rows, err := q.db.Query(ctx,
-		`SELECT id, status, request, steps, modules, COALESCE(result::text, 'null')::jsonb, COALESCE(error, ''), course_id, created_at::text FROM course_generation_jobs WHERE status IN ('pending', 'running') ORDER BY created_at ASC`,
+		`SELECT id, status, stage, request, steps, modules,
+		        COALESCE(result::text, 'null')::jsonb, COALESCE(error, ''), course_id, module_id, created_at::text
+		 FROM course_generation_jobs WHERE status IN ('pending', 'running') ORDER BY created_at ASC`,
 	)
 	if err != nil {
 		return nil, err
@@ -90,7 +104,7 @@ func (q *Queries) ListActiveGenerationJobs(ctx context.Context) ([]*GenerationJo
 	var jobs []*GenerationJobRow
 	for rows.Next() {
 		var j GenerationJobRow
-		if err := rows.Scan(&j.ID, &j.Status, &j.Request, &j.Steps, &j.Modules, &j.Result, &j.Error, &j.CourseID, &j.CreatedAt); err != nil {
+		if err := rows.Scan(&j.ID, &j.Status, &j.Stage, &j.Request, &j.Steps, &j.Modules, &j.Result, &j.Error, &j.CourseID, &j.ModuleID, &j.CreatedAt); err != nil {
 			return nil, err
 		}
 		jobs = append(jobs, &j)

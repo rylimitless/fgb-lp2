@@ -459,8 +459,35 @@
         <div class="rounded-2xl border border-border bg-card p-5 lift">
             {#if mostFailed.length > 0}
                 <div class="h-80">
-                    <canvas bind:this={failedCanvas}></canvas>
+                    <canvas
+                        bind:this={failedCanvas}
+                        role="img"
+                        aria-label="Most challenging topics — stacked bar chart of wrong vs correct responses"
+                    ></canvas>
                 </div>
+                <!-- Screen-reader twin: exposes the chart data as a semantic
+                     table. Same numbers Chart.js renders on the canvas. -->
+                <table class="sr-only" aria-label="Most challenging topics">
+                    <caption>
+                        Wrong and correct response counts by topic
+                    </caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Topic</th>
+                            <th scope="col">Wrong</th>
+                            <th scope="col">Correct</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each mostFailed as f}
+                            <tr>
+                                <th scope="row">{f.topic ?? "Untitled"}</th>
+                                <td>{f.total_wrong ?? 0}</td>
+                                <td>{f.total_correct ?? 0}</td>
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
             {:else}
                 <div class="flex items-center justify-center h-80">
                     <p class="text-sm text-muted-foreground">
@@ -473,8 +500,42 @@
         <div class="rounded-2xl border border-border bg-card p-5 lift">
             {#if courseEffectiveness.length > 0}
                 <div class="h-80">
-                    <canvas bind:this={effectivenessCanvas}></canvas>
+                    <canvas
+                        bind:this={effectivenessCanvas}
+                        role="img"
+                        aria-label="Content effectiveness — average score and learner count per course"
+                    ></canvas>
                 </div>
+                <table
+                    class="sr-only"
+                    aria-label="Content effectiveness by course"
+                >
+                    <caption>
+                        Average score and learner count per course
+                    </caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Course</th>
+                            <th scope="col">Average score %</th>
+                            <th scope="col">Learners</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each courseEffectiveness as c}
+                            <tr>
+                                <th scope="row"
+                                    >{c.course_title ?? "Untitled"}</th
+                                >
+                                <td
+                                    >{typeof c.avg_score === "string"
+                                        ? parseFloat(c.avg_score)
+                                        : (c.avg_score ?? 0)}</td
+                                >
+                                <td>{c.learner_count ?? 0}</td>
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
             {:else}
                 <div class="flex items-center justify-center h-80">
                     <p class="text-sm text-muted-foreground">
@@ -504,8 +565,34 @@
         <div class="rounded-2xl border border-border bg-card p-5 lift">
             {#if coachUsage.length > 0}
                 <div class="h-80">
-                    <canvas bind:this={usageCanvas}></canvas>
+                    <canvas
+                        bind:this={usageCanvas}
+                        role="img"
+                        aria-label="Gia coach usage over time — daily query volume"
+                    ></canvas>
                 </div>
+                <table
+                    class="sr-only"
+                    aria-label="Gia coach usage over time"
+                >
+                    <caption>Daily Gia coach query volume</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Date</th>
+                            <th scope="col">Queries</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each coachUsage as u}
+                            <tr>
+                                <th scope="row"
+                                    >{u.day ?? u.date ?? "—"}</th
+                                >
+                                <td>{u.count ?? u.queries ?? 0}</td>
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
             {:else}
                 <div class="flex items-center justify-center h-80">
                     <p class="text-sm text-muted-foreground">

@@ -51,6 +51,21 @@
         send();
     }
 
+    // Fallback prompt chips used when the learner opens Gia Coach with no
+    // prior conversation. They give newcomers a starting shape for questions;
+    // one-tap and Gia responds. Copy is sentence-case per gia.md §6.
+    const STARTER_PROMPTS = [
+        "Summarise the most recent approved document.",
+        "Quiz me on my current course.",
+        "Explain a tough concept from my learning path.",
+        "What should I focus on this week?",
+    ];
+
+    function askStarter(prompt: string) {
+        input = prompt;
+        send();
+    }
+
     function scrollDown() {
         requestAnimationFrame(() => {
             if (chatContainer)
@@ -169,6 +184,22 @@
                             answer with citations.
                         </p>
                     </div>
+
+                    <!-- Starter prompt chips — give newcomers a first push -->
+                    <div
+                        class="flex flex-wrap justify-center gap-2 max-w-lg mt-2"
+                    >
+                        {#each STARTER_PROMPTS as prompt}
+                            <button
+                                type="button"
+                                onclick={() => askStarter(prompt)}
+                                class="rounded-full border border-border-strong bg-card px-3 py-1.5 text-xs text-foreground hover:border-primary hover:bg-primary-soft transition-colors press"
+                            >
+                                {prompt}
+                            </button>
+                        {/each}
+                    </div>
+
                     {#if approvedDocs.length > 0}
                         <p class="text-[11px] text-muted-foreground/70 uppercase tracking-wider mt-2">
                             Or pick a document from the sidebar

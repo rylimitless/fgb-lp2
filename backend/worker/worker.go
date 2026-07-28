@@ -88,10 +88,10 @@ func (w *Worker) poll(ctx context.Context) {
 }
 
 func (w *Worker) processDocument(ctx context.Context, doc database.Document) error {
-	// Extract text from PDF
-	text, err := extractPDFText(filepath.Join(w.uploadDir, doc.FilePath))
+	// Extract text from the uploaded document (PDF, TXT, or Markdown).
+	text, err := ExtractDocumentText(filepath.Join(w.uploadDir, doc.FilePath))
 	if err != nil {
-		return fmt.Errorf("extract pdf text: %w", err)
+		return fmt.Errorf("extract document text: %w", err)
 	}
 
 	if strings.TrimSpace(text) == "" {
@@ -318,22 +318,56 @@ func CreateUploadDir(dir string) error {
 	return os.MkdirAll(dir, 0755)
 }
 
-// GenerateFilePath creates a unique filename for an uploaded PDF.
-// Returns just the filename (not the full path) — the caller joins with uploadDir.
+// SupportedExtensions lists the file extensions the ingest pipeline can parse.
+// Widening the list requires adding a corresponding branch to ExtractDocumentText.
+var SupportedExtensions = map[string]bool{
+	".pdf": true,
+	".txt": true,
+	".md":  true,
+}
+
+// IsSupportedExtension reports whether the given filename has one of the
+// supported document extensions (case-insensitive).
+func IsSupportedExtension(name string) bool {
+	return SupportedExtensions[strings.ToLower(filepath.Ext(name))]
+}
+
+// GenerateFilePath creates a unique filename for an uploaded document,
+// preserving the original extension when supported. Falls back to `.pdf` for
+// unrecognised extensions so callers that skip validation still land somewhere
+// sensible. Returns just the filename (not the full path).
 func GenerateFilePath(originalName string) string {
-	ext := filepath.Ext(originalName)
-	if !strings.EqualFold(ext, ".pdf") {
+	ext := strings.ToLower(filepath.Ext(originalName))
+	if !SupportedExtensions[ext] {
 		ext = ".pdf"
 	}
-	clean := strings.TrimSuffix(originalName, ext)
-	// Sanitize: replace spaces and special chars
+	clean := strings.TrimSuffix(originalName, filepath.Ext(originalName))
 	clean = strings.Map(func(r rune) rune {
 		if r == ' ' || r == '(' || r == ')' || r == '[' || r == ']' {
 			return '_'
 		}
 		return r
 	}, clean)
-	return fmt.Sprintf("%d_%s.pdf", time.Now().UnixNano(), clean)
+	return fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), clean, ext)
+}
+
+// ExtractDocumentText dispatches to the right extractor for the file's
+// extension. PDFs go through pdftotext with a Go-library fallback; plain text
+// and Markdown are read straight off disk.
+func ExtractDocumentText(path string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".pdf":
+		return extractPDFText(path)
+	case ".txt", ".md":
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", ext, err)
+		}
+		return string(b), nil
+	default:
+		return "", fmt.Errorf("unsupported extension: %s", ext)
+	}
 }
 
 func truncateStr(s string, max int) string {
