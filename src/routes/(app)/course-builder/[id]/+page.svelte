@@ -24,6 +24,11 @@
         Square,
         Eye,
         EyeOff,
+        Send,
+        Rocket,
+        CheckCircle2,
+        ChevronsDownUp,
+        ChevronsUpDown,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import {
@@ -76,6 +81,22 @@
     function toggleModule(id: number) {
         expandedModules[id] = !expandedModules[id];
     }
+
+    function collapseAll() {
+        expandedModules = {};
+    }
+
+    function expandAll() {
+        const all: Record<number, boolean> = {};
+        for (const m of course.modules ?? []) {
+            all[m.id] = true;
+        }
+        expandedModules = all;
+    }
+
+    let anyExpanded = $derived(
+        Object.values(expandedModules).some((v) => v),
+    );
 
     // ---- Learner preview modal ----
     // Opens a full-screen preview of a module as a learner would see it —
@@ -818,6 +839,103 @@
             (m: any) => m.status !== "ready",
         ).length,
     );
+
+    // ---- Publish gate / submit for review ----
+    // The builder can't publish directly (that's approver-only via the review
+    // queue). Instead, "Publish" = submit for review. The button is gated on
+    // every module being ready, so incomplete courses can't be submitted.
+    let allModulesReady = $derived(
+        (course.modules ?? []).length > 0 &&
+            (course.modules ?? []).every(
+                (m: any) => m.status === "ready",
+            ),
+    );
+    let submitting = $state(false);
+    let submitError = $state("");
+    let submittedForReview = $state(false);
+
+    // Check if the user can also approve (admin/approver role). If so, we
+    // offer a "Publish directly" option in addition to submit-for-review.
+    let userRoles = $derived(data?.user?.roles ?? []);
+    let canApprove = $derived(
+        userRoles.includes("admin") || userRoles.includes("approver"),
+    );
+
+    let isAlreadyPublished = $derived(
+        course.status === "published" ||
+            course.review_status === "approved",
+    );
+    let isPendingReview = $derived(course.review_status === "pending");
+
+    async function submitForReview() {
+        if (!allModulesReady || submitting) return;
+        const modCount = course.modules?.length ?? 0;
+        if (
+            !confirm(
+                `Submit "${course.title}" for review? It has ${modCount} module${modCount === 1 ? "" : "s"} and will be sent to the review queue for approval.`,
+            )
+        )
+            return;
+
+        submitting = true;
+        submitError = "";
+        try {
+            const res = await fetch(
+                `/api/content-repository/courses/${course.id}/resubmit`,
+                {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                },
+            );
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                submitError = err.error || "Failed to submit";
+                return;
+            }
+            submittedForReview = true;
+            await refresh();
+        } catch {
+            submitError = "Network error";
+        } finally {
+            submitting = false;
+        }
+    }
+
+    async function publishDirectly() {
+        if (!allModulesReady || submitting || !canApprove) return;
+        if (
+            !confirm(
+                `Publish "${course.title}" directly? It will be immediately visible to learners.`,
+            )
+        )
+            return;
+
+        submitting = true;
+        submitError = "";
+        try {
+            const res = await fetch(`/api/review/courses/${course.id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    review_status: "approved",
+                    review_notes: "Published directly from Course Builder",
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                submitError = err.error || "Failed to publish";
+                return;
+            }
+            submittedForReview = true;
+            await refresh();
+        } catch {
+            submitError = "Network error";
+        } finally {
+            submitting = false;
+        }
+    }
 </script>
 
 <div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
@@ -830,6 +948,56 @@
             <Wand2 class="size-6 text-primary" />
         {/snippet}
         {#snippet actions()}
+            {#if isAlreadyPublished}
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium text-success px-2.5 py-1.5 rounded-lg border border-success/30 bg-success/5">
+                    <CheckCircle2 class="size-3.5" />
+                    Published
+                </span>
+            {:else if isPendingReview}
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium text-info px-2.5 py-1.5 rounded-lg border border-info/30 bg-info/5">
+                    <CheckCircle2 class="size-3.5" />
+                    Pending review
+                </span>
+            {:else if submittedForReview}
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium text-info px-2.5 py-1.5 rounded-lg border border-info/30 bg-info/5">
+                    <CheckCircle2 class="size-3.5" />
+                    Submitted!
+                </span>
+            {:else}
+                {#if canApprove && allModulesReady}
+                    <Button.Root
+                        size="sm"
+                        onclick={publishDirectly}
+                        disabled={submitting}
+                        title="Publish immediately — visible to learners right away"
+                    >
+                        {#if submitting}
+                            <LoaderCircle class="size-3.5 mr-1.5 animate-spin" />
+                        {:else}
+                            <Rocket class="size-3.5 mr-1.5" />
+                        {/if}
+                        Publish directly
+                    </Button.Root>
+                {/if}
+                <Button.Root
+                    size="sm"
+                    variant={canApprove ? "outline" : "default"}
+                    onclick={submitForReview}
+                    disabled={!allModulesReady || submitting}
+                    title={
+                        !allModulesReady
+                            ? `${pendingCount} module${pendingCount === 1 ? "" : "s"} still need generation before you can submit`
+                            : "Send to the review queue for approval"
+                    }
+                >
+                    {#if submitting}
+                        <LoaderCircle class="size-3.5 mr-1.5 animate-spin" />
+                    {:else}
+                        <Send class="size-3.5 mr-1.5" />
+                    {/if}
+                    Submit for review
+                </Button.Root>
+            {/if}
             <Button.Root
                 variant="outline"
                 size="sm"
@@ -897,32 +1065,52 @@
         </div>
     {/if}
 
-    <!-- Progress summary -->
-    <div class="flex items-center gap-3 rounded-xl border border-border bg-card px-5 py-3 flex-wrap">
-        <div class="flex items-center gap-2 text-sm">
+    <!-- Sticky toolbar: stays pinned so key actions are always reachable
+         even when scrolling through 20+ modules. -->
+    <div class="sticky top-0 z-30 -mx-4 px-4 py-2.5 border-b border-border bg-background/95 backdrop-blur-sm flex items-center gap-2 flex-wrap">
+        <div class="flex items-center gap-1.5 text-sm">
             <BookOpen class="size-4 text-muted-foreground" />
-            <span class="text-muted-foreground">{course.modules?.length ?? 0} modules</span>
+            <span class="font-medium text-foreground">{course.modules?.length ?? 0}</span>
+            <span class="text-muted-foreground">modules</span>
         </div>
-        <span class="text-muted-foreground/40">·</span>
-        <div class="flex items-center gap-2 text-sm">
-            <CheckCircle class="size-4 text-success" />
+        <span class="text-muted-foreground/30">·</span>
+        <div class="flex items-center gap-1.5 text-xs">
+            <CheckCircle class="size-3.5 text-success" />
             <span class="text-muted-foreground">{readyCount} ready</span>
         </div>
         {#if pendingCount > 0}
-            <span class="text-muted-foreground/40">·</span>
-            <div class="flex items-center gap-2 text-sm">
-                <Clock class="size-4 text-muted-foreground" />
+            <span class="text-muted-foreground/30">·</span>
+            <div class="flex items-center gap-1.5 text-xs">
+                <Clock class="size-3.5 text-muted-foreground" />
                 <span class="text-muted-foreground">{pendingCount} pending</span>
             </div>
         {/if}
-        {#if (course.modules?.length ?? 0) > 1}
-            <span class="text-[11px] text-muted-foreground/60 ml-auto">
-                Use the trash icon on any module to trim the outline — you don’t have to keep every module the AI proposed.
-            </span>
-        {/if}
-        <div class="ml-auto flex items-center gap-2 flex-wrap">
+
+        <div class="ml-auto flex items-center gap-1.5 flex-wrap">
+            {#if anyExpanded}
+                <Button.Root
+                    size="sm"
+                    variant="ghost"
+                    onclick={collapseAll}
+                    title="Collapse all modules"
+                >
+                    <ChevronsDownUp class="size-3.5 mr-1" />
+                    Collapse all
+                </Button.Root>
+            {:else if (course.modules?.length ?? 0) > 0}
+                <Button.Root
+                    size="sm"
+                    variant="ghost"
+                    onclick={expandAll}
+                    title="Expand all modules"
+                >
+                    <ChevronsUpDown class="size-3.5 mr-1" />
+                    Expand all
+                </Button.Root>
+            {/if}
+
             {#if generatingAll}
-                <span class="text-xs text-muted-foreground mr-1">
+                <span class="text-xs text-muted-foreground">
                     Generating {generateAllDone}/{generateAllTotal}…
                 </span>
                 <Button.Root
@@ -940,9 +1128,53 @@
                     onclick={generateAllPending}
                 >
                     <Play class="size-3.5 mr-1" />
-                    Generate all pending ({pendingCount})
+                    Generate all ({pendingCount})
                 </Button.Root>
             {/if}
+
+            {#if isAlreadyPublished}
+                <span class="inline-flex items-center gap-1 text-xs font-medium text-success px-2 py-1 rounded-md border border-success/30 bg-success/5">
+                    <CheckCircle2 class="size-3" />
+                    Published
+                </span>
+            {:else if isPendingReview}
+                <span class="inline-flex items-center gap-1 text-xs font-medium text-info px-2 py-1 rounded-md border border-info/30 bg-info/5">
+                    <CheckCircle2 class="size-3" />
+                    Pending review
+                </span>
+            {:else}
+                {#if canApprove && allModulesReady}
+                    <Button.Root
+                        size="sm"
+                        onclick={publishDirectly}
+                        disabled={submitting}
+                    >
+                        {#if submitting}
+                            <LoaderCircle class="size-3.5 mr-1 animate-spin" />
+                        {:else}
+                            <Rocket class="size-3.5 mr-1" />
+                        {/if}
+                        Publish
+                    </Button.Root>
+                {/if}
+                <Button.Root
+                    size="sm"
+                    variant={canApprove ? "outline" : "default"}
+                    onclick={submitForReview}
+                    disabled={!allModulesReady || submitting}
+                    title={!allModulesReady
+                        ? `${pendingCount} module${pendingCount === 1 ? "" : "s"} still need generation`
+                        : "Submit to the review queue"}
+                >
+                    {#if submitting}
+                        <LoaderCircle class="size-3.5 mr-1 animate-spin" />
+                    {:else}
+                        <Send class="size-3.5 mr-1" />
+                    {/if}
+                    Submit
+                </Button.Root>
+            {/if}
+
             <Button.Root
                 size="sm"
                 variant="outline"
@@ -950,7 +1182,17 @@
                 onclick={() => (showRevisePanel = !showRevisePanel)}
             >
                 <Sparkles class="size-3.5 mr-1" />
-                Ask AI to revise
+                Revise
+            </Button.Root>
+
+            <Button.Root
+                size="sm"
+                variant="outline"
+                onclick={() => (addingModule = true)}
+                disabled={addingModule}
+            >
+                <Plus class="size-3.5 mr-1" />
+                Add module
             </Button.Root>
         </div>
     </div>
@@ -1031,6 +1273,62 @@
             >
                 Dismiss
             </button>
+        </div>
+    {/if}
+
+    {#if submitError}
+        <div class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 flex items-center gap-2">
+            <CircleAlert class="size-4 text-destructive shrink-0" />
+            <p class="text-xs text-destructive flex-1">{submitError}</p>
+            <button
+                class="text-xs text-destructive/70 hover:text-destructive"
+                onclick={() => (submitError = "")}
+            >
+                Dismiss
+            </button>
+        </div>
+    {/if}
+
+    {#if !isAlreadyPublished && !isPendingReview && !allModulesReady && (course.modules?.length ?? 0) > 0}
+        <div class="rounded-lg border border-info/30 bg-info/5 px-3 py-2 flex items-center gap-2">
+            <Clock class="size-4 text-info shrink-0" />
+            <p class="text-xs text-info/90 flex-1">
+                {pendingCount} module{pendingCount === 1 ? "" : "s"} still need generation before you can submit for review.
+                Use <strong>Generate all</strong> above, or generate modules individually.
+            </p>
+        </div>
+    {/if}
+
+    {#if addingModule}
+        <div class="rounded-xl border border-primary/30 bg-primary/5 p-4 flex flex-col gap-3">
+            <div class="flex items-center gap-2">
+                <Plus class="size-4 text-primary" />
+                <p class="text-sm font-semibold text-foreground">Add a new module</p>
+            </div>
+            <input
+                type="text"
+                bind:value={newModuleTitle}
+                placeholder="Module title"
+                class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <textarea
+                bind:value={newModuleDesc}
+                rows={2}
+                placeholder="What this module covers (optional)"
+                class="rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+            ></textarea>
+            {#if moduleErrors[-1]}
+                <p class="text-xs text-destructive">{moduleErrors[-1]}</p>
+            {/if}
+            <div class="flex gap-2">
+                <Button.Root size="sm" onclick={addModule} disabled={!newModuleTitle.trim()}>
+                    <Plus class="size-3.5 mr-1.5" />
+                    Add module
+                </Button.Root>
+                <Button.Root size="sm" variant="outline" onclick={() => (addingModule = false)}>
+                    Cancel
+                </Button.Root>
+            </div>
         </div>
     {/if}
 
@@ -1432,43 +1730,19 @@
         {/each}
 
         <!-- Add module -->
+        <!-- Bottom add-module shortcut: just scrolls back to the toolbar
+             where the real form lives. Keeps the bottom of the list clean. -->
         <div class="rounded-xl border border-dashed border-border bg-card/50 p-4">
-            {#if addingModule}
-                <div class="flex flex-col gap-3">
-                    <input
-                        type="text"
-                        bind:value={newModuleTitle}
-                        placeholder="New module title"
-                        class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
-                    <textarea
-                        bind:value={newModuleDesc}
-                        rows={2}
-                        placeholder="What this module covers (optional)"
-                        class="rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-                    ></textarea>
-                    {#if moduleErrors[-1]}
-                        <p class="text-xs text-destructive">{moduleErrors[-1]}</p>
-                    {/if}
-                    <div class="flex gap-2">
-                        <Button.Root size="sm" onclick={addModule} disabled={!newModuleTitle.trim()}>
-                            <Plus class="size-3.5 mr-1.5" />
-                            Add module
-                        </Button.Root>
-                        <Button.Root size="sm" variant="outline" onclick={() => (addingModule = false)}>
-                            Cancel
-                        </Button.Root>
-                    </div>
-                </div>
-            {:else}
-                <button
-                    class="w-full flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground py-2 transition-colors"
-                    onclick={() => (addingModule = true)}
-                >
-                    <Plus class="size-4" />
-                    Add module manually
-                </button>
-            {/if}
+            <button
+                class="w-full flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground py-2 transition-colors"
+                onclick={() => {
+                    addingModule = true;
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+            >
+                <Plus class="size-4" />
+                Add module
+            </button>
         </div>
     </div>
 </div>

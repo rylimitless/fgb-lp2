@@ -12,6 +12,12 @@
         PanelLeftOpen,
         Circle,
         CheckCircle2,
+        AlertTriangle,
+        ChevronDown,
+        BarChart3,
+        FileText,
+        Hash,
+        MessageSquare,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import Markdown from "$lib/components/brand/Markdown.svelte";
@@ -49,6 +55,73 @@
     // Collapsible list of all modules in the course so the user can jump
     // between modules without closing the preview.
     let sidebarOpen = $state(true);
+
+    // Which modules are expanded in the sidebar to show their items.
+    let expandedSidebarModules = $state<Record<number, boolean>>({});
+
+    function toggleSidebarModule(id: number) {
+        expandedSidebarModules[id] = !expandedSidebarModules[id];
+    }
+
+    // ---- Metrics slide-in panel ----
+    let metricsOpen = $state(false);
+
+    // Compute course-level metrics across ALL modules (not just the current
+    // one) so the metrics panel gives a full picture.
+    let allItems = $derived(
+        (allModules ?? []).flatMap((m: any) => m.items ?? []),
+    );
+    let allContentItems = $derived(
+        allItems.filter((i: any) => i.item_type === "content"),
+    );
+    let allQuestionItems = $derived(
+        allItems.filter((i: any) => i.item_type !== "content"),
+    );
+
+    // Question type distribution: { mc: 5, tf: 3, ... }
+    let typeDistribution = $derived.by(() => {
+        const counts: Record<string, number> = {};
+        for (const item of allQuestionItems) {
+            const t = item.item_type ?? "unknown";
+            counts[t] = (counts[t] ?? 0) + 1;
+        }
+        // Sort by count descending for display.
+        return Object.entries(counts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([type, count]) => ({ type, count }));
+    });
+
+    // Module status distribution
+    let statusDistribution = $derived.by(() => {
+        const counts: Record<string, number> = {};
+        for (const m of allModules ?? []) {
+            const s = m.status ?? "pending";
+            counts[s] = (counts[s] ?? 0) + 1;
+        }
+        return counts;
+    });
+
+    // Per-module item counts for the sidebar expansion
+    function moduleItems(mod: any): any[] {
+        return (mod.items ?? []).slice().sort(
+            (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+        );
+    }
+
+    // Short preview text for an item in the sidebar
+    function itemPreview(item: any): string {
+        const d = item.data ?? {};
+        const text = d.question ?? d.statement ?? d.text ?? d.body ?? "";
+        if (!text) return "(empty)";
+        // Strip markdown and truncate.
+        const stripped = String(text).replace(/[#*`_~>-]/g, "").trim();
+        return stripped.length > 60 ? stripped.slice(0, 60) + "…" : stripped;
+    }
+
+    // Pre-computed for the metrics panel (can't use {@const} in template divs).
+    let maxTypeCount = $derived(typeDistribution[0]?.count ?? 1);
+    let contentPct = $derived(allItems.length ? allContentItems.length / allItems.length * 100 : 0);
+    let questionPct = $derived(allItems.length ? allQuestionItems.length / allItems.length * 100 : 0);
 
     // When the user switches modules via the mini-map, update the bound
     // `module` prop so the parent tracks the change too. Also reset the
@@ -242,6 +315,53 @@
         return { ...item, data: itemData(item) };
     }
 
+    // Human-readable label for each question type. Shown on every question
+    // card so the reviewer can tell what type a broken/empty question was
+    // supposed to be.
+    const TYPE_LABELS: Record<string, string> = {
+        mc: "Multiple Choice",
+        ma: "Multiple Answer",
+        tf: "True / False",
+        fb: "Fill in the Blank",
+        sa: "Short Answer",
+        matching: "Matching",
+        drag_sort: "Drag & Sort",
+        hotspot: "Hotspot",
+        sequence: "Sequence",
+        scale: "Scale",
+        dd: "Drag & Drop",
+        essay: "Essay",
+    };
+    function questionTypeLabel(type: string): string {
+        return TYPE_LABELS[type] ?? type ?? "Unknown";
+    }
+
+    // Detect whether a question has no usable content — the AI sometimes
+    // generates items with empty or malformed data. This flags them so the
+    // reviewer knows it's a generation bug, not a rendering bug.
+    function isQuestionEmpty(item: any): boolean {
+        const d = item.data ?? {};
+        switch (item.item_type) {
+            case "mc":
+            case "ma":
+                return !d.question && !d.options?.length;
+            case "tf":
+                return !d.statement && d.answer === undefined;
+            case "fb":
+                return !d.text && !d.question && !d.blanks?.length;
+            case "sa":
+                return !d.question && !d.sample_answer;
+            case "matching":
+                return !d.pairs?.length && !d.question;
+            case "drag_sort":
+                return !d.items?.length && !d.question;
+            case "hotspot":
+                return !d.regions?.length && !d.hotspots?.length && !d.areas?.length && !d.options?.length;
+            default:
+                return !d.question && !d.statement && !d.body;
+        }
+    }
+
     let progressPct = $derived(
         assessableItems.length === 0
             ? 0
@@ -330,6 +450,16 @@
             </button>
         </div>
 
+        <!-- Metrics toggle -->
+        <button
+            class="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium {metricsOpen ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'} hover:bg-muted transition-colors"
+            onclick={() => (metricsOpen = !metricsOpen)}
+            title="Show metrics"
+        >
+            <BarChart3 class="size-3.5" />
+            Metrics
+        </button>
+
         <button
             class="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
             onclick={onClose}
@@ -354,7 +484,7 @@
     <div class="flex-1 flex overflow-hidden">
         <!-- Mini-map sidebar -->
         {#if sidebarOpen && sortedModules.length > 1}
-            <aside class="w-64 shrink-0 border-r border-border bg-card/50 overflow-y-auto">
+            <aside class="w-72 shrink-0 border-r border-border bg-card/50 overflow-y-auto">
                 <div class="p-3">
                     <p class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-2 px-1">
                         Modules ({sortedModules.length})
@@ -362,24 +492,58 @@
                     <div class="flex flex-col gap-0.5">
                         {#each sortedModules as mod, mi (mod.id)}
                             {@const status = moduleStatusIcon(mod)}
-                            <button
-                                class="flex items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors {mod.id === module?.id ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-                                onclick={() => switchToModule(mod)}
-                                title={mod.title}
-                            >
-                                <status.Icon class="size-3.5 shrink-0 mt-0.5 {mod.id === module?.id ? 'text-primary' : status.class}" />
-                                <div class="min-w-0 flex-1">
-                                    <p class="text-[10px] font-medium text-muted-foreground">
-                                        Module {mi + 1}
-                                    </p>
-                                    <p class="text-xs font-medium truncate">
-                                        {mod.title}
-                                    </p>
-                                    <p class="text-[10px] text-muted-foreground/70 mt-0.5">
-                                        {mod.items?.length ?? 0} items
-                                    </p>
-                                </div>
-                            </button>
+                            {@const isExpanded = expandedSidebarModules[mod.id]}
+                            {@const modItems = moduleItems(mod)}
+                            <div>
+                                <button
+                                    class="flex items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors w-full {mod.id === module?.id ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+                                    onclick={() => switchToModule(mod)}
+                                    title={mod.title}
+                                >
+                                    <span
+                                        class="size-4 shrink-0 mt-0.5 flex items-center justify-center rounded hover:bg-muted-foreground/10 cursor-pointer"
+                                        onclick={(e) => {
+                                            e.stopPropagation();
+                                            toggleSidebarModule(mod.id);
+                                        }}
+                                        onkeydown={(e) => { if (e.key === 'Enter') toggleSidebarModule(mod.id); }}
+                                        role="button"
+                                        tabindex="0"
+                                        title={isExpanded ? "Collapse items" : "Show items"}
+                                    >
+                                        <ChevronDown class="size-3 text-muted-foreground transition-transform {isExpanded ? 'rotate-0' : '-rotate-90'}" />
+                                    </span>
+                                    <status.Icon class="size-3.5 shrink-0 mt-0.5 {mod.id === module?.id ? 'text-primary' : status.class}" />
+                                    <div class="min-w-0 flex-1">
+                                        <p class="text-[10px] font-medium text-muted-foreground">
+                                            Module {mi + 1}
+                                        </p>
+                                        <p class="text-xs font-medium truncate">
+                                            {mod.title}
+                                        </p>
+                                        <p class="text-[10px] text-muted-foreground/70 mt-0.5">
+                                            {modItems.length} items
+                                        </p>
+                                    </div>
+                                </button>
+                                <!-- Expanded items under this module -->
+                                {#if isExpanded && modItems.length > 0}
+                                    <div class="ml-7 border-l border-border/50 pl-2 mt-0.5 flex flex-col gap-0.5">
+                                        {#each modItems as item (item.id)}
+                                            <div class="flex items-start gap-1.5 rounded px-2 py-1 text-[10px] text-muted-foreground">
+                                                {#if item.item_type === "content"}
+                                                    <FileText class="size-3 mt-0.5 shrink-0" />
+                                                {:else}
+                                                    <MessageSquare class="size-3 mt-0.5 shrink-0" />
+                                                {/if}
+                                                <span class="truncate">{itemPreview(item)}</span>
+                                            </div>
+                                        {/each}
+                                    </div>
+                                {:else if isExpanded}
+                                    <p class="ml-7 text-[10px] text-muted-foreground/50 mt-0.5 mb-1">No items yet</p>
+                                {/if}
+                            </div>
                         {/each}
                     </div>
                 </div>
@@ -476,6 +640,101 @@
             {/if}
         </div>
     </div>
+
+        <!-- Metrics slide-in panel -->
+        {#if metricsOpen}
+            <aside class="w-72 shrink-0 border-l border-border bg-card/50 overflow-y-auto">
+                <div class="p-4 flex flex-col gap-4">
+                    <div class="flex items-center justify-between">
+                        <p class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                            Course metrics
+                        </p>
+                        <button
+                            class="size-6 rounded hover:bg-muted flex items-center justify-center text-muted-foreground"
+                            onclick={() => (metricsOpen = false)}
+                            title="Close metrics"
+                        >
+                            <X class="size-3.5" />
+                        </button>
+                    </div>
+
+                    <!-- Overview -->
+                    <div class="flex flex-col gap-1.5">
+                        <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Overview</p>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="rounded-lg border border-border bg-background px-3 py-2 text-center">
+                                <span class="text-lg font-semibold text-foreground">{allModules?.length ?? 0}</span>
+                                <p class="text-[10px] text-muted-foreground">Modules</p>
+                            </div>
+                            <div class="rounded-lg border border-border bg-background px-3 py-2 text-center">
+                                <span class="text-lg font-semibold text-foreground">{allContentItems.length}</span>
+                                <p class="text-[10px] text-muted-foreground">Content blocks</p>
+                            </div>
+                            <div class="rounded-lg border border-border bg-background px-3 py-2 text-center">
+                                <span class="text-lg font-semibold text-foreground">{allQuestionItems.length}</span>
+                                <p class="text-[10px] text-muted-foreground">Questions</p>
+                            </div>
+                            <div class="rounded-lg border border-border bg-background px-3 py-2 text-center">
+                                <span class="text-lg font-semibold text-foreground">{allItems.length}</span>
+                                <p class="text-[10px] text-muted-foreground">Total items</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Module statuses -->
+                    {#if Object.keys(statusDistribution).length > 0}
+                        <div class="flex flex-col gap-1.5">
+                            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Module statuses</p>
+                            <div class="flex flex-col gap-1">
+                                {#each Object.entries(statusDistribution) as [status, count]}
+                                    {@const pill = status === 'ready' ? 'text-success bg-success/10' : status === 'generating' ? 'text-info bg-info/10' : status === 'failed' ? 'text-destructive bg-destructive/10' : 'text-muted-foreground bg-muted/40'}
+                                    <div class="flex items-center justify-between rounded-md px-2.5 py-1 {pill}">
+                                        <span class="text-xs font-medium capitalize">{status}</span>
+                                        <span class="text-xs font-semibold">{count}</span>
+                                    </div>
+                                {/each}
+                            </div>
+                        </div>
+                    {/if}
+
+                    <!-- Question types -->
+                    {#if typeDistribution.length > 0}
+                        <div class="flex flex-col gap-1.5">
+                            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Question types</p>
+                            <div class="flex flex-col gap-1">
+                                {#each typeDistribution as entry}
+                                    <div class="flex items-center justify-between rounded-md px-2.5 py-1 border border-border bg-background">
+                                        <span class="text-xs text-foreground">{questionTypeLabel(entry.type)}</span>
+                                        <div class="flex items-center gap-2">
+                                            <!-- Mini bar chart -->
+                                            <div class="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                                                <div class="h-full bg-primary rounded-full" style="width: {((entry.count / maxTypeCount) * 100).toFixed(0)}%"></div>
+                                            </div>
+                                            <span class="text-xs font-semibold text-muted-foreground">{entry.count}</span>
+                                        </div>
+                                    </div>
+                                {/each}
+                            </div>
+                        </div>
+                    {/if}
+
+                    <!-- Content/question ratio -->
+                    {#if allItems.length > 0}
+                        <div class="flex flex-col gap-1.5">
+                            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Content / Question ratio</p>
+                            <div class="h-2 rounded-full bg-muted overflow-hidden flex">
+                                <div class="h-full bg-success" style="width: {contentPct.toFixed(0)}%"></div>
+                                <div class="h-full bg-primary" style="width: {questionPct.toFixed(0)}%"></div>
+                            </div>
+                            <div class="flex items-center gap-3 text-xs text-muted-foreground">
+                                <div class="flex items-center gap-1"><span class="size-2 rounded-full bg-success"></span> Content ({contentPct.toFixed(0)}%)</div>
+                                <div class="flex items-center gap-1"><span class="size-2 rounded-full bg-primary"></span> Questions ({questionPct.toFixed(0)}%)</div>
+                            </div>
+                        </div>
+                    {/if}
+                </div>
+            </aside>
+        {/if}
     </div>
 </div>
 
@@ -484,6 +743,19 @@
      in walk mode). -->
 {#snippet questionCard(item: any, showNav: boolean)}
     <div class="rounded-xl border border-border bg-card p-5">
+        <!-- Type label: always visible so you can tell what type a question
+             was supposed to be even if the data is missing/broken. -->
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                {questionTypeLabel(item.item_type)}
+            </span>
+            {#if isQuestionEmpty(item)}
+                <span class="inline-flex items-center gap-1 text-[10px] font-medium text-warning px-1.5 py-0.5 rounded border border-warning/40 bg-warning/10">
+                    <AlertTriangle class="size-2.5" />
+                    Empty data
+                </span>
+            {/if}
+        </div>
         {#if item.item_type === "mc"}
             <p class="text-sm font-medium text-foreground mb-3">
                 {item.data?.question ?? ""}
@@ -565,26 +837,51 @@
                 </button>
             </div>
         {:else if item.item_type === "fb"}
-            {@const text = item.data?.text ?? ""}
+            {@const text = item.data?.text ?? item.data?.question ?? ""}
             {@const parts = text.split("___")}
-            <p class="text-sm font-medium text-foreground mb-3 leading-relaxed">
-                {#each parts as part, pi}
-                    {part}
-                    {#if pi < parts.length - 1}
-                        <input
-                            type="text"
-                            value={answers[item.id]?.[pi] ?? ""}
-                            oninput={(e) => {
-                                const current = answers[item.id] ?? [];
-                                current[pi] = e.currentTarget.value;
-                                answers[item.id] = [...current];
-                            }}
-                            class="inline-block w-32 mx-1 rounded-md border border-input bg-background px-2 py-0.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                            placeholder="…"
-                        />
-                    {/if}
-                {/each}
-            </p>
+            {#if parts.length > 1}
+                <p class="text-sm font-medium text-foreground mb-3 leading-relaxed">
+                    {#each parts as part, pi}
+                        {part}
+                        {#if pi < parts.length - 1}
+                            <input
+                                type="text"
+                                value={answers[item.id]?.[pi] ?? ""}
+                                oninput={(e) => {
+                                    const current = answers[item.id] ?? [];
+                                    current[pi] = e.currentTarget.value;
+                                    answers[item.id] = [...current];
+                                }}
+                                class="inline-block w-32 mx-1 rounded-md border border-input bg-background px-2 py-0.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                placeholder="…"
+                            />
+                        {/if}
+                    {/each}
+                </p>
+            {:else}
+                <!-- No ___ markers found — show as plain text with a note -->
+                <p class="text-sm font-medium text-foreground mb-3 leading-relaxed">
+                    {text}
+                </p>
+                {#if item.data?.blanks?.length}
+                    <div class="flex flex-col gap-2">
+                        <p class="text-xs text-muted-foreground">Fill in the blank(s):</p>
+                        {#each item.data.blanks as _blank, bi}
+                            <input
+                                type="text"
+                                value={answers[item.id]?.[bi] ?? ""}
+                                oninput={(e) => {
+                                    const current = answers[item.id] ?? [];
+                                    current[bi] = e.currentTarget.value;
+                                    answers[item.id] = [...current];
+                                }}
+                                class="w-48 rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                placeholder={`Blank ${bi + 1}…`}
+                            />
+                        {/each}
+                    </div>
+                {/if}
+            {/if}
         {:else if item.item_type === "sa"}
             <p class="text-sm font-medium text-foreground mb-3">
                 {item.data?.question ?? ""}

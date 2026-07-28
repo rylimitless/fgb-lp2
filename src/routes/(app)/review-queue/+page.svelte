@@ -12,7 +12,7 @@
         Eye,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
-    import { PageHeader } from "$lib/components/brand";
+    import { PageHeader, ModulePreview } from "$lib/components/brand";
 
     type TabType = "documents" | "courses";
 
@@ -37,6 +37,11 @@
     let viewingDoc = $state<any>(null);
     let viewingChunks = $state<any[]>([]);
     let viewingLoading = $state(false);
+
+    // Course preview state — uses the same ModulePreview component as the
+    // course builder, so reviewers see exactly what learners will see.
+    let previewingCourse = $state<any>(null);
+    let previewLoading = $state(false);
 
     async function loadDocuments(page: number) {
         docsLoading = true;
@@ -157,6 +162,24 @@
     function closeViewer() {
         viewingDoc = null;
         viewingChunks = [];
+    }
+
+    // Fetch full course data (modules + items) and open the learner preview.
+    // Reuses ModulePreview so reviewers see the same interactive experience
+    // as the course builder.
+    async function viewCourse(course: any) {
+        previewLoading = true;
+        try {
+            const res = await fetch(`/api/courses/${course.id}`, {
+                credentials: "include",
+            });
+            if (res.ok) {
+                previewingCourse = await res.json();
+            }
+        } catch {
+            /* ignore */
+        }
+        previewLoading = false;
     }
 
     function formatDate(d: string) {
@@ -359,14 +382,15 @@
                                         <Button.Root
                                             variant="outline"
                                             size="sm"
-                                            onclick={() =>
-                                                window.open(
-                                                    `/lesson-player?preview=${course.id}`,
-                                                    "_blank",
-                                                )}
+                                            onclick={() => viewCourse(course)}
+                                            disabled={previewLoading}
                                             class="text-info border-info/20 hover:bg-info/10"
                                         >
-                                            <Eye class="size-3.5 mr-1.5" />
+                                            {#if previewLoading}
+                                                <LoaderCircle class="size-3.5 mr-1.5 animate-spin" />
+                                            {:else}
+                                                <Eye class="size-3.5 mr-1.5" />
+                                            {/if}
                                             View
                                         </Button.Root>
                                         <Button.Root
@@ -590,4 +614,24 @@
             </div>
         </div>
     </div>
+{/if}
+
+<!-- Course preview modal (same component as the course builder) -->
+{#if previewingCourse}
+    {@const firstModule = (previewingCourse.modules ?? []).find((m: any) => (m.items?.length ?? 0) > 0) ?? (previewingCourse.modules ?? [])[0]}
+    {#if firstModule}
+        <ModulePreview
+            module={firstModule}
+            courseTitle={previewingCourse.title}
+            allModules={previewingCourse.modules ?? []}
+            onClose={() => (previewingCourse = null)}
+        />
+    {:else}
+        <div class="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex items-center justify-center" role="dialog" aria-modal="true">
+            <div class="text-center">
+                <p class="text-sm text-muted-foreground mb-4">This course has no modules to preview.</p>
+                <Button.Root size="sm" onclick={() => (previewingCourse = null)}>Close</Button.Root>
+            </div>
+        </div>
+    {/if}
 {/if}

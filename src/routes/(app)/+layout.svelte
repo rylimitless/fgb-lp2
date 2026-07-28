@@ -10,7 +10,6 @@
         Brain,
         GraduationCap,
         PenTool,
-        Sparkles,
         Wand2,
         ClipboardCheck,
         Library,
@@ -122,12 +121,6 @@
                     label: "Content Studio",
                     icon: PenTool,
                     href: "/content-studio",
-                    roles: ["content creator"],
-                },
-                {
-                    label: "AI Generator",
-                    icon: Sparkles,
-                    href: "/ai-content-generator",
                     roles: ["content creator"],
                 },
                 {

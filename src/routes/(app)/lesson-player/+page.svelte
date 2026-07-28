@@ -1715,7 +1715,7 @@
                                     <p
                                         class="text-sm text-foreground leading-relaxed mb-3 whitespace-pre-line"
                                     >
-                                        {item.data?.text ?? ""}
+                                        {item.data?.text ?? item.data?.question ?? ""}
                                     </p>
                                     <div class="flex flex-col gap-2">
                                         {#each item.data?.blanks ?? [] as blank, bi}
