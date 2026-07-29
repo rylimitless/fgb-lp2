@@ -137,6 +137,13 @@ func main() {
 	approverGroup := protected.Group("")
 	approverGroup.Use(middlewares.RequireRole("approver"))
 
+	auditorGroup := protected.Group("")
+	auditorGroup.Use(middlewares.RequireRole("auditor"))
+
+	// Routes accessible by admin, auditor, or manager (read-only operational views)
+	auditorManagerGroup := protected.Group("")
+	auditorManagerGroup.Use(middlewares.RequireRole("admin", "auditor", "manager"))
+
 	r.POST("/api/logout", func(c *gin.Context) {
 		token, _ := c.Cookie("session_token")
 		_ = app.Logout(c.Request.Context(), token)
@@ -238,7 +245,7 @@ func main() {
 
 	userHandler := users.NewHandler(dbpool, queries).WithMailer(emailSender)
 	userHandler.RegisterRoutes(adminGroup)
-	userHandler.RegisterListRoute(adminManagerGroup)
+	userHandler.RegisterListRoute(auditorManagerGroup) // admin, auditor, manager all get read-only user list
 
 	lpHandler := learning_paths.NewHandler(queries)
 	lpHandler.RegisterRoutes(adminManagerGroup)
@@ -247,8 +254,9 @@ func main() {
 	deptHandler := departments.NewHandler(queries)
 	deptHandler.RegisterRoutes(adminManagerGroup)
 
-	analyticsHandler := analytics.NewHandler(queries)
-	analyticsHandler.RegisterRoutes(adminGroup)
+	analyticsHandler := analytics.NewHandler(queries, dbpool)
+	analyticsHandler.RegisterRoutes(auditorManagerGroup)        // admin, auditor, manager all get analytics
+	analyticsHandler.RegisterManagerRoutes(auditorManagerGroup) // team-focused analytics
 
 	// Password reset (public routes — no auth required)
 	resetHandler := password_reset.NewHandler(dbpool, queries).WithMailer(emailSender)

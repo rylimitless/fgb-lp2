@@ -285,19 +285,23 @@ var validRoles = map[string]bool{
 }
 
 // userRow is a uniform type used by both JSON and CSV paths.
+// Department is optional: empty means no department assignment.
 type userRow struct {
-	Name  string
-	Email string
-	Roles []string
+	Name       string
+	Email      string
+	Roles      []string
+	Department string
 }
 
 // BulkCreateUsers creates multiple users via a JSON payload with
 // auto-generated passwords + welcome emails.
+// Each user may optionally specify a `department` (name) to be assigned to.
 func (h *Handler) BulkCreateUsers(c *gin.Context) {
 	type jsonInput struct {
-		Name  string   `json:"name" binding:"required"`
-		Email string   `json:"email" binding:"required,email"`
-		Roles []string `json:"roles"`
+		Name       string   `json:"name" binding:"required"`
+		Email      string   `json:"email" binding:"required,email"`
+		Roles      []string `json:"roles"`
+		Department string   `json:"department"`
 	}
 
 	var body struct {
@@ -314,14 +318,23 @@ func (h *Handler) BulkCreateUsers(c *gin.Context) {
 		if len(roles) == 0 {
 			roles = []string{"end user"}
 		}
-		rows = append(rows, userRow{Name: u.Name, Email: u.Email, Roles: roles})
+		rows = append(rows, userRow{
+			Name:       u.Name,
+			Email:      u.Email,
+			Roles:      roles,
+			Department: strings.TrimSpace(u.Department),
+		})
 	}
 
 	h.createUsersFromRows(c, rows)
 }
 
 // BulkCreateUsersCSV parses a CSV file upload and creates users.
-// Expects headers: Name,Email,Roles (Roles optional, semicolon-separated).
+// Expects headers: Name,Email,Roles,Department
+//   - Roles is optional (semicolon-separated); defaults to "end user"
+//   - Department is optional; matched case-insensitively by name and
+//     auto-created if it does not yet exist.
+//
 // The form field name is "file". Maximum 200 rows.
 func (h *Handler) BulkCreateUsersCSV(c *gin.Context) {
 	file, _, err := c.Request.FormFile("file")
@@ -350,6 +363,7 @@ func (h *Handler) BulkCreateUsersCSV(c *gin.Context) {
 	nameCol, hasName := colIndex["name"]
 	emailCol, hasEmail := colIndex["email"]
 	rolesCol, _ := colIndex["roles"]
+	deptCol, _ := colIndex["department"]
 
 	if !hasName || !hasEmail {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "CSV must have 'Name' and 'Email' columns"})
@@ -401,7 +415,17 @@ func (h *Handler) BulkCreateUsersCSV(c *gin.Context) {
 			}
 		}
 
-		rows = append(rows, userRow{Name: name, Email: email, Roles: roles})
+		department := ""
+		if deptCol >= 0 && deptCol < len(record) {
+			department = strings.TrimSpace(record[deptCol])
+		}
+
+		rows = append(rows, userRow{
+			Name:       name,
+			Email:      email,
+			Roles:      roles,
+			Department: department,
+		})
 	}
 
 	if len(rows) == 0 {
@@ -456,12 +480,16 @@ func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
 	defer tx.Rollback(c.Request.Context())
 	txQueries := h.Queries.WithTx(tx)
 
+	// Cache department name -> id so we only resolve each name once.
+	deptCache := map[string]int64{}
+
 	type createdUser struct {
-		ID       int64    `json:"id"`
-		Name     string   `json:"name"`
-		Email    string   `json:"email"`
-		Password string   `json:"-"`
-		Roles    []string `json:"roles"`
+		ID         int64    `json:"id"`
+		Name       string   `json:"name"`
+		Email      string   `json:"email"`
+		Password   string   `json:"-"`
+		Roles      []string `json:"roles"`
+		Department string   `json:"department"`
 	}
 
 	created := make([]createdUser, 0, len(rows))
@@ -491,12 +519,43 @@ func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
 			})
 		}
 
+		deptName := ""
+		if r.Department != "" {
+			deptID, ok := deptCache[r.Department]
+			if !ok {
+				dept, dErr := txQueries.GetDepartmentByName(c.Request.Context(), r.Department)
+				if dErr == nil {
+					deptID = dept.ID
+				} else {
+					// Auto-create the department so bulk uploads don't require
+					// pre-provisioning of every department name.
+					newDept, cErr := txQueries.CreateDepartment(c.Request.Context(), r.Department)
+					if cErr != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{
+							"error":   "Failed to resolve or create department",
+							"details": gin.H{"department": r.Department, "email": r.Email},
+						})
+						return
+					}
+					deptID = newDept.ID
+				}
+				deptCache[r.Department] = deptID
+			}
+
+			_ = txQueries.AddUserToDepartment(c.Request.Context(), database.AddUserToDepartmentParams{
+				UserID:       user.ID,
+				DepartmentID: deptID,
+			})
+			deptName = r.Department
+		}
+
 		created = append(created, createdUser{
-			ID:       user.ID,
-			Name:     user.Name,
-			Email:    user.Email,
-			Password: password,
-			Roles:    r.Roles,
+			ID:         user.ID,
+			Name:       user.Name,
+			Email:      user.Email,
+			Password:   password,
+			Roles:      r.Roles,
+			Department: deptName,
 		})
 	}
 
@@ -507,12 +566,21 @@ func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
 
 	// Send welcome emails synchronously so we can report per-user status.
 	// Resend API is fast enough for this to be acceptable (< 200ms per email).
+	//
+	// Graceful failure: if the email cannot be delivered, the plaintext
+	// password would otherwise be lost (only its hash is stored). In that
+	// case we return it to the admin so the credential is recoverable and
+	// the user is never created with an unknown password. When the email
+	// succeeds we keep the password private (omitted from the response).
 	type userResponse struct {
-		ID        int64    `json:"id"`
-		Name      string   `json:"name"`
-		Email     string   `json:"email"`
-		Roles     []string `json:"roles"`
-		EmailSent bool     `json:"email_sent"`
+		ID         int64    `json:"id"`
+		Name       string   `json:"name"`
+		Email      string   `json:"email"`
+		Roles      []string `json:"roles"`
+		Department string   `json:"department"`
+		EmailSent  bool     `json:"email_sent"`
+		// Password is only populated when EmailSent is false.
+		Password string `json:"password,omitempty"`
 	}
 
 	responseUsers := make([]userResponse, len(created))
@@ -521,10 +589,11 @@ func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
 
 	for i, cu := range created {
 		responseUsers[i] = userResponse{
-			ID:    cu.ID,
-			Name:  cu.Name,
-			Email: cu.Email,
-			Roles: cu.Roles,
+			ID:         cu.ID,
+			Name:       cu.Name,
+			Email:      cu.Email,
+			Roles:      cu.Roles,
+			Department: cu.Department,
 		}
 
 		if h.Mailer != nil {
@@ -533,14 +602,18 @@ func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
 				log.Printf("[users] failed to send welcome email to %s: %v", cu.Email, err)
 				emailFailed++
 				responseUsers[i].EmailSent = false
+				responseUsers[i].Password = cu.Password
 			} else {
 				emailSent++
 				responseUsers[i].EmailSent = true
 			}
 		} else {
-			// No mailer configured — mark as not sent
+			// No mailer configured — the password is only available via the
+			// backend logs (noopSender logs it). Return it here so the admin
+			// can still hand credentials out-of-band.
 			emailFailed++
 			responseUsers[i].EmailSent = false
+			responseUsers[i].Password = cu.Password
 		}
 	}
 
@@ -558,6 +631,37 @@ func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
 	})
 }
 
+// BulkCreateUsersCSVTemplate returns a downloadable CSV template that admins
+// can fill in and re-upload via /admin/users/bulk/csv. The Department column
+// is optional and is matched case-insensitively by name on upload
+// (auto-created if it does not yet exist).
+func (h *Handler) BulkCreateUsersCSVTemplate(c *gin.Context) {
+	// Include existing department names so admins can copy/paste exact names.
+	deps, _ := h.Queries.GetDepartments(c.Request.Context())
+	depNames := make([]string, 0, len(deps))
+	for _, d := range deps {
+		depNames = append(depNames, d.Name)
+	}
+
+	var buf strings.Builder
+	buf.WriteString("Name,Email,Roles,Department\n")
+	buf.WriteString("Jane Doe,jane@example.com,end user,Operations\n")
+	buf.WriteString("John Smith,john@example.com,manager;approver,Finance\n")
+	buf.WriteString("Alex Lee,alex@example.com,end user,\n")
+	buf.WriteString("\n")
+	buf.WriteString("# Roles (semicolon-separated, optional): end user, content creator, approver, admin, manager, auditor\n")
+	if len(depNames) > 0 {
+		buf.WriteString("# Existing departments: " + strings.Join(depNames, "; ") + "\n")
+	} else {
+		buf.WriteString("# Department is optional. New names are auto-created on upload.\n")
+	}
+
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="bulk-users-template.csv"`)
+	c.Status(http.StatusOK)
+	_, _ = c.Writer.WriteString(buf.String())
+}
+
 // getUserRoles fetches all roles for a user from the user_roles junction table
 func (h *Handler) getUserRoles(c *gin.Context, userID int64) []string {
 	roles, err := h.Queries.GetUserRoles(c.Request.Context(), userID)
@@ -571,6 +675,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/admin/users", h.CreateUser)
 	r.POST("/admin/users/bulk", h.BulkCreateUsers)
 	r.POST("/admin/users/bulk/csv", h.BulkCreateUsersCSV)
+	r.GET("/admin/users/bulk/template", h.BulkCreateUsersCSVTemplate)
 	r.PUT("/admin/users/:id/roles", h.UpdateUserRoles)
 	r.DELETE("/admin/users/:id", h.DeleteUser)
 }

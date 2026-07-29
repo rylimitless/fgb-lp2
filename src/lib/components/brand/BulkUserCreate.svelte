@@ -11,6 +11,7 @@
         FileUp,
         MailCheck,
         MailX,
+        Download,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as Input from "$lib/components/ui/input";
@@ -22,6 +23,7 @@
         name: string;
         email: string;
         roles: string[];
+        department: string;
         error?: string;
     };
 
@@ -30,7 +32,11 @@
         name: string;
         email: string;
         roles: string[];
+        department?: string;
         email_sent: boolean;
+        // Populated by the backend only when email_sent is false so the
+        // admin can recover the credential out-of-band.
+        password?: string;
     };
 
     const ALL_ROLES = [
@@ -57,9 +63,9 @@
     let parseError = $state("");
 
     // ---- Manual mode ----
-    let manualRows = $state<{ name: string; email: string; roles: string[] }[]>(
-        [],
-    );
+    let manualRows = $state<
+        { name: string; email: string; roles: string[]; department: string }[]
+    >([]);
 
     // ---- CSV upload mode ----
     let csvFile = $state<File | null>(null);
@@ -134,6 +140,7 @@
                     name: "",
                     email: "",
                     roles: ["end user"],
+                    department: "",
                     error: `Line ${i + 1}: Expected "Name, Email" format (got: "${line}")`,
                 });
                 continue;
@@ -142,15 +149,21 @@
             const name = parts[0];
             const email = parts[1];
             let roles: string[] = ["end user"];
+            let department = "";
 
             if (parts.length >= 3) {
                 // Roles can be semicolon-separated: "Content Creator;Approver"
-                const rawRoles = parts.slice(2).join(",");
-                roles = rawRoles
+                const rawRoles = parts[2];
+                const parsedRoles = rawRoles
                     .split(/[;]+/)
                     .map((r) => r.trim().toLowerCase())
                     .filter((r) => ALL_ROLES.some((ar) => ar.id === r));
-                if (roles.length === 0) roles = ["end user"];
+                if (parsedRoles.length > 0) roles = parsedRoles;
+            }
+
+            // Optional 4th column: department name.
+            if (parts.length >= 4) {
+                department = parts[3].trim();
             }
 
             // Validate email
@@ -159,12 +172,13 @@
                     name,
                     email,
                     roles,
+                    department,
                     error: `Line ${i + 1}: Invalid email "${email}"`,
                 });
                 continue;
             }
 
-            results.push({ name, email, roles });
+            results.push({ name, email, roles, department });
         }
 
         parsedUsers = results;
@@ -179,7 +193,7 @@
     function addManualRow() {
         manualRows = [
             ...manualRows,
-            { name: "", email: "", roles: ["end user"] },
+            { name: "", email: "", roles: ["end user"], department: "" },
         ];
     }
 
@@ -218,6 +232,7 @@
             const nameIdx = headers.indexOf("name");
             const emailIdx = headers.indexOf("email");
             const rolesIdx = headers.indexOf("roles");
+            const deptIdx = headers.indexOf("department");
 
             if (nameIdx === -1 || emailIdx === -1) {
                 csvParseError =
@@ -251,17 +266,23 @@
                     }
                 }
 
+                let department = "";
+                if (deptIdx >= 0 && deptIdx < parts.length) {
+                    department = (parts[deptIdx] ?? "").trim();
+                }
+
                 if (!email.includes("@") || !email.includes(".")) {
                     results.push({
                         name,
                         email,
                         roles,
+                        department,
                         error: `Row ${i + 1}: Invalid email "${email}"`,
                     });
                     continue;
                 }
 
-                results.push({ name, email, roles });
+                results.push({ name, email, roles, department });
             }
 
             csvPreview = results;
@@ -312,6 +333,7 @@
         name: string;
         email: string;
         roles: string[];
+        department: string;
     }[] {
         if (mode === "paste") {
             return parsedUsers
@@ -320,6 +342,7 @@
                     name: u.name,
                     email: u.email,
                     roles: u.roles,
+                    department: u.department,
                 }));
         }
         if (mode === "csv") {
@@ -329,6 +352,7 @@
                     name: u.name,
                     email: u.email,
                     roles: u.roles,
+                    department: u.department,
                 }));
         }
         return manualRows.filter((r) => r.name && r.email);
@@ -370,7 +394,7 @@
                 resultsOpen = true;
 
                 showToast(
-                    `${result.created_count} user(s) created. ${result.emails_failed > 0 ? result.emails_failed + " welcome email(s) failed to send." : "Welcome emails sent."}`,
+                    `${result.created_count} user(s) created. ${result.emails_failed > 0 ? result.emails_failed + " welcome email(s) failed — temp passwords are shown below." : "Welcome emails sent."}`,
                     {
                         title: "Users created",
                         variant:
@@ -400,7 +424,7 @@
                 resultsOpen = true;
 
                 showToast(
-                    `${result.created_count} user(s) created. ${result.emails_failed > 0 ? result.emails_failed + " welcome email(s) failed to send." : "Welcome emails sent."}`,
+                    `${result.created_count} user(s) created. ${result.emails_failed > 0 ? result.emails_failed + " welcome email(s) failed — temp passwords are shown below." : "Welcome emails sent."}`,
                     {
                         title: "Users created",
                         variant:
@@ -419,13 +443,25 @@
 
     // ---- Copy results ----
     function copyResults() {
-        const header = "Name\tEmail\tRoles";
+        const header = "Name\tEmail\tRoles\tDepartment\tPassword\tEmail sent";
         const rows = createdUsers.map(
-            (u) => `${u.name}\t${u.email}\t${u.roles?.join("; ") ?? ""}`,
+            (u) =>
+                `${u.name}\t${u.email}\t${u.roles?.join("; ") ?? ""}\t${u.department ?? ""}\t${u.password ?? ""}\t${u.email_sent ? "sent" : "failed"}`,
         );
         navigator.clipboard.writeText([header, ...rows].join("\n"));
         resultsCopied = true;
         setTimeout(() => (resultsCopied = false), 2000);
+    }
+
+    // ---- Download CSV template ----
+    function downloadTemplate() {
+        // Hit the backend endpoint so the template reflects existing departments.
+        const link = document.createElement("a");
+        link.href = "/api/admin/users/bulk/template";
+        link.download = "bulk-users-template.csv";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 </script>
 
@@ -459,10 +495,11 @@
                             {#if createdUsers.every((u) => u.email_sent)}
                                 Welcome emails sent successfully.
                             {:else if createdUsers.some((u) => u.email_sent)}
-                                Some welcome emails failed — check below.
+                                Some welcome emails failed — temp passwords
+                                are shown below for those accounts.
                             {:else}
-                                No welcome emails were sent (mailer not
-                                configured).
+                                Welcome emails could not be delivered — temp
+                                passwords are shown below.
                             {/if}
                         </p>
                     </div>
@@ -499,6 +536,7 @@
                                 <th class="py-2 pr-4 font-medium">Name</th>
                                 <th class="py-2 pr-4 font-medium">Email</th>
                                 <th class="py-2 pr-4 font-medium">Roles</th>
+                                <th class="py-2 pr-4 font-medium">Department</th>
                                 <th class="py-2 font-medium">Email</th>
                             </tr>
                         </thead>
@@ -526,6 +564,11 @@
                                             {/each}
                                         </div>
                                     </td>
+                                    <td
+                                        class="py-2.5 pr-4 text-muted-foreground"
+                                    >
+                                        {u.department || "—"}
+                                    </td>
                                     <td class="py-2.5">
                                         {#if u.email_sent}
                                             <span
@@ -535,12 +578,35 @@
                                                 Sent
                                             </span>
                                         {:else}
-                                            <span
-                                                class="inline-flex items-center gap-1 text-xs text-destructive"
-                                            >
-                                                <MailX class="size-3" />
-                                                Failed
-                                            </span>
+                                            <div class="flex flex-col gap-1">
+                                                <span
+                                                    class="inline-flex items-center gap-1 text-xs text-destructive"
+                                                >
+                                                    <MailX class="size-3" />
+                                                    Failed
+                                                </span>
+                                                {#if u.password}
+                                                    <div
+                                                        class="flex items-center gap-1.5"
+                                                    >
+                                                        <code
+                                                            class="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono text-foreground"
+                                                        >
+                                                            {u.password}
+                                                        </code>
+                                                        <button
+                                                            type="button"
+                                                            class="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                                            onclick={() =>
+                                                                navigator.clipboard.writeText(
+                                                                    u.password ?? "",
+                                                                )}
+                                                        >
+                                                            Copy
+                                                        </button>
+                                                    </div>
+                                                {/if}
+                                            </div>
                                         {/if}
                                     </td>
                                 </tr>
@@ -622,15 +688,16 @@
                                 Paste users
                             </label>
                             <p class="text-xs text-muted-foreground">
-                                One per line: <code>Name, Email, Role</code>.
-                                Role defaults to "End User" if omitted. For
-                                multiple roles, separate with semicolons:
+                                One per line:
+                                <code>Name, Email, Roles, Department</code>.
+                                Roles and Department are optional. For multiple
+                                roles, separate with semicolons:
                                 <code>Content Creator;Approver</code>.
                             </p>
                             <textarea
                                 id="paste-input"
                                 class="w-full min-h-[160px] rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground resize-y focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                placeholder="John Doe, john@company.com&#10;Jane Smith, jane@company.com, Content Creator&#10;Bob Wilson, bob@company.com, Content Creator;Approver"
+                                placeholder="John Doe, john@company.com&#10;Jane Smith, jane@company.com, Content Creator, Operations&#10;Bob Wilson, bob@company.com, Content Creator;Approver, Finance"
                                 bind:value={pasteText}></textarea>
                             <div class="flex justify-between items-center">
                                 <Button.Root
@@ -682,6 +749,11 @@
                                                 >
                                                     Roles
                                                 </th>
+                                                <th
+                                                    class="px-3 py-2 font-medium"
+                                                >
+                                                    Department
+                                                </th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -723,6 +795,11 @@
                                                             {/each}
                                                         </div>
                                                     </td>
+                                                    <td
+                                                        class="px-3 py-2 text-xs text-muted-foreground"
+                                                    >
+                                                        {u.department || "—"}
+                                                    </td>
                                                 </tr>
                                             {/each}
                                         </tbody>
@@ -733,15 +810,30 @@
                     {:else if mode === "csv"}
                         <!-- CSV upload mode -->
                         <div class="flex flex-col gap-2">
-                            <label class="text-xs font-medium text-foreground">
-                                Upload CSV file
-                            </label>
+                            <div
+                                class="flex items-center justify-between gap-2"
+                            >
+                                <label
+                                    class="text-xs font-medium text-foreground"
+                                >
+                                    Upload CSV file
+                                </label>
+                                <Button.Root
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-7 text-xs"
+                                    onclick={downloadTemplate}
+                                >
+                                    <Download class="size-3.5" />
+                                    Download template
+                                </Button.Root>
+                            </div>
                             <p class="text-xs text-muted-foreground">
                                 Upload a CSV with columns:
-                                <code>Name, Email</code> (required) and
-                                <code>Roles</code> (optional). Roles should be
-                                semicolon-separated:
-                                <code>Content Creator;Approver</code>.
+                                <code>Name</code>, <code>Email</code> (required),
+                                <code>Roles</code> (optional, semicolon-separated)
+                                and <code>Department</code> (optional). Download
+                                the template for a ready-to-use example.
                             </p>
 
                             <label
@@ -829,6 +921,11 @@
                                                     >
                                                         Roles
                                                     </th>
+                                                    <th
+                                                        class="px-3 py-2 font-medium"
+                                                    >
+                                                        Department
+                                                    </th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -870,6 +967,11 @@
                                                                 {/each}
                                                             </div>
                                                         </td>
+                                                        <td
+                                                            class="px-3 py-2 text-xs text-muted-foreground"
+                                                        >
+                                                            {u.department || "—"}
+                                                        </td>
                                                     </tr>
                                                 {/each}
                                             </tbody>
@@ -885,23 +987,29 @@
                                 <div
                                     class="flex items-start gap-2 p-3 rounded-lg border border-border bg-background"
                                 >
-                                    <div
-                                        class="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2"
-                                    >
+                                    <div class="flex-1 flex flex-col gap-2">
+                                        <div
+                                            class="grid grid-cols-1 sm:grid-cols-2 gap-2"
+                                        >
+                                            <Input.Root
+                                                type="text"
+                                                placeholder="Name"
+                                                bind:value={row.name}
+                                            />
+                                            <Input.Root
+                                                type="email"
+                                                placeholder="Email"
+                                                bind:value={row.email}
+                                            />
+                                        </div>
                                         <Input.Root
                                             type="text"
-                                            placeholder="Name"
-                                            bind:value={row.name}
+                                            placeholder="Department (optional)"
+                                            bind:value={row.department}
                                         />
-                                        <Input.Root
-                                            type="email"
-                                            placeholder="Email"
-                                            bind:value={row.email}
-                                        />
-                                    </div>
-                                    <div
-                                        class="flex flex-wrap gap-1 mt-1 sm:mt-0 sm:col-span-2"
-                                    >
+                                        <div
+                                            class="flex flex-wrap gap-1"
+                                        >
                                         {#each ALL_ROLES as r}
                                             <label
                                                 class="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] cursor-pointer hover:bg-muted/30 transition-colors {row.roles.includes(
@@ -936,6 +1044,7 @@
                                                 {r.label}
                                             </label>
                                         {/each}
+                                        </div>
                                     </div>
                                     <Button.Root
                                         variant="ghost"

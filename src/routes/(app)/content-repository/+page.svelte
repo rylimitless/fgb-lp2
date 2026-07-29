@@ -24,6 +24,16 @@
 
     type ContentType = "all" | "document" | "course";
 
+    let { data } = $props();
+
+    // Admin/manager-only capabilities (enrollment viewing + department enrollment
+    // both hit role-gated admin endpoints).
+    let canViewEnrollments = $derived(
+        data?.user?.roles?.some((r: string) =>
+            ["admin", "manager"].includes(r),
+        ) ?? false,
+    );
+
     let items = $state<any[]>([]);
     let total = $state(0);
     let totalDocs = $state(0);
@@ -389,6 +399,128 @@
         enrollDialogOpen = false;
         selectedDeptId = null;
         enrollError = "";
+    }
+
+    // ---- Course Enrollments Viewer (admin/manager) ----
+    type EnrollmentRow = {
+        id: number;
+        user_id: number;
+        user_name: string;
+        user_email: string;
+        status: string;
+        progress_pct: number;
+        enrolled_at: string;
+        completed_at: string | null;
+        dropped_at: string | null;
+    };
+    type EnrollmentSummary = {
+        active_count: number;
+        completed_count: number;
+        dropped_count: number;
+        total_count: number;
+    };
+
+    let enrollmentsCourse = $state<any>(null);
+    let enrollmentsOpen = $state(false);
+    let enrollments = $state<EnrollmentRow[]>([]);
+    let enrollmentSummary = $state<EnrollmentSummary | null>(null);
+    let enrollmentsLoading = $state(false);
+    let enrollmentsError = $state("");
+    let enrollmentSearch = $state("");
+
+    let filteredEnrollments = $derived(
+        enrollmentSearch.trim()
+            ? enrollments.filter((e) => {
+                  const q = enrollmentSearch.toLowerCase();
+                  return (
+                      e.user_name.toLowerCase().includes(q) ||
+                      e.user_email.toLowerCase().includes(q)
+                  );
+              })
+            : enrollments,
+    );
+
+    let avgProgress = $derived(
+        enrollmentSummary && enrollmentSummary.total_count > 0
+            ? Math.round(
+                  enrollments
+                      .filter((e) => e.status !== "dropped")
+                      .reduce((sum, e) => sum + (e.progress_pct ?? 0), 0) /
+                      Math.max(
+                          1,
+                          enrollments.filter((e) => e.status !== "dropped")
+                              .length,
+                      ),
+              )
+            : 0,
+    );
+
+    async function openEnrollments(item: any) {
+        enrollmentsCourse = item;
+        enrollmentsOpen = true;
+        enrollments = [];
+        enrollmentSummary = null;
+        enrollmentSearch = "";
+        enrollmentsError = "";
+        enrollmentsLoading = true;
+        try {
+            const res = await fetch(
+                `/api/admin/enrollments/course/${item.id}`,
+                { credentials: "include" },
+            );
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                enrollmentsError =
+                    err.error ?? "Failed to load enrollments";
+                enrollmentsLoading = false;
+                return;
+            }
+            const data = await res.json();
+            enrollments = (data.enrollments ?? []) as EnrollmentRow[];
+            enrollmentSummary = {
+                active_count: data.active_count ?? 0,
+                completed_count: data.completed_count ?? 0,
+                dropped_count: data.dropped_count ?? 0,
+                total_count: data.total_count ?? 0,
+            };
+        } catch {
+            enrollmentsError = "Network error";
+        }
+        enrollmentsLoading = false;
+    }
+
+    function closeEnrollments() {
+        enrollmentsOpen = false;
+        enrollmentsCourse = null;
+        enrollments = [];
+        enrollmentSummary = null;
+        enrollmentsError = "";
+        enrollmentSearch = "";
+    }
+
+    function enrollmentStatusBadge(status: string): {
+        label: string;
+        cls: string;
+    } {
+        switch (status) {
+            case "completed":
+                return {
+                    label: "Completed",
+                    cls: "bg-success/10 text-success border border-success/20",
+                };
+            case "dropped":
+                return {
+                    label: "Dropped",
+                    cls: "bg-muted text-muted-foreground border border-border",
+                };
+            case "active":
+            case "pending":
+            default:
+                return {
+                    label: "In progress",
+                    cls: "bg-info/10 text-info border border-info/20",
+                };
+        }
     }
 
     async function handleBulkEnroll() {
@@ -781,7 +913,23 @@
                                             <Settings class="size-4" />
                                         </Button.Root>
                                     {/if}
-                                    {#if item.content_type === "course" && item.status === "published"}
+                                    {#if canViewEnrollments &&
+                                        item.content_type === "course" &&
+                                        item.status === "published"}
+                                        <Button.Root
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            onclick={() =>
+                                                openEnrollments(item)}
+                                            class="text-muted-foreground hover:text-primary"
+                                            title="View enrollments & progress"
+                                        >
+                                            <GraduationCap class="size-4" />
+                                        </Button.Root>
+                                    {/if}
+                                    {#if canViewEnrollments &&
+                                        item.content_type === "course" &&
+                                        item.status === "published"}
                                         <Button.Root
                                             variant="ghost"
                                             size="icon-sm"
@@ -1063,6 +1211,280 @@
                     disabled={!selectedDeptId || enrollSaving || deptLoading}
                 >
                     {enrollSaving ? "Enrolling…" : "Enroll Department"}
+                </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Course Enrollments Viewer Dialog -->
+{#if enrollmentsOpen && enrollmentsCourse}
+    {@const summary = enrollmentSummary}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onclick={closeEnrollments}
+        role="dialog"
+        aria-modal="true"
+    >
+        <div
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col"
+            onclick={(e: MouseEvent) => e.stopPropagation()}
+        >
+            <div
+                class="flex items-center justify-between border-b border-border px-6 py-4 gap-4"
+            >
+                <div class="min-w-0">
+                    <h3
+                        class="text-base font-semibold text-foreground truncate"
+                    >
+                        {enrollmentsCourse.title}
+                    </h3>
+                    <p class="text-xs text-muted-foreground mt-0.5">
+                        Enrollment & progress overview
+                    </p>
+                </div>
+                <Button.Root
+                    variant="ghost"
+                    size="icon"
+                    class="size-8 text-muted-foreground hover:text-foreground shrink-0"
+                    onclick={closeEnrollments}
+                >
+                    <XCircle class="size-5" />
+                </Button.Root>
+            </div>
+
+            <div
+                class="px-6 py-4 flex flex-col gap-4 overflow-y-auto"
+            >
+                {#if enrollmentsLoading}
+                    <div class="flex justify-center py-12">
+                        <LoaderCircle
+                            class="size-5 text-muted-foreground animate-spin"
+                        />
+                    </div>
+                {:else if enrollmentsError}
+                    <div
+                        class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                    >
+                        <AlertTriangle class="size-3.5 shrink-0" />
+                        <span>{enrollmentsError}</span>
+                    </div>
+                {:else}
+                    <!-- Summary stats -->
+                    {#if summary}
+                        <div
+                            class="grid grid-cols-2 sm:grid-cols-4 gap-3"
+                        >
+                            <div
+                                class="rounded-lg border border-border bg-muted/20 p-3"
+                            >
+                                <p
+                                    class="text-xs text-muted-foreground"
+                                >
+                                    Enrolled
+                                </p>
+                                <p
+                                    class="text-xl font-semibold text-foreground"
+                                >
+                                    {summary.total_count}
+                                </p>
+                            </div>
+                            <div
+                                class="rounded-lg border border-border bg-muted/20 p-3"
+                            >
+                                <p
+                                    class="text-xs text-muted-foreground"
+                                >
+                                    In progress
+                                </p>
+                                <p
+                                    class="text-xl font-semibold text-info"
+                                >
+                                    {summary.active_count}
+                                </p>
+                            </div>
+                            <div
+                                class="rounded-lg border border-border bg-muted/20 p-3"
+                            >
+                                <p
+                                    class="text-xs text-muted-foreground"
+                                >
+                                    Completed
+                                </p>
+                                <p
+                                    class="text-xl font-semibold text-success"
+                                >
+                                    {summary.completed_count}
+                                </p>
+                            </div>
+                            <div
+                                class="rounded-lg border border-border bg-muted/20 p-3"
+                            >
+                                <p
+                                    class="text-xs text-muted-foreground"
+                                >
+                                    Avg progress
+                                </p>
+                                <p
+                                    class="text-xl font-semibold text-foreground"
+                                >
+                                    {avgProgress}%
+                                </p>
+                            </div>
+                        </div>
+                    {/if}
+
+                    {#if enrollments.length === 0}
+                        <div
+                            class="flex flex-col items-center justify-center text-center py-10 gap-2"
+                        >
+                            <Users class="size-8 text-muted-foreground/50" />
+                            <p class="text-sm font-medium text-foreground">
+                                No enrollments yet
+                            </p>
+                            <p class="text-xs text-muted-foreground">
+                                Enroll users or a department to see progress
+                                here.
+                            </p>
+                        </div>
+                    {:else}
+                        <!-- Search -->
+                        <div class="relative">
+                            <Search
+                                class="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+                            />
+                            <input
+                                type="text"
+                                placeholder="Search by name or email…"
+                                class="w-full rounded-lg border border-border bg-background pl-9 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                bind:value={enrollmentSearch}
+                            />
+                        </div>
+
+                        <!-- Enrollment table -->
+                        <div
+                            class="rounded-lg border border-border overflow-hidden"
+                        >
+                            <div class="max-h-80 overflow-y-auto">
+                                <table class="w-full text-sm">
+                                    <thead
+                                        class="bg-muted/30 text-left text-xs text-muted-foreground sticky top-0"
+                                    >
+                                        <tr>
+                                            <th
+                                                class="px-3 py-2 font-medium"
+                                            >
+                                                Learner
+                                            </th>
+                                            <th
+                                                class="px-3 py-2 font-medium"
+                                            >
+                                                Status
+                                            </th>
+                                            <th
+                                                class="px-3 py-2 font-medium"
+                                            >
+                                                Progress
+                                            </th>
+                                            <th
+                                                class="px-3 py-2 font-medium hidden sm:table-cell"
+                                            >
+                                                Enrolled
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {#each filteredEnrollments as e (e.id)}
+                                            {@const badge =
+                                                enrollmentStatusBadge(e.status)}
+                                            <tr
+                                                class="border-t border-border/40 hover:bg-muted/20"
+                                            >
+                                                <td
+                                                    class="px-3 py-2"
+                                                >
+                                                    <p
+                                                        class="font-medium text-foreground"
+                                                    >
+                                                        {e.user_name}
+                                                    </p>
+                                                    <p
+                                                        class="text-xs text-muted-foreground"
+                                                    >
+                                                        {e.user_email}
+                                                    </p>
+                                                </td>
+                                                <td
+                                                    class="px-3 py-2"
+                                                >
+                                                    <span
+                                                        class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] {badge.cls}"
+                                                    >
+                                                        {badge.label}
+                                                    </span>
+                                                </td>
+                                                <td
+                                                    class="px-3 py-2"
+                                                >
+                                                    {#if e.status === "completed"}
+                                                        <span
+                                                            class="text-success font-medium"
+                                                        >
+                                                            100%
+                                                        </span>
+                                                    {:else if e.status === "dropped"}
+                                                        <span
+                                                            class="text-muted-foreground"
+                                                        >
+                                                            —
+                                                        </span>
+                                                    {:else}
+                                                        <div
+                                                            class="flex items-center gap-2"
+                                                        >
+                                                            <div
+                                                                class="w-20 h-1.5 rounded-full bg-muted overflow-hidden"
+                                                            >
+                                                                <div
+                                                                    class="h-full bg-primary"
+                                                                    style="width: {Math.min(100, Math.max(0, e.progress_pct ?? 0))}%"
+                                                                ></div>
+                                                            </div>
+                                                            <span
+                                                                class="text-xs text-muted-foreground tabular-nums"
+                                                            >
+                                                                {Math.round(e.progress_pct ?? 0)}%
+                                                            </span>
+                                                        </div>
+                                                    {/if}
+                                                </td>
+                                                <td
+                                                    class="px-3 py-2 text-xs text-muted-foreground hidden sm:table-cell"
+                                                >
+                                                    {e.enrolled_at || "—"}
+                                                </td>
+                                            </tr>
+                                        {/each}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        {#if filteredEnrollments.length === 0}
+                            <p
+                                class="text-xs text-muted-foreground text-center py-2"
+                            >
+                                No learners match “{enrollmentSearch}”.
+                            </p>
+                        {/if}
+                    {/if}
+                {/if}
+            </div>
+
+            <div
+                class="flex items-center justify-end border-t border-border px-6 py-3 gap-2"
+            >
+                <Button.Root variant="outline" size="sm" onclick={closeEnrollments}>
+                    Close
                 </Button.Root>
             </div>
         </div>

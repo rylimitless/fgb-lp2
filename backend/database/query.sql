@@ -401,6 +401,9 @@ select * from departments order by name asc;
 -- name: GetDepartmentByID :one
 select * from departments where id = $1;
 
+-- name: GetDepartmentByName :one
+select * from departments where lower(name) = lower($1);
+
 -- name: DeleteDepartment :exec
 delete from departments where id = $1;
 

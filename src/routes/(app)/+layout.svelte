@@ -156,7 +156,7 @@
                     label: "Team",
                     icon: Users,
                     href: "/user-management",
-                    roles: ["admin"],
+                    roles: ["admin", "auditor"],
                 },
                 {
                     label: "Departments",

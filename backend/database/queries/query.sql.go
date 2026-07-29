@@ -403,7 +403,7 @@ func (q *Queries) CreateLearningPath(ctx context.Context, arg CreateLearningPath
 const createModule = `-- name: CreateModule :one
 insert into modules (course_id, title, description, sort_order)
 values ($1, $2, $3, $4)
-returning id, course_id, title, description, sort_order, created_at
+returning id, course_id, title, description, sort_order, status, question_types, limitations, created_at
 `
 
 type CreateModuleParams struct {
@@ -427,6 +427,9 @@ func (q *Queries) CreateModule(ctx context.Context, arg CreateModuleParams) (Mod
 		&i.Title,
 		&i.Description,
 		&i.SortOrder,
+		&i.Status,
+		&i.QuestionTypes,
+		&i.Limitations,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -1459,6 +1462,17 @@ func (q *Queries) GetDepartmentByID(ctx context.Context, id int64) (Department, 
 	return i, err
 }
 
+const getDepartmentByName = `-- name: GetDepartmentByName :one
+select id, name, created_at from departments where lower(name) = lower($1)
+`
+
+func (q *Queries) GetDepartmentByName(ctx context.Context, lower string) (Department, error) {
+	row := q.db.QueryRow(ctx, getDepartmentByName, lower)
+	var i Department
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
+}
+
 const getDepartments = `-- name: GetDepartments :many
 select id, name, created_at from departments order by name asc
 `
@@ -1810,7 +1824,7 @@ func (q *Queries) GetLessonProgress(ctx context.Context, arg GetLessonProgressPa
 }
 
 const getModulesByCourse = `-- name: GetModulesByCourse :many
-select id, course_id, title, description, sort_order, created_at from modules where course_id = $1 order by sort_order asc
+select id, course_id, title, description, sort_order, status, question_types, limitations, created_at from modules where course_id = $1 order by sort_order asc
 `
 
 func (q *Queries) GetModulesByCourse(ctx context.Context, courseID int64) ([]Module, error) {
@@ -1828,6 +1842,9 @@ func (q *Queries) GetModulesByCourse(ctx context.Context, courseID int64) ([]Mod
 			&i.Title,
 			&i.Description,
 			&i.SortOrder,
+			&i.Status,
+			&i.QuestionTypes,
+			&i.Limitations,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
