@@ -209,6 +209,18 @@ func (h *Handler) DeleteCourse(c *gin.Context) {
 	h.Pool.QueryRow(c.Request.Context(),
 		"SELECT title FROM courses WHERE id = $1", id).Scan(&title)
 
+	// Check for active enrollments
+	var enrollmentCount int64
+	h.Pool.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM enrollments WHERE course_id = $1", id).Scan(&enrollmentCount)
+	if enrollmentCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":            "Course has active enrollments",
+			"enrollment_count": enrollmentCount,
+		})
+		return
+	}
+
 	_, err = h.Pool.Exec(c.Request.Context(),
 		"DELETE FROM courses WHERE id = $1", id)
 	if err != nil {
@@ -222,6 +234,21 @@ func (h *Handler) DeleteCourse(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "Course deleted"})
+}
+
+// CourseEnrollmentCount returns how many users are enrolled in a course.
+func (h *Handler) CourseEnrollmentCount(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	var count int64
+	h.Pool.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM enrollments WHERE course_id = $1", id).Scan(&count)
+
+	c.JSON(http.StatusOK, gin.H{"enrollment_count": count})
 }
 
 func (h *Handler) ResubmitDocument(c *gin.Context) {
@@ -308,6 +335,7 @@ func (h *Handler) ResubmitCourse(c *gin.Context) {
 
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/content-repository", h.ListContent)
+	r.GET("/content-repository/courses/:id/enrollment-count", middlewares.WrapRequireRole(h.CourseEnrollmentCount, "content creator"))
 	r.DELETE("/content-repository/documents/:id", middlewares.WrapRequireRole(h.DeleteDocument, "content creator"))
 	r.DELETE("/content-repository/courses/:id", middlewares.WrapRequireRole(h.DeleteCourse, "content creator"))
 	r.PUT("/content-repository/documents/:id/resubmit", middlewares.WrapRequireRole(h.ResubmitDocument, "content creator"))

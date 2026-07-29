@@ -133,6 +133,7 @@
         checked = {};
         revealed = {};
         currentIndex = 0;
+        itemCache = new Map();
     }
 
     // Sorted module list for the sidebar (same ordering as the builder).
@@ -159,7 +160,7 @@
         items.filter((i: any) => i.item_type !== "content"),
     );
 
-    let score = $derived(() => {
+    let score = $derived.by(() => {
         let correct = 0;
         let total = assessableItems.length;
         for (const item of assessableItems) {
@@ -298,21 +299,31 @@
     function itemData(item: any): any {
         let d: any = {};
         try {
-            d =
-                typeof item.data === "string"
-                    ? JSON.parse(item.data)
-                    : item.data;
+            d = typeof item.data === "string"
+                ? JSON.parse(item.data)
+                : item.data;
         } catch {
             d = item.data ?? {};
         }
         return d ?? {};
     }
 
-    // Use itemData() to normalize, since the SSE item events send data as
+    // ---- Normalization cache ----
+    // `normalize()` was the #1 perf bottleneck: in "All at once" mode it
+    // runs for every item on every re-render (e.g. every keystroke in an
+    // answer input), allocating new {item, data} objects each time. Caching
+    // by item ID means each item is parsed once and reused until the module
+    // switches. The cache is cleared in `switchToModule()`.
+    let itemCache = $state(new Map<number, any>());
+
     // raw JSON objects while the GET /courses/:id response sends them as
     // json.RawMessage (which may or may not be stringified).
     function normalize(item: any): any {
-        return { ...item, data: itemData(item) };
+        const cached = itemCache.get(item.id);
+        if (cached) return cached;
+        const norm = { ...item, data: itemData(item) };
+        itemCache.set(item.id, norm);
+        return norm;
     }
 
     // Human-readable label for each question type. Shown on every question
@@ -429,7 +440,7 @@
         {#if assessableItems.length > 0}
             <div class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-muted/40">
                 <Award class="size-3.5 text-accent" />
-                <span class="font-medium text-foreground">{score().correct}/{score().total}</span>
+                <span class="font-medium text-foreground">{score.correct}/{score.total}</span>
                 <span class="text-muted-foreground">answered</span>
             </div>
         {/if}
@@ -633,7 +644,7 @@
                     <div class="mt-8 flex items-center justify-center">
                         <Button.Root variant="outline" size="sm" onclick={resetAll}>
                             <RefreshCw class="size-3.5 mr-1.5" />
-                            Reset answers ({score().correct}/{score().total} correct)
+                            Reset answers ({score.correct}/{score.total} correct)
                         </Button.Root>
                     </div>
                 {/if}
@@ -848,9 +859,11 @@
                                 type="text"
                                 value={answers[item.id]?.[pi] ?? ""}
                                 oninput={(e) => {
-                                    const current = answers[item.id] ?? [];
-                                    current[pi] = e.currentTarget.value;
-                                    answers[item.id] = [...current];
+                                    const arr = answers[item.id] ?? [];
+                                    arr[pi] = e.currentTarget.value;
+                                    // Direct mutation — Svelte's $state proxy
+                                    // detects the change. No [...current] spread.
+                                    if (!answers[item.id]) answers[item.id] = arr;
                                 }}
                                 class="inline-block w-32 mx-1 rounded-md border border-input bg-background px-2 py-0.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                                 placeholder="…"
@@ -871,9 +884,9 @@
                                 type="text"
                                 value={answers[item.id]?.[bi] ?? ""}
                                 oninput={(e) => {
-                                    const current = answers[item.id] ?? [];
-                                    current[bi] = e.currentTarget.value;
-                                    answers[item.id] = [...current];
+                                    const arr = answers[item.id] ?? [];
+                                    arr[bi] = e.currentTarget.value;
+                                    if (!answers[item.id]) answers[item.id] = arr;
                                 }}
                                 class="w-48 rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                                 placeholder={`Blank ${bi + 1}…`}

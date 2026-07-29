@@ -200,9 +200,56 @@
         activeTab === "documents" ? docsPage : coursesPage,
     );
 
+    // Horizontal scroll indicators
+    let scrollContainer = $state<HTMLElement | null>(null);
+    let canScrollLeft = $state(false);
+    let canScrollRight = $state(false);
+
+    function checkScroll() {
+        const el = scrollContainer;
+        if (!el) {
+            canScrollLeft = false;
+            canScrollRight = false;
+            return;
+        }
+        canScrollLeft = el.scrollLeft > 1;
+        canScrollRight =
+            el.scrollLeft < el.scrollWidth - el.clientWidth - 1;
+    }
+
+    function scrollTable(dir: "left" | "right") {
+        scrollContainer?.scrollBy({
+            left: dir === "left" ? -280 : 280,
+            behavior: "smooth",
+        });
+    }
+
     $effect(() => {
         loadDocuments(0);
         loadCourses(0);
+    });
+
+    $effect(() => {
+        const el = scrollContainer;
+        if (!el) return;
+
+        checkScroll();
+
+        const handler = () => checkScroll();
+        el.addEventListener("scroll", handler, { passive: true });
+        const ro = new ResizeObserver(handler);
+        ro.observe(el);
+
+        return () => {
+            el.removeEventListener("scroll", handler);
+            ro.disconnect();
+        };
+    });
+
+    // Reset scroll when switching tabs or pages
+    $effect(() => {
+        activeTab; docsPage; coursesPage;
+        scrollContainer?.scrollTo({ left: 0 });
     });
 </script>
 
@@ -248,7 +295,9 @@
                 />
             </div>
         {:else}
-            <table class="w-full">
+            <div class="relative">
+                <div class="overflow-x-auto" bind:this={scrollContainer}>
+                    <table class="w-full min-w-[640px]">
                 <thead>
                     <tr class="border-b border-border bg-muted/50">
                         <th
@@ -264,7 +313,7 @@
                             >Created</th
                         >
                         <th
-                            class="px-5 py-3.5 text-left text-sm font-medium text-muted-foreground w-[320px]"
+                            class="px-5 py-3.5 text-left text-sm font-medium text-muted-foreground whitespace-nowrap"
                             >Actions</th
                         >
                     </tr>
@@ -438,6 +487,30 @@
                     {/if}
                 </tbody>
             </table>
+                </div>
+
+                <!-- Scroll indicators -->
+                {#if canScrollLeft}
+                    <div class="pointer-events-none absolute inset-y-0 left-0 w-16 bg-linear-to-r from-card via-card/80 to-transparent"></div>
+                    <button
+                        class="absolute left-2 top-6 size-10 flex items-center justify-center rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted hover:scale-110 transition-all"
+                        onclick={() => scrollTable("left")}
+                        title="Scroll left"
+                    >
+                        <ChevronLeft class="size-5" />
+                    </button>
+                {/if}
+                {#if canScrollRight}
+                    <div class="pointer-events-none absolute inset-y-0 right-0 w-16 bg-linear-to-l from-card via-card/80 to-transparent"></div>
+                    <button
+                        class="absolute right-2 top-6 size-10 flex items-center justify-center rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted hover:scale-110 transition-all"
+                        onclick={() => scrollTable("right")}
+                        title="Scroll right"
+                    >
+                        <ChevronRight class="size-5" />
+                    </button>
+                {/if}
+            </div>
 
             <div
                 class="flex items-center justify-between px-5 py-3 border-t border-border bg-muted/20"

@@ -36,6 +36,12 @@
     let resubmittingId = $state<number | null>(null);
     const pageSize = 20;
 
+    // Delete confirmation
+    let deleteTarget = $state<any>(null);
+    let deleteDialogOpen = $state(false);
+    let deleteEnrollmentCount = $state(0);
+    let deleteChecking = $state(false);
+
     // Notes viewer
     let notesItem = $state<any>(null);
 
@@ -88,7 +94,40 @@
     }
 
     async function handleDelete(item: any) {
-        if (deletingId !== null) return;
+        deleteTarget = item;
+        deleteDialogOpen = true;
+        deleteEnrollmentCount = 0;
+
+        // For courses, check enrollment count
+        if (item.content_type === "course") {
+            deleteChecking = true;
+            try {
+                const res = await fetch(
+                    `/api/content-repository/courses/${item.id}/enrollment-count`,
+                    { credentials: "include" },
+                );
+                if (res.ok) {
+                    const data = await res.json();
+                    deleteEnrollmentCount = data.enrollment_count ?? 0;
+                }
+            } catch {
+                /* ignore */
+            }
+            deleteChecking = false;
+        }
+    }
+
+    function closeDeleteDialog() {
+        deleteTarget = null;
+        deleteDialogOpen = false;
+        deleteEnrollmentCount = 0;
+    }
+
+    async function confirmDelete() {
+        if (!deleteTarget || deletingId !== null) return;
+        const item = deleteTarget;
+        closeDeleteDialog();
+
         deletingId = item.id;
         try {
             const endpoint =
@@ -108,6 +147,12 @@
                 total--;
                 if (item.content_type === "document") totalDocs--;
                 else totalCourses--;
+            } else {
+                const err = await res.json();
+                showToast(err.error ?? "Failed to delete", {
+                    title: "Error",
+                    variant: "error",
+                });
             }
         } catch {
             /* ignore */
@@ -274,6 +319,30 @@
 
     let totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
 
+    // Horizontal scroll indicators
+    let scrollContainer = $state<HTMLElement | null>(null);
+    let canScrollLeft = $state(false);
+    let canScrollRight = $state(false);
+
+    function checkScroll() {
+        const el = scrollContainer;
+        if (!el) {
+            canScrollLeft = false;
+            canScrollRight = false;
+            return;
+        }
+        canScrollLeft = el.scrollLeft > 1;
+        canScrollRight =
+            el.scrollLeft < el.scrollWidth - el.clientWidth - 1;
+    }
+
+    function scrollTable(dir: "left" | "right") {
+        scrollContainer?.scrollBy({
+            left: dir === "left" ? -280 : 280,
+            behavior: "smooth",
+        });
+    }
+
     // ---- Enroll Department in Course ----
     let enrollCourse = $state<any>(null);
     let enrollDialogOpen = $state(false);
@@ -428,6 +497,29 @@
     $effect(() => {
         loadContent();
     });
+
+    $effect(() => {
+        const el = scrollContainer;
+        if (!el) return;
+
+        checkScroll();
+
+        const handler = () => checkScroll();
+        el.addEventListener("scroll", handler, { passive: true });
+        const ro = new ResizeObserver(handler);
+        ro.observe(el);
+
+        return () => {
+            el.removeEventListener("scroll", handler);
+            ro.disconnect();
+        };
+    });
+
+    // Reset scroll when page or filter changes
+    $effect(() => {
+        page; typeFilter; searchQuery;
+        scrollContainer?.scrollTo({ left: 0 });
+    });
 </script>
 
 <div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
@@ -523,7 +615,7 @@
         </div>
     </div>
 
-    <div class="rounded-xl border border-border bg-card overflow-x-auto">
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
         {#if loading}
             <div class="flex items-center justify-center py-16">
                 <LoaderCircle
@@ -541,6 +633,8 @@
                 {/if}
             </div>
         {:else}
+            <div class="relative">
+                <div class="overflow-x-auto" bind:this={scrollContainer}>
             <table class="w-full table-auto">
                 <thead>
                     <tr class="border-b border-border bg-muted/50">
@@ -719,6 +813,30 @@
                     {/each}
                 </tbody>
             </table>
+                </div>
+
+                <!-- Scroll indicators -->
+                {#if canScrollLeft}
+                    <div class="pointer-events-none absolute inset-y-0 left-0 w-16 bg-linear-to-r from-card via-card/80 to-transparent"></div>
+                    <button
+                        class="absolute left-2 top-6 size-10 flex items-center justify-center rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted hover:scale-110 transition-all"
+                        onclick={() => scrollTable("left")}
+                        title="Scroll left"
+                    >
+                        <ChevronLeft class="size-5" />
+                    </button>
+                {/if}
+                {#if canScrollRight}
+                    <div class="pointer-events-none absolute inset-y-0 right-0 w-16 bg-linear-to-l from-card via-card/80 to-transparent"></div>
+                    <button
+                        class="absolute right-2 top-6 size-10 flex items-center justify-center rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted hover:scale-110 transition-all"
+                        onclick={() => scrollTable("right")}
+                        title="Scroll right"
+                    >
+                        <ChevronRight class="size-5" />
+                    </button>
+                {/if}
+            </div>
         {/if}
 
         {#if !loading && items.length > 0}
@@ -1049,6 +1167,86 @@
                     disabled={settingsSaving}
                 >
                     {settingsSaving ? "Saving…" : "Save Settings"}
+                </Button.Root>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Delete Confirmation Dialog -->
+{#if deleteDialogOpen && deleteTarget}
+    <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onclick={closeDeleteDialog}
+        role="dialog"
+        aria-modal="true"
+    >
+        <div
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4 flex flex-col"
+            onclick={(e: MouseEvent) => e.stopPropagation()}
+        >
+            <div
+                class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0"
+            >
+                <div class="min-w-0">
+                    <h3 class="text-base font-semibold text-foreground">
+                        Delete {deleteTarget.content_type === "document" ? "Document" : "Course"}
+                    </h3>
+                    <p class="text-sm text-muted-foreground mt-0.5 truncate">
+                        {deleteTarget.title}
+                    </p>
+                </div>
+                <Button.Root
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={closeDeleteDialog}
+                    class="shrink-0 ml-3"
+                >
+                    <XCircle class="size-5" />
+                </Button.Root>
+            </div>
+
+            <div class="px-6 py-4 flex flex-col gap-3">
+                <p class="text-sm text-foreground">
+                    Are you sure you want to permanently delete this {deleteTarget.content_type === "document" ? "document" : "course"}? This action cannot be undone.
+                </p>
+
+                {#if deleteTarget.content_type === "course"}
+                    {#if deleteChecking}
+                        <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                            <LoaderCircle class="size-3.5 animate-spin" />
+                            Checking enrollments…
+                        </div>
+                    {:else if deleteEnrollmentCount > 0}
+                        <div
+                            class="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+                        >
+                            <AlertTriangle class="size-4 shrink-0" />
+                            <span>
+                                {deleteEnrollmentCount} student{deleteEnrollmentCount === 1 ? " is" : "s are"} enrolled in this course. Deleting will also remove their enrollment records.
+                            </span>
+                        </div>
+                    {/if}
+                {/if}
+            </div>
+
+            <div
+                class="flex items-center justify-end gap-2 px-6 py-4 border-t border-border shrink-0"
+            >
+                <Button.Root
+                    variant="ghost"
+                    size="sm"
+                    onclick={closeDeleteDialog}
+                >
+                    Cancel
+                </Button.Root>
+                <Button.Root
+                    variant="ghost"
+                    size="sm"
+                    onclick={confirmDelete}
+                    class="text-destructive hover:bg-destructive/10"
+                >
+                    Delete
                 </Button.Root>
             </div>
         </div>
