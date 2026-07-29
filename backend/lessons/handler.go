@@ -24,6 +24,14 @@ type Handler struct {
 	Certificates *certificates.Handler
 	Badges       *badges.Handler
 	Mailer       mailer.Sender
+	PathProgress PathProgressNotifier
+}
+
+// PathProgressNotifier is implemented by the learning_paths handler so that
+// course completions can trigger learning-path progress recomputation.
+// Decoupled as an interface to avoid an import cycle.
+type PathProgressNotifier interface {
+	RecomputePathProgress(ctx context.Context, userID, courseID int64)
 }
 
 func NewHandler(queries *database.Queries) *Handler {
@@ -45,6 +53,13 @@ func (h *Handler) WithBadges(b *badges.Handler) *Handler {
 // WithMailer sets the email sender for course completion notifications.
 func (h *Handler) WithMailer(m mailer.Sender) *Handler {
 	h.Mailer = m
+	return h
+}
+
+// WithPathProgress wires the learning-path progress notifier so course
+// completions cascade into path progress.
+func (h *Handler) WithPathProgress(p PathProgressNotifier) *Handler {
+	h.PathProgress = p
 	return h
 }
 
@@ -374,6 +389,12 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 						log.Printf("[lessons] badges evaluated for user=%d, new=%d", userID, len(newBadges))
 					}
 				}()
+			}
+
+			// Cascade course completion into any learning paths that include this course.
+			// Recomputes path progress and issues a path certificate if the path is now complete.
+			if h.PathProgress != nil {
+				h.PathProgress.RecomputePathProgress(context.Background(), userID, body.CourseID)
 			}
 
 			// Send course completion email (fire-and-forget)

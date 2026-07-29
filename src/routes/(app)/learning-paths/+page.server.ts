@@ -25,6 +25,14 @@ export type PathDetail = {
     path: LearningPath;
     courses: PathDetailCourse[];
     enrollment: PathEnrollment | null;
+    progress?: {
+        total_courses: number;
+        completed_courses: number;
+        required_total: number;
+        required_completed: number;
+        progress_pct: number;
+        is_complete: boolean;
+    } | null;
 };
 
 export type PathDetailCourse = {
@@ -36,6 +44,8 @@ export type PathDetailCourse = {
     course_title: string;
     course_description: string;
     course_status: string;
+    user_status?: "none" | "active" | "completed";
+    user_progress?: string;
 };
 
 export const load: PageServerLoad = async (event) => {

@@ -14,6 +14,7 @@ export { default as BulkUserCreate } from "./BulkUserCreate.svelte";
 export { default as CommandPalette } from "./CommandPalette.svelte";
 export { default as Confetti } from "./Confetti.svelte";
 export { default as ContinueLearning } from "./ContinueLearning.svelte";
+export { default as CourseSearchPicker } from "./CourseSearchPicker.svelte";
 export { default as CourseCard } from "./CourseCard.svelte";
 export { default as CourseCover } from "./CourseCover.svelte";
 export { default as DotPattern } from "./DotPattern.svelte";

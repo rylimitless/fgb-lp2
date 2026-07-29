@@ -397,6 +397,21 @@ create index if not exists idx_certificates_user on certificates(user_id);
 create index if not exists idx_certificates_course on certificates(course_id);
 create index if not exists idx_certificates_code on certificates(certificate_code);
 
+-- Certificates: issued when a user completes a learning path
+create table if not exists learning_path_certificates (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  learning_path_id bigint not null references learning_paths(id) on delete cascade,
+  issued_at timestamptz not null default now(),
+  certificate_code text not null unique,
+  score_pct numeric(5,2) not null default 0,
+  tier text not null default 'bronze' check (tier in ('bronze', 'silver', 'gold')),
+  unique(user_id, learning_path_id)
+);
+create index if not exists idx_lp_certificates_user on learning_path_certificates(user_id);
+create index if not exists idx_lp_certificates_path on learning_path_certificates(learning_path_id);
+create index if not exists idx_lp_certificates_code on learning_path_certificates(certificate_code);
+
 -- Badges: milestone achievements that can be earned (not scoped to a single course)
 create table if not exists badge_definitions (
   id bigserial primary key,

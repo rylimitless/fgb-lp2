@@ -1490,16 +1490,164 @@ func (h *Handler) DeleteModuleHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted", "module_id": moduleID})
 }
 
+// ---- Learning path generation ----
+
+// learningPathGenPrompt instructs the LLM to act as a curriculum designer
+// that assembles a learning path by selecting from an EXISTING catalog of
+// approved courses. It must only reference course ids we actually provide.
+const learningPathGenPrompt = `You are an expert curriculum designer assembling a learning path from an EXISTING catalog of approved courses.
+
+You will receive:
+- The author's goal or topic for the learning path (may be vague)
+- A catalog of available courses, each with an id, title, and description
+
+Your job:
+1. Choose a compelling, specific title and a rich description for the learning path (see the DESCRIPTION rules below).
+2. Select a sensible sequence of courses from the catalog that together achieve the goal. Order them from foundational to advanced.
+3. For each selected course, decide whether it is REQUIRED (core to the goal) or OPTIONAL (a useful supplement).
+4. For each selected course, give a one-sentence rationale for why it's included at that point in the sequence.
+
+DESCRIPTION RULES (the path's description field — write this carefully):
+- Write 3-5 sentences. This is the first thing learners read; it must sell the path and make the outcome concrete.
+- Open with who the path is for and the concrete outcome they'll be able to achieve (e.g. "By the end, you'll be able to...").
+- Reference the actual skills/concepts covered by the courses you selected — ground it in what's really in the path, not generic filler.
+- Convey the learning arc: how the path moves from foundations toward the final outcome.
+- Be specific and confident. Avoid empty phrases like "a comprehensive learning journey", "unlock your potential", "dive deep", "in today's world".
+- Do NOT list the course titles in the description (they're shown separately); synthesize the skills/themes instead.
+
+CRITICAL RULES:
+- ONLY reference course ids that appear in the provided catalog. Never invent course ids or titles.
+- If the catalog has no courses relevant to the goal, return an empty courses array and explain in the summary.
+- Do not select more courses than necessary — a tight, well-sequenced path is better than a bloated one. Aim for 3-8 courses unless the goal clearly warrants more.
+- Output ONLY valid JSON, no markdown fences, no surrounding prose.
+
+OUTPUT FORMAT:
+{
+  "title": "Learning Path Title",
+  "description": "3-5 sentences: who it's for, the concrete outcome, the skills/themes drawn from the selected courses, and the learning arc.",
+  "summary": "1-2 sentence note on the overall design / any gaps in the catalog.",
+  "courses": [
+    {"course_id": 123, "title": "Course Title", "is_required": true, "rationale": "Why this course, here, in one sentence."}
+  ]
+}`
+
+// GenerateLearningPath takes a goal/topic and the approved course catalog, asks
+// the LLM to assemble a path (title + description + sequenced course
+// selection with rationale), and returns the suggestion for user review.
+// It does NOT persist anything — the frontend creates the path + adds courses
+// only after the user accepts.
+// POST /api/learning-paths/generate  { goal: string }
+func (h *Handler) GenerateLearningPath(c *gin.Context) {
+	var body struct {
+		Goal string `json:"goal"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	goal := strings.TrimSpace(body.Goal)
+	if goal == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A goal or topic is required"})
+		return
+	}
+
+	// Fetch the approved+published course catalog.
+	courses, err := h.Queries.GetPublishedCourses(c.Request.Context())
+	if err != nil {
+		log.Printf("[lp-generate] fetch courses: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load course catalog"})
+		return
+	}
+	if len(courses) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"title":       "",
+			"description": "",
+			"summary":     "There are no approved courses in the catalog yet. Create and approve some courses first, then try again.",
+			"courses":     []any{},
+		})
+		return
+	}
+
+	// Build a compact catalog context. Include ids so the model can reference them.
+	var catalogLines []string
+	for _, c2 := range courses {
+		desc := strings.ReplaceAll(c2.Description, "\n", " ")
+		if len(desc) > 200 {
+			desc = desc[:200] + "..."
+		}
+		catalogLines = append(catalogLines, fmt.Sprintf("- [id=%d] %s — %s", c2.ID, c2.Title, desc))
+	}
+	catalogCtx := strings.Join(catalogLines, "\n")
+
+	userPrompt := fmt.Sprintf(`Author's goal or topic for the learning path:
+"%s"
+
+Available course catalog (%d courses):
+%s
+
+Assemble a learning path that achieves the goal using ONLY courses from the catalog above.`,
+		goal, len(courses), catalogCtx)
+
+	resp, err := h.LLM.Chat(learningPathGenPrompt, userPrompt)
+	if err != nil {
+		log.Printf("[lp-generate] llm: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate learning path"})
+		return
+	}
+
+	jsonStr := stripMarkdownFences(resp)
+	var result struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Summary     string `json:"summary"`
+		Courses     []struct {
+			CourseID   int64  `json:"course_id"`
+			Title      string `json:"title"`
+			IsRequired bool   `json:"is_required"`
+			Rationale  string `json:"rationale"`
+		} `json:"courses"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		log.Printf("[lp-generate] parse: %v — raw: %s", err, resp)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse generation response"})
+		return
+	}
+
+	// Validate course ids against the catalog so a hallucinated id can never
+	// reach the create step. Drop anything not in the catalog.
+	validIDs := make(map[int64]bool, len(courses))
+	for _, c2 := range courses {
+		validIDs[c2.ID] = true
+	}
+	cleaned := result.Courses[:0]
+	for _, sel := range result.Courses {
+		if validIDs[sel.CourseID] {
+			cleaned = append(cleaned, sel)
+		}
+	}
+	result.Courses = cleaned
+
+	c.JSON(http.StatusOK, gin.H{
+		"title":       result.Title,
+		"description": result.Description,
+		"summary":     result.Summary,
+		"courses":     result.Courses,
+	})
+}
+
 // RegisterRoutes adds course generation routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/courses/generate", middlewares.WrapRequireRole(h.GenerateCourse, "content creator"))
-	r.POST("/courses/discover", middlewares.WrapRequireRole(h.Discover, "content creator"))
+	r.POST("courses/discover", middlewares.WrapRequireRole(h.Discover, "content creator"))
 	r.POST("/courses/outline", middlewares.WrapRequireRole(h.GenerateOutline, "content creator"))
 	r.POST("/courses/:id/outline/regenerate", middlewares.WrapRequireRole(h.RegenerateOutline, "content creator"))
 	r.GET("/courses/generate/active", h.ListActiveJobs)
 	r.POST("/courses/generate/:id/cancel", middlewares.WrapRequireRole(h.CancelGeneration, "content creator"))
 	r.GET("/courses/generate/:id", h.GetJobStatus)
 	r.GET("/courses/generate/:id/stream", h.StreamJob)
+
+	// Learning path generation (assembles a path from the approved course catalog).
+	r.POST("/learning-paths/generate", middlewares.WrapRequireRole(h.GenerateLearningPath, "content creator"))
 	r.GET("/courses", h.ListCourses)
 	r.GET("/courses/:id", h.GetCourse)
 	r.GET("/courses/:id/preview", h.PreviewCourse)

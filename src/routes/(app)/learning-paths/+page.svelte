@@ -373,41 +373,58 @@
                 {/if}
 
                 {#if selectedPath.enrollment}
-                    {@const epct = progressPercent(selectedPath.enrollment)}
-                    <div
-                        class="mt-3 flex items-center gap-3 rounded-xl border border-border bg-muted/30 p-3"
-                    >
-                        <div class="flex-1">
-                            <div
-                                class="flex items-center justify-between text-xs"
-                            >
-                                <span class="text-muted-foreground"
-                                    >Your progress</span
-                                >
-                                <span class="font-semibold"
-                                    >{epct.toFixed(0)}%</span
-                                >
-                            </div>
-                            <div
-                                class="mt-1 h-2 w-full overflow-hidden rounded-full bg-muted"
-                            >
-                                <div
-                                    class="h-full rounded-full bg-primary transition-all"
-                                    style="width: {epct}%"
-                                ></div>
+                    {@const epct = selectedPath.progress?.progress_pct ?? progressPercent(selectedPath.enrollment)}
+                    {#if selectedPath.enrollment.status === "completed"}
+                        <div
+                            class="mt-3 flex items-center gap-3 rounded-xl border border-success/30 bg-success/10 p-3"
+                        >
+                            <CheckCircle class="size-5 text-success shrink-0" />
+                            <div class="flex-1">
+                                <p class="text-sm font-semibold text-success">Path complete!</p>
+                                <p class="text-xs text-muted-foreground">
+                                    You've finished all required courses. A certificate has been issued.
+                                </p>
                             </div>
                         </div>
-                        {#if selectedPath.enrollment.status === "active"}
-                            <Button.Root
-                                variant="outline"
-                                size="xs"
-                                onclick={() =>
-                                    handleDrop(selectedPath!.enrollment!.id)}
-                            >
-                                <XCircle class="size-3" /> Drop
-                            </Button.Root>
-                        {/if}
-                    </div>
+                    {:else}
+                        <div
+                            class="mt-3 flex items-center gap-3 rounded-xl border border-border bg-muted/30 p-3"
+                        >
+                            <div class="flex-1">
+                                <div
+                                    class="flex items-center justify-between text-xs"
+                                >
+                                    <span class="text-muted-foreground"
+                                        >Your progress
+                                        {#if selectedPath.progress}
+                                            ({selectedPath.progress.completed_courses}/{selectedPath.progress.total_courses} courses)
+                                        {/if}
+                                    </span>
+                                    <span class="font-semibold"
+                                        >{epct.toFixed(0)}%</span
+                                    >
+                                </div>
+                                <div
+                                    class="mt-1 h-2 w-full overflow-hidden rounded-full bg-muted"
+                                >
+                                    <div
+                                        class="h-full rounded-full bg-primary transition-all"
+                                        style="width: {epct}%"
+                                    ></div>
+                                </div>
+                            </div>
+                            {#if selectedPath.enrollment.status === "active"}
+                                <Button.Root
+                                    variant="outline"
+                                    size="xs"
+                                    onclick={() =>
+                                        handleDrop(selectedPath!.enrollment!.id)}
+                                >
+                                    <XCircle class="size-3" /> Drop
+                                </Button.Root>
+                            {/if}
+                        </div>
+                    {/if}
                 {:else}
                     <div class="mt-3">
                         <Button.Root
@@ -421,6 +438,11 @@
                                 : "Enroll in this path"}
                             <ArrowRight class="size-4" />
                         </Button.Root>
+                        {#if selectedPath.courses.length > 0}
+                            <p class="mt-2 text-xs text-muted-foreground">
+                                You'll be enrolled in all {selectedPath.courses.length} courses automatically.
+                            </p>
+                        {/if}
                     </div>
                 {/if}
 
@@ -434,7 +456,7 @@
                         </p>
                     {:else}
                         <ol class="mt-2 space-y-2">
-                            {#each selectedPath.courses as pc, i}
+                            {#each selectedPath.courses as pc, i (pc.id)}
                                 <li
                                     class="flex items-start gap-3 rounded-lg border border-border bg-muted/50 p-3"
                                 >
@@ -443,11 +465,20 @@
                                         >{i + 1}</span
                                     >
                                     <div class="min-w-0 flex-1">
-                                        <p
-                                            class="text-sm font-medium text-foreground"
-                                        >
-                                            {pc.course_title}
-                                        </p>
+                                        <div class="flex items-center gap-2">
+                                            <p
+                                                class="text-sm font-medium text-foreground"
+                                            >
+                                                {pc.course_title}
+                                            </p>
+                                            {#if pc.user_status === "completed"}
+                                                <span class="inline-flex items-center gap-0.5 text-[10px] text-success">
+                                                    <CheckCircle class="size-3" /> Done
+                                                </span>
+                                            {:else if pc.user_status === "active"}
+                                                <span class="text-[10px] text-info">In progress</span>
+                                            {/if}
+                                        </div>
                                         {#if pc.course_description}
                                             <p
                                                 class="text-xs text-muted-foreground line-clamp-2"
@@ -456,12 +487,21 @@
                                             </p>
                                         {/if}
                                     </div>
-                                    {#if !pc.is_required}
-                                        <span
-                                            class="ml-auto shrink-0 text-[10px] text-muted-foreground italic"
-                                            >Optional</span
-                                        >
-                                    {/if}
+                                    <div class="ml-auto flex shrink-0 items-center gap-2">
+                                        {#if !pc.is_required}
+                                            <span class="text-[10px] text-muted-foreground italic">Optional</span>
+                                        {/if}
+                                        {#if selectedPath.enrollment && pc.user_status !== "completed"}
+                                            <Button.Root
+                                                variant="outline"
+                                                size="xs"
+                                                onclick={() => goto(`/lesson-player?course=${pc.course_id}`)}
+                                            >
+                                                {pc.user_status === "active" ? "Continue" : "Start"}
+                                                <ArrowRight class="size-3" />
+                                            </Button.Root>
+                                        {/if}
+                                    </div>
                                 </li>
                             {/each}
                         </ol>

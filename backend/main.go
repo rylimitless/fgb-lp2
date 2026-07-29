@@ -214,11 +214,18 @@ func main() {
 	badgesHandler := badges.NewHandler(queries, dbpool)
 	badgesHandler.RegisterRoutes(protected)
 
-	// Lessons handler with certificates + badges + mailer for auto-issuing on course completion
+	// Learning paths handler — created before lessons so it can be wired in as a
+	// path-progress notifier (course completions cascade into path progress).
+	lpHandler := learning_paths.NewHandler(queries, dbpool)
+	lpHandler.RegisterRoutes(adminManagerGroup)
+	lpHandler.RegisterLearnerRoutes(protected)
+
+	// Lessons handler with certificates + badges + mailer + path-progress for auto-issuing on course completion
 	lessonHandler := lessons.NewHandler(queries).
 		WithCertificates(certHandler).
 		WithBadges(badgesHandler).
-		WithMailer(emailSender)
+		WithMailer(emailSender).
+		WithPathProgress(lpHandler)
 	lessonHandler.RegisterRoutes(protected)
 
 	gamificationHandler := gamification.NewHandler(queries)
@@ -246,10 +253,6 @@ func main() {
 	userHandler := users.NewHandler(dbpool, queries).WithMailer(emailSender)
 	userHandler.RegisterRoutes(adminGroup)
 	userHandler.RegisterListRoute(auditorManagerGroup) // admin, auditor, manager all get read-only user list
-
-	lpHandler := learning_paths.NewHandler(queries)
-	lpHandler.RegisterRoutes(adminManagerGroup)
-	lpHandler.RegisterLearnerRoutes(protected)
 
 	deptHandler := departments.NewHandler(queries)
 	deptHandler.RegisterRoutes(adminManagerGroup)
