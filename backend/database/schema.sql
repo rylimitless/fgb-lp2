@@ -189,6 +189,13 @@ end $$;
 alter table course_items add constraint course_items_item_type_check
   check (item_type in ('content','mc','ma','tf','fb','sa','matching','drag_sort','hotspot','sequence','scale'));
 
+-- Adaptive learning by question type: items that test the SAME concept but
+-- rendered in different formats (mc / tf / fb / ...) share a question_group_id.
+-- The adaptive engine uses this to serve each learner their preferred or
+-- best-performing question type for a given concept.
+alter table course_items add column if not exists question_group_id text;
+create index if not exists course_items_group_idx on course_items (course_id, question_group_id);
+
 -- Adaptive Practice Room: stores per-user learning preferences
 create table learning_preferences (
   user_id bigint primary key references users(id) on delete cascade,
@@ -198,6 +205,10 @@ create table learning_preferences (
     check (difficulty_level in ('beginner', 'intermediate', 'advanced', 'adaptive')),
   preferred_topics text[] default '{}',
   theta double precision not null default 0.0,
+  -- Adaptive-by-type: explicit preferred question type override + learned
+  -- per-type accuracy (jsonb map of item_type -> {answered, correct}).
+  preferred_type text,
+  type_stats jsonb not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -160,6 +160,33 @@ func (q *Queries) DeleteModule(ctx context.Context, id int64) error {
 	return err
 }
 
+// DeleteModules removes multiple modules (scoped to a course) in a single
+// statement. Like DeleteModule it only detaches items via ON DELETE SET NULL
+// — call DeleteCourseItemsByModules first if a true purge is wanted.
+func (q *Queries) DeleteModules(ctx context.Context, courseID int64, moduleIDs []int64) error {
+	if len(moduleIDs) == 0 {
+		return nil
+	}
+	_, err := q.db.Exec(ctx,
+		`DELETE FROM modules WHERE course_id = $1 AND id = ANY($2::bigint[])`,
+		courseID, moduleIDs,
+	)
+	return err
+}
+
+// DeleteCourseItemsByModules hard-deletes every item attached to any of the
+// given modules. Batch counterpart to DeleteCourseItemsByModule.
+func (q *Queries) DeleteCourseItemsByModules(ctx context.Context, moduleIDs []int64) error {
+	if len(moduleIDs) == 0 {
+		return nil
+	}
+	_, err := q.db.Exec(ctx,
+		`DELETE FROM course_items WHERE module_id = ANY($1::bigint[])`,
+		moduleIDs,
+	)
+	return err
+}
+
 // DeleteCourseItemsByModule hard-deletes every item attached to a module.
 // Used by module regeneration so we don't accumulate stale items.
 func (q *Queries) DeleteCourseItemsByModule(ctx context.Context, moduleID pgtype.Int8) error {

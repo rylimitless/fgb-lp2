@@ -697,6 +697,7 @@
             module={firstModule}
             courseTitle={previewingCourse.title}
             allModules={previewingCourse.modules ?? []}
+            courseSources={previewingCourse.sources ?? []}
             onClose={() => (previewingCourse = null)}
         />
     {:else}

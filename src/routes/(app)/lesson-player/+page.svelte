@@ -42,6 +42,7 @@
         QuestionHotspot,
         ScrollProgress,
     } from "$lib/components/brand";
+    import { groupByConcept } from "$lib/concepts";
 
     let { data } = $props();
     let userRoles: string[] = $derived(data?.user?.roles ?? []);
@@ -140,6 +141,107 @@
     // Which items have had their correct answer revealed (separate from check in learning mode)
     let revealed = $state<Record<number, boolean>>({});
 
+    // ---- Adaptive question-type selection ----
+    // Courses generate each concept in multiple question types (variants that
+    // share a question_group_id). Instead of showing a learner every variant
+    // (which looks like duplicate questions), we show ONE variant per concept:
+    // their preferred type if available, otherwise the first. They can also
+    // switch a concept's type on the fly via a per-question dropdown.
+
+    // The learner's preferred question type for the course ("" = auto/first,
+    // SURPRISE = pick a random-but-stable type per concept).
+    // Persisted to learning_preferences so it's remembered across sessions.
+    const SURPRISE = "__surprise__";
+    let preferredType = $state<string>("");
+    // Per-concept on-the-fly overrides: groupId -> chosen item_type.
+    let variantPick = $state<Record<string, string>>({});
+
+    // A stable pseudo-random index in [0, n) derived from a string key. Used
+    // for SURPRISE mode so each concept lands on a consistent (but varied)
+    // type instead of reshuffling on every render.
+    function stableIndex(key: string, n: number): number {
+        if (n <= 0) return 0;
+        let h = 2166136261;
+        for (let i = 0; i < key.length; i++) {
+            h ^= key.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return Math.abs(h) % n;
+    }
+
+    // Pick which variant of a concept to show: an explicit per-question pick,
+    // then the course-wide preferred type, then the first variant.
+    function pickVariantItem(group: { key: string; items: any[] }): any {
+        const pick = variantPick[group.key];
+        if (pick) {
+            const found = group.items.find((it) => it.item_type === pick);
+            if (found) return found;
+        }
+        if (preferredType === SURPRISE) {
+            // Random per concept, but stable so it doesn't flip on re-render.
+            return group.items[stableIndex(group.key, group.items.length)];
+        }
+        if (preferredType) {
+            const found = group.items.find((it) => it.item_type === preferredType);
+            if (found) return found;
+        }
+        return group.items[0];
+    }
+
+    // One displayed item per concept group (content passes through unchanged).
+    function displayedItems(mod: any): any[] {
+        const items = mod?.items ?? [];
+        return groupByConcept(items).map((g) =>
+            g.items.length > 1 && g.items[0].item_type !== "content"
+                ? pickVariantItem(g)
+                : g.items[0],
+        );
+    }
+
+    // The variant set for a concept (for the per-question type dropdown).
+    function variantsFor(mod: any, item: any): any[] {
+        const gid = item?.question_group_id;
+        if (!gid) return [];
+        const block = groupByConcept(mod?.items ?? []).find((b) => b.key === gid);
+        return block ? block.items : [];
+    }
+
+    function setVariant(mod: any, item: any, type: string) {
+        const gid = item?.question_group_id;
+        if (gid) variantPick[gid] = type;
+    }
+
+    // Load the learner's remembered preferred question type (global, shared
+    // with the adaptive room). Used to pre-pick each concept's variant.
+    async function loadPreferredType() {
+        try {
+            const res = await fetch("/api/adaptive/preferences", { credentials: "include" });
+            if (res.ok) {
+                const data = await res.json();
+                preferredType = data.preferred_type ?? "";
+            }
+        } catch { /* ignore */ }
+    }
+
+    async function savePreferredType(type: string) {
+        // SURPRISE is a session-only display mode (not a real question type),
+        // so we don't persist it to the backend's preferred_type column —
+        // otherwise it'd leak a magic string into the adaptive engine.
+        if (type === SURPRISE) {
+            preferredType = SURPRISE;
+            return;
+        }
+        try {
+            const res = await fetch("/api/adaptive/preferences", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ preferred_type: type }),
+            });
+            if (res.ok) preferredType = type;
+        } catch { /* ignore */ }
+    }
+
     // Derived: is the course in learning (non-graded) mode?
     let isGraded = $derived(
         parseCourseSettings(enrolledCourse?.settings).graded === true,
@@ -157,6 +259,7 @@
         } else {
             loadCourses();
         }
+        loadPreferredType();
     });
 
     async function loadPreview(courseId: number) {
@@ -297,7 +400,9 @@
     function unansweredCount(mod: any): number {
         let unanswered = 0;
         if (!mod?.items) return 0;
-        for (const item of mod.items) {
+        // Count against the displayed items (one per concept) so switching a
+        // concept's format or having hidden variants doesn't inflate the count.
+        for (const item of displayedItems(mod)) {
             if (item.item_type === "content") continue;
             if (answers[item.id] === undefined) unanswered++;
         }
@@ -475,9 +580,10 @@
         let correct = 0,
             total = 0;
         if (!enrolledCourse) return { correct: 0, total: 0 };
+        // Score over the DISPLAYED items (one per concept), so the result
+        // matches what the learner actually answered — not every hidden variant.
         for (const mod of enrolledCourse.modules) {
-            if (!mod?.items) continue;
-            for (const item of mod.items) {
+            for (const item of displayedItems(mod)) {
                 if (item.item_type === "content") continue;
                 total++;
                 if (isCorrect(item, answers[item.id])) correct++;
@@ -494,7 +600,7 @@
         let done = 0,
             total = 0;
         if (!mod?.items) return { done: 0, total: 0, pct: 100 };
-        for (const item of mod.items) {
+        for (const item of displayedItems(mod)) {
             if (item.item_type === "content") continue;
             total++;
             if (answers[item.id] !== undefined) done++;
@@ -574,6 +680,13 @@
             }))
             .sort((a, b) => b.count - a.count);
     });
+
+    // Question types present anywhere in the course — used to populate the
+    // learner's "preferred format" picker. Picking one makes every concept
+    // (that has that type) show in that format.
+    let availableTypes = $derived(
+        assessmentMix.map((a) => ({ type: a.type, label: a.label })),
+    );
 </script>
 
 <!-- Skip Confirmation Dialog.
@@ -1309,6 +1422,32 @@
                         </div>
                     </div>
 
+                    {#if availableTypes.length > 1}
+                        <!-- Preferred question format for this course. Each
+                             concept is generated in multiple types; pinning one
+                             shows that format wherever the concept supports it.
+                             Concepts can still be switched individually. -->
+                        <div class="mb-4 flex items-center gap-2 flex-wrap text-xs">
+                            <Layers class="size-3.5 text-muted-foreground shrink-0" />
+                            <span class="text-muted-foreground">Preferred format:</span>
+                            <button
+                                class="rounded-full border px-2.5 py-1 transition-colors {!preferredType ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-muted-foreground/40'}"
+                                onclick={() => savePreferredType("")}
+                            >Auto</button>
+                            <button
+                                class="rounded-full border px-2.5 py-1 transition-colors {preferredType === SURPRISE ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-muted-foreground/40'}"
+                                onclick={() => savePreferredType(SURPRISE)}
+                                title="Pick a random format for each concept (stable per concept)"
+                            >✨ Surprise me</button>
+                            {#each availableTypes as t (t.type)}
+                                <button
+                                    class="rounded-full border px-2.5 py-1 transition-colors {preferredType === t.type ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-muted-foreground/40'}"
+                                    onclick={() => savePreferredType(t.type)}
+                                >{t.label}</button>
+                            {/each}
+                        </div>
+                    {/if}
+
                     {#if assessmentMix.length > 0}
                         <div
                             class="mb-4 rounded-2xl border border-border bg-card p-4 lift"
@@ -1362,7 +1501,28 @@
                     {/if}
 
                     <div class="flex flex-col gap-4">
-                        {#each currentModule.items as item, ii}
+                        {#each displayedItems(currentModule) as item, ii (item.id)}
+                            {#if item.item_type !== "content" && variantsFor(currentModule, item).length > 1}
+                                {@const vs = variantsFor(currentModule, item)}
+                                <!-- Per-concept type switcher: this concept was
+                                     generated in several formats; the learner can
+                                     view any of them on the fly since they're all
+                                     already generated. -->
+                                <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <Layers class="size-3.5 shrink-0" />
+                                    <span>Same concept, different format:</span>
+                                    <select
+                                        class="ml-auto rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring max-w-[12rem]"
+                                        value={item.item_type}
+                                        onchange={(e) => setVariant(currentModule, item, (e.target as HTMLSelectElement).value)}
+                                        title="Change this question's format"
+                                    >
+                                        {#each vs as v (v.id)}
+                                            <option value={v.item_type}>{questionTypeLabels[v.item_type] ?? v.item_type}{#if preferredType && preferredType !== SURPRISE && preferredType === v.item_type} ★ (preferred){/if}</option>
+                                        {/each}
+                                    </select>
+                                </div>
+                            {/if}
                             {#if item.item_type === "content"}
                                 <article
                                     class="rounded-2xl border border-border bg-card p-6 md:p-8 motion-rise-in"

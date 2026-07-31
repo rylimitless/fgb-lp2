@@ -19,6 +19,31 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// maxQuestionsFromSettings extracts the optional hard question cap stored in
+// a course's settings jsonb (set when the author requested a fixed question
+// count). Returns 0 when unset.
+func maxQuestionsFromSettings(settings []byte) int {
+	if len(settings) == 0 {
+		return 0
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(settings, &m) != nil {
+		return 0
+	}
+	raw, ok := m["max_questions"]
+	if !ok {
+		return 0
+	}
+	var n int
+	if json.Unmarshal(raw, &n) != nil {
+		return 0
+	}
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
 // ---- Job types ----
 
 type JobID string
@@ -536,6 +561,9 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 	}
 
 	settingsMap := map[string]interface{}{"sources": sourceRefs}
+	if req.MaxQuestions > 0 {
+		settingsMap["max_questions"] = req.MaxQuestions
+	}
 	settingsJSON, _ := json.Marshal(settingsMap)
 
 	// --- Persist the course row (create or update) ---
@@ -688,13 +716,19 @@ func (w *Worker) runFullJob(job *GenerationJob, req GenerateCourseRequest) {
 	totalModules := len(coursePlan.Modules)
 	modulesResult := make([]gin.H, totalModules)
 
+	// Distribute the optional question cap evenly (ceil) across modules.
+	maxConcepts := 0
+	if req.MaxQuestions > 0 && totalModules > 0 {
+		maxConcepts = (req.MaxQuestions + totalModules - 1) / totalModules
+	}
+
 	g, gctx := errgroup.WithContext(job.ctx)
 	g.SetLimit(moduleConcurrency)
 
 	for mi, modPlan := range coursePlan.Modules {
 		mi, modPlan := mi, modPlan
 		g.Go(func() error {
-			modResult, err := w.generateModule(gctx, job, courseID, coursePlan, mi, modPlan, totalModules, req.QuestionTypes, nil)
+			modResult, err := w.generateModule(gctx, job, courseID, coursePlan, mi, modPlan, totalModules, req.QuestionTypes, maxConcepts, nil)
 			if err != nil {
 				return err
 			}
@@ -843,7 +877,21 @@ func (w *Worker) runModuleJob(job *GenerationJob, req GenerateCourseRequest) {
 		questionTypes = module.QuestionTypes
 	}
 
-	modResult, err := w.generateModule(job.ctx, job, req.CourseID, coursePlan, int(module.SortOrder), modPlan, 1, questionTypes, module)
+	// Distribute the optional course-wide question cap across modules. We use
+	// the total module count so a course capped at e.g. 20 questions with 5
+	// modules gives each module a budget of 4 concepts. ceil() so remainder
+	// concepts aren't lost.
+	maxConcepts := 0
+	if total := maxQuestionsFromSettings(course.Settings); total > 0 {
+		mods, _ := w.queries.GetModulesByCourseWithStatus(job.ctx, req.CourseID)
+		n := len(mods)
+		if n < 1 {
+			n = 1
+		}
+		maxConcepts = (total + n - 1) / n // ceil division
+	}
+
+	modResult, err := w.generateModule(job.ctx, job, req.CourseID, coursePlan, int(module.SortOrder), modPlan, 1, questionTypes, maxConcepts, module)
 	if err != nil {
 		// Mark the module as failed but report the error on the job too.
 		_ = w.queries.UpdateModuleStatus(context.Background(), module.ID, "failed")
@@ -881,12 +929,18 @@ func buildChunkContext(chunks []database.SearchDocumentChunksRow) string {
 }
 
 // generateModule runs the per-module pipeline (retrieval → sections → content → questions)
-// for a single module. Each section gets its content written, then 1-3 questions are
-// generated about that section. Items are stored interleaved: content, q1, q2, content, q3...
+// for a single module. Each section gets its content written, then per-concept
+// question-type variants are generated for that section. Items are stored
+// interleaved: content, q1 variants, content, q2 variants...
+//
+// maxConcepts is a HARD cap on the number of unique questions (concepts) this
+// module may produce. 0 = no cap. It's the per-module share of the course's
+// optional max_questions budget, enforced so the author gets a predictable
+// total question count regardless of how many sections the LLM plans.
 //
 // If `existing` is non-nil, the module row is reused (StageModule path); otherwise a
 // new modules row is created (legacy StageFull path).
-func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, mi int, modPlan planModule, totalModules int, questionTypes []string, existing *database.ModuleWithStatus) (gin.H, error) {
+func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, mi int, modPlan planModule, totalModules int, questionTypes []string, maxConcepts int, existing *database.ModuleWithStatus) (gin.H, error) {
 	moduleLabel := fmt.Sprintf("%d/%d", mi+1, totalModules)
 
 	// --- Per-module retrieval ---
@@ -987,6 +1041,12 @@ List 3-5 key sections that comprehensively break down this module's content.`,
 	// as warnings (e.g. "matching skipped on section 2: no natural pairs").
 	limitations := make([]gin.H, 0)
 
+	// Hard question cap: count unique concepts created so we can stop once the
+	// module's share of the course budget is reached. Content for later
+	// sections still gets written (it's teaching material), but no further
+	// question concepts are emitted past the cap.
+	conceptsCreated := 0
+
 	for si, secTitle := range sectionTitles {
 		// Check for cancellation before each section.
 		if job.isCancelled() {
@@ -1044,8 +1104,22 @@ Write exhaustive, faithful teaching content for this section.`,
 			log.Printf("[worker] create content item (module %d section %d): %v", mi+1, si+1, err)
 		}
 
-		// --- Generate 1-3 questions about this section ---
-		job.addStep("writing", fmt.Sprintf("Creating questions for section %d/%d of Module %s...",
+		// --- Generate per-concept question-type variants ---
+		// Adaptive learning: each testable concept in the section is rendered in
+		// EVERY question type that fits it (variants share a question_group_id),
+		// so the engine can later serve a learner their preferred/best type for
+		// that concept instead of always the same format.
+
+		// Enforce the hard question cap. Content for this section was already
+		// written; if the module's concept budget is exhausted, skip question
+		// generation for this and later sections so the course stays within the
+		// author's requested limit.
+		if maxConcepts > 0 && conceptsCreated >= maxConcepts {
+			log.Printf("[worker] module %s: question cap %d reached — skipping questions for section %d", moduleLabel, maxConcepts, si+1)
+			continue
+		}
+
+		job.addStep("writing", fmt.Sprintf("Creating question variants for section %d/%d of Module %s...",
 			si+1, len(sectionTitles), moduleLabel))
 
 		contentSummary := sectionBody
@@ -1053,7 +1127,7 @@ Write exhaustive, faithful teaching content for this section.`,
 			contentSummary = contentSummary[:2000]
 		}
 
-		// Build type restriction for the prompt.
+		// Build type restriction for the prompt (when the module narrows types).
 		typeList := make([]string, 0, len(allowedTypes))
 		for k := range allowedTypes {
 			typeList = append(typeList, fmt.Sprintf("%s (%s)", k, allKnownTypes[k]))
@@ -1063,14 +1137,23 @@ Write exhaustive, faithful teaching content for this section.`,
 			typeRestriction = fmt.Sprintf("\n\nCRITICAL: ONLY use these question types: %s. Do NOT use any other types.", strings.Join(typeList, ", "))
 		}
 
+		// When a hard cap is in effect, tell the model exactly how many more
+		// concepts it may emit for this module so it doesn't over-produce (the
+		// loop below also hard-truncates as a safety net).
+		var capRestriction string
+		if maxConcepts > 0 {
+			remaining := maxConcepts - conceptsCreated
+			capRestriction = fmt.Sprintf("\n\nCRITICAL: Produce AT MOST %d distinct concept(s) for this section. Fewer is fine; never exceed this number.", remaining)
+		}
+
 		questionPrompt := fmt.Sprintf(`Section: "%s"
 
 Content:
 %s
 
-Generate 1-3 assessment items that test understanding of THIS section.%s`, secTitle, contentSummary, typeRestriction)
+Identify the distinct concepts in this section and render each one in every question type that fits it.%s%s`, secTitle, contentSummary, typeRestriction, capRestriction)
 
-		questionResp, err := w.llm.Chat(perSectionQuestionPrompt, questionPrompt)
+		questionResp, err := w.llm.Chat(conceptVariantPrompt, questionPrompt)
 		if err != nil {
 			log.Printf("[worker] questions (m%d s%d): %v", mi+1, si+1, err)
 			// Non-fatal: continue to next section even if questions fail
@@ -1078,19 +1161,30 @@ Generate 1-3 assessment items that test understanding of THIS section.%s`, secTi
 		}
 
 		questionJSON := stripMarkdownFences(questionResp)
-		// The prompt asks for {"items": [...], "limitations": [...]}. Older
-		// responses (and any model that ignores the wrapper) may return a bare
-		// array, so we support both shapes.
-		var questions []genItem
+
+		// Preferred shape: {"concepts": [...], "limitations": [...]}. Fall back to
+		// the legacy {"items": [...]} (or bare array) shape if the model ignores
+		// the concept structure — those become standalone items with no group.
+		var concepts []conceptGroup
 		var sectionLimits []gin.H
-		var wrapper struct {
+		var conceptWrapper struct {
+			Concepts    []conceptGroup `json:"concepts"`
+			Limitations []gin.H        `json:"limitations"`
+		}
+		var legacyItems []genItem
+		var legacyWrapper struct {
 			Items       []genItem `json:"items"`
 			Limitations []gin.H   `json:"limitations"`
 		}
-		if err := json.Unmarshal([]byte(questionJSON), &wrapper); err == nil && wrapper.Items != nil {
-			questions = wrapper.Items
-			sectionLimits = wrapper.Limitations
-		} else if err := json.Unmarshal([]byte(questionJSON), &questions); err != nil {
+		parsedConcepts := false
+		if err := json.Unmarshal([]byte(questionJSON), &conceptWrapper); err == nil && len(conceptWrapper.Concepts) > 0 {
+			concepts = conceptWrapper.Concepts
+			sectionLimits = conceptWrapper.Limitations
+			parsedConcepts = true
+		} else if err := json.Unmarshal([]byte(questionJSON), &legacyWrapper); err == nil && legacyWrapper.Items != nil {
+			legacyItems = legacyWrapper.Items
+			sectionLimits = legacyWrapper.Limitations
+		} else if err := json.Unmarshal([]byte(questionJSON), &legacyItems); err != nil {
 			log.Printf("[worker] parse questions (m%d s%d): %v — skipping questions", mi+1, si+1, err)
 			continue
 		}
@@ -1104,36 +1198,72 @@ Generate 1-3 assessment items that test understanding of THIS section.%s`, secTi
 			limitations = append(limitations, l)
 		}
 
-		for _, q := range questions {
+		// Helper to persist one variant item and stream it to the live preview.
+		createVariant := func(q genItem, groupID string) {
 			qType := strings.ToLower(strings.TrimSpace(q.Type))
 			if !allowedTypes[qType] {
 				log.Printf("[worker] unknown item_type %q (m%d s%d) — defaulting to mc", q.Type, mi+1, si+1)
 				qType = "mc"
 			}
 			itemData := ensureIRTParams(q.Data, qType)
-			ci, err := w.queries.CreateCourseItem(ctx, database.CreateCourseItemParams{
-				CourseID:  courseID,
-				ModuleID:  pgtype.Int8{Int64: moduleID, Valid: true},
-				ItemType:  qType,
-				SortOrder: sortOrder,
-				Data:      itemData,
+			ci, err := w.queries.CreateCourseItemWithGroup(ctx, database.CreateCourseItemWithGroupParams{
+				CourseID:        courseID,
+				ModuleID:        pgtype.Int8{Int64: moduleID, Valid: true},
+				ItemType:        qType,
+				SortOrder:       sortOrder,
+				Data:            itemData,
+				QuestionGroupID: groupID,
 			})
 			if err != nil {
 				log.Printf("[worker] create question (m%d s%d): %v", mi+1, si+1, err)
-				continue
+				return
 			}
 			questionItem := gin.H{
 				"id": ci.ID, "item_type": qType, "sort_order": sortOrder,
-				"data": q.Data,
+				"question_group_id": groupID,
+				"data":              json.RawMessage(itemData),
 			}
 			itemsResult = append(itemsResult, questionItem)
-			// Live preview: broadcast each question as it's stored.
 			job.broadcast(SSEEvent{Event: "item", Data: gin.H{
 				"module_id": moduleID,
 				"section":   secTitle,
 				"item":      questionItem,
 			}})
 			sortOrder++
+		}
+
+		if parsedConcepts {
+			for ciIdx, c := range concepts {
+				if len(c.Variants) == 0 {
+					continue
+				}
+				// Hard cap safety net: stop once the module's concept budget is
+				// reached, even if the model ignored the per-section instruction.
+				if maxConcepts > 0 && conceptsCreated >= maxConcepts {
+					log.Printf("[worker] module %s: truncating concepts at cap %d", moduleLabel, maxConcepts)
+					break
+				}
+				// Stable group id scoped to course/module/section/concept so
+				// regeneration produces clean, non-colliding groups.
+				conceptID := strings.TrimSpace(c.ConceptID)
+				if conceptID == "" {
+					conceptID = fmt.Sprintf("c%d", ciIdx+1)
+				}
+				groupID := fmt.Sprintf("%d-m%d-s%d-%s", courseID, moduleID, si, conceptID)
+				for _, v := range c.Variants {
+					createVariant(v, groupID)
+				}
+				conceptsCreated++
+			}
+		} else {
+			// Legacy fallback: standalone items, not grouped.
+			for _, q := range legacyItems {
+				if maxConcepts > 0 && conceptsCreated >= maxConcepts {
+					break
+				}
+				createVariant(q, "")
+				conceptsCreated++
+			}
 		}
 	}
 

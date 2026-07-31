@@ -63,6 +63,12 @@
         }
         onSelectionChange?.(selectedIds);
     }
+
+    // Extract the row's id by idKey. `T` is unconstrained (so the component
+    // works for any row shape), but the selection logic needs an id — cast here.
+    function rowId(item: T): number {
+        return (item as any)[idKey];
+    }
 </script>
 
 <section
@@ -137,7 +143,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {#each items as item, i (item[idKey])}
+                    {#each items as item, i (rowId(item))}
                         <tr
                             class="border-b border-border/45 transition-colors hover:bg-muted/20 last:border-0"
                         >
@@ -147,9 +153,9 @@
                                         type="checkbox"
                                         class="size-4 rounded border-muted-foreground/30 cursor-pointer accent-primary"
                                         checked={selectedIds.includes(
-                                            item[idKey],
+                                            rowId(item),
                                         )}
-                                        oninput={() => toggleOne(item[idKey])}
+                                        oninput={() => toggleOne(rowId(item))}
                                     />
                                 </label>
                             </td>

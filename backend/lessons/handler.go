@@ -259,7 +259,7 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 		database.EnrollInCourseParams{UserID: userID, CourseID: id})
 
 	modules, _ := h.Queries.GetModulesByCourse(c.Request.Context(), id)
-	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
+	items, _ := h.Queries.GetCourseItemsByCourseWithGroup(c.Request.Context(), id)
 
 	// Load item-level progress
 	itemProg, _ := h.Queries.GetItemProgressByCourse(c.Request.Context(),
@@ -280,6 +280,9 @@ func (h *Handler) GetCourseForPlay(c *gin.Context) {
 			"item_type":  item.ItemType,
 			"sort_order": item.SortOrder,
 			"data":       json.RawMessage(item.Data),
+		}
+		if item.QuestionGroupID.Valid {
+			entry["question_group_id"] = item.QuestionGroupID.String
 		}
 		if saved, ok := itemProgMap[item.ID]; ok {
 			entry["saved_answer"] = saved["answer"]

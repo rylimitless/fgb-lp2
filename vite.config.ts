@@ -35,7 +35,7 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "http://backend:5555",
+        target: process.env.INTERNAL_BACKEND_URL ?? "http://backend:5555",
         changeOrigin: true,
       },
     },

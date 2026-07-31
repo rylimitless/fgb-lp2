@@ -202,6 +202,64 @@ Output ONLY valid JSON — no markdown, no surrounding text — in this shape:
   ]
 }`
 
+// conceptVariantPrompt is the adaptive-learning prompt. Instead of picking a
+// few question types per section, it identifies distinct assessment CONCEPTS
+// and renders EACH concept in EVERY question type that fits it. Variants of one
+// concept share a concept_id so the worker can write question_group_id, which
+// lets the adaptive engine serve each learner their preferred/best type for a
+// given concept rather than always the same format.
+//
+// Key rules carried over from perSectionQuestionPrompt: only test this
+// section, every item needs irt params, and be honest about types that don't
+// fit (record them in limitations instead of forcing a bad item). hotspot is
+// always skipped for text-only content.
+const conceptVariantPrompt = `You are an expert assessment designer building an adaptive-learning item bank. Given ONE section of educational content, identify the distinct concepts worth assessing, then render EACH concept as MULTIPLE question-type variants so a learner can be served their preferred or best-performing format for that same concept.
+
+CRITICAL RULES:
+1. Generate questions ONLY about the content in this specific section — do not draw from other topics.
+2. Identify 1-3 distinct assessment CONCEPTS in this section. A concept is one testable idea (e.g. "the three stages of X", "why Y causes Z", "the definition of W"). Each concept becomes a group that can hold several type-variants.
+3. For EACH concept, produce a variant in EVERY question type that fits it, drawn from: mc (multiple choice), ma (multiple answer), tf (true/false), fb (fill-in-the-blank), sa (short answer), matching (matching), drag_sort (drag and sort / sequence). Do NOT limit yourself to one or two types — the goal is breadth, since adaptive learning picks the format per learner.
+4. Variants of the SAME concept MUST test the same underlying idea (same answer/fact), just expressed in that type's format. They share the concept_id.
+5. Every variant MUST be answerable strictly from the section content, and MUST include an "explanation" field explaining the correct answer(s).
+6. Format specifics:
+   - MC: exactly 4 plausible options with distractions that are common misconceptions; "correct" is a 0-based index.
+   - MA: 4-6 options with 2-3 correct; "correct" is an array of 0-based indices.
+   - TF: "statement" + "answer" (boolean).
+   - FB: "text" with "___" blanks + "blanks" array of answers.
+   - SA: "question" + "sample_answer".
+   - matching: "prompt" + "pairs" array of {left, right} (at least 4 pairs).
+   - drag_sort: "prompt" + "items" array to be put in order (the correct order is the array order as written; the UI shuffles them).
+7. Every variant MUST include "irt_beta" and "irt_alpha" in its data object (Item Response Theory params the adaptive engine uses to target difficulty):
+   - irt_beta: item difficulty from -3 (trivially easy) to +3 (extremely hard). Use Bloom's level — recall = -2 to -1, comprehension = -1 to 0, application = 0 to +1, analysis/synthesis = +1 to +2, evaluation = +2 to +3. Variants of one concept should share roughly the same beta.
+   - irt_alpha: discrimination from 0.5 to 2.5; well-written questions ~1.0-1.5.
+
+BE HONEST ABOUT QUESTION TYPES THAT DON'T FIT A CONCEPT:
+For each concept, include a variant for a type ONLY if that type can faithfully test the concept. If a type does not fit, OMIT its variant and add a limitations entry naming that concept_id and type with a reason. Examples:
+  - matching needs at least 4 natural pairs — skip on a single-concept definition.
+  - drag_sort needs a clear ordered process — skip on purely conceptual material.
+  - fb works best for factual recall (names/terms/numbers) — skip on conceptual prose.
+  - hotspot REQUIRES a real image with clickable regions; this is text-only content, so NEVER produce a hotspot variant — always add it to limitations.
+  - tf needs an unambiguous true/false statement — skip if the concept is nuanced/multi-part.
+Forcing a bad question is worse than skipping it.
+
+Output ONLY valid JSON — no markdown, no surrounding text — in this shape:
+
+{
+  "concepts": [
+    {
+      "concept_id": "c1",
+      "stem": "One short phrase naming the core idea this concept tests.",
+      "variants": [
+        { "type": "mc", "data": { "question": "...", "options": ["...","...","...","..."], "correct": 0, "explanation": "...", "irt_beta": 0.5, "irt_alpha": 1.2 } },
+        { "type": "tf", "data": { "statement": "...", "answer": true, "explanation": "...", "irt_beta": 0.5, "irt_alpha": 1.0 } }
+      ]
+    }
+  ],
+  "limitations": [
+    { "concept_id": "c1", "type": "matching", "reason": "Concept is a single definition with no natural pairs." }
+  ]
+}`
+
 // Step 3 (legacy): Question Generator — produces a batch of 8 mixed-format items
 // from a content summary. The full content is NOT sent to the LLM — only a summary
 // for context. The JSON wrapping is done programmatically in Go code.
@@ -437,6 +495,22 @@ type genItem struct {
 	Data json.RawMessage `json:"data"`
 }
 
+// conceptGroup is the output of the adaptive conceptVariantPrompt: one
+// testable idea (concept_id + stem) rendered as multiple question-type
+// variants. The worker writes question_group_id onto each variant's item so
+// the adaptive engine can serve a learner their preferred type for the concept.
+type conceptGroup struct {
+	ConceptID string    `json:"concept_id"`
+	Stem      string    `json:"stem"`
+	Variants  []genItem `json:"variants"`
+}
+
+type conceptLimitation struct {
+	ConceptID string `json:"concept_id"`
+	Type      string `json:"type"`
+	Reason    string `json:"reason"`
+}
+
 type genModule struct {
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
@@ -484,6 +558,12 @@ type GenerateCourseRequest struct {
 	SourceDocIDs  []int64  `json:"source_doc_ids"`
 	QuestionTypes []string `json:"question_types,omitempty"`
 	CreatedBy     int64    `json:"created_by,omitempty"`
+
+	// MaxQuestions is an optional HARD cap on the number of unique questions
+	// (concepts) generated for the course. 0/unset = no cap. It is persisted in
+	// course settings so it carries through to per-module generation, and the
+	// worker distributes the budget across modules (ceil(total/modules)).
+	MaxQuestions int `json:"max_questions,omitempty"`
 
 	// Stage selects which pipeline runs. Defaults to "full" for backwards
 	// compatibility — existing callers that omit it get the old one-shot flow.
@@ -681,7 +761,7 @@ func (h *Handler) GetCourse(c *gin.Context) {
 	}
 
 	modules, _ := h.Queries.GetModulesByCourseWithStatus(c.Request.Context(), id)
-	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
+	items, _ := h.Queries.GetCourseItemsByCourseWithGroup(c.Request.Context(), id)
 
 	// Parse sources from settings
 	var sources interface{}
@@ -697,12 +777,16 @@ func (h *Handler) GetCourse(c *gin.Context) {
 	itemMap := make(map[int64][]gin.H)
 	for _, item := range items {
 		mid := item.ModuleID.Int64
-		itemMap[mid] = append(itemMap[mid], gin.H{
+		entry := gin.H{
 			"id":         item.ID,
 			"item_type":  item.ItemType,
 			"sort_order": item.SortOrder,
 			"data":       json.RawMessage(item.Data),
-		})
+		}
+		if item.QuestionGroupID.Valid {
+			entry["question_group_id"] = item.QuestionGroupID.String
+		}
+		itemMap[mid] = append(itemMap[mid], entry)
 	}
 
 	modulesResult := make([]gin.H, 0)
@@ -770,17 +854,21 @@ func (h *Handler) PreviewCourse(c *gin.Context) {
 	}
 
 	modules, _ := h.Queries.GetModulesByCourse(c.Request.Context(), id)
-	items, _ := h.Queries.GetCourseItemsByCourse(c.Request.Context(), id)
+	items, _ := h.Queries.GetCourseItemsByCourseWithGroup(c.Request.Context(), id)
 
 	itemMap := make(map[int64][]gin.H)
 	for _, item := range items {
 		mid := item.ModuleID.Int64
-		itemMap[mid] = append(itemMap[mid], gin.H{
+		entry := gin.H{
 			"id":         item.ID,
 			"item_type":  item.ItemType,
 			"sort_order": item.SortOrder,
 			"data":       json.RawMessage(item.Data),
-		})
+		}
+		if item.QuestionGroupID.Valid {
+			entry["question_group_id"] = item.QuestionGroupID.String
+		}
+		itemMap[mid] = append(itemMap[mid], entry)
 	}
 
 	modulesResult := make([]gin.H, 0)
@@ -1490,6 +1578,92 @@ func (h *Handler) DeleteModuleHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted", "module_id": moduleID})
 }
 
+// DeleteModulesHandler removes multiple modules (and their items) from a
+// course in one request. Used by the course builder's bulk-delete UI. Like
+// the single-module delete, modules that are currently generating are refused
+// so we don't race the worker. The whole operation runs in a transaction so a
+// partial failure can't leave the course half-pruned.
+func (h *Handler) DeleteModulesHandler(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	if _, err := h.Queries.GetCourseByID(c.Request.Context(), courseID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	var body struct {
+		ModuleIDs []int64 `json:"module_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(body.ModuleIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "module_ids is required"})
+		return
+	}
+
+	// De-dup the incoming IDs so we don't double-count in the response.
+	seen := make(map[int64]struct{}, len(body.ModuleIDs))
+	ids := make([]int64, 0, len(body.ModuleIDs))
+	for _, id := range body.ModuleIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	// Validate that every requested module belongs to this course and none
+	// are mid-generation. Same guard as DeleteModuleHandler / ReorderModulesHandler.
+	mods, err := h.Queries.GetModulesByCourseWithStatus(c.Request.Context(), courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load modules"})
+		return
+	}
+	statusByID := make(map[int64]string, len(mods))
+	for _, m := range mods {
+		statusByID[m.ID] = m.Status
+	}
+	for _, id := range ids {
+		if statusByID[id] == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "module does not belong to this course"})
+			return
+		}
+		if statusByID[id] == "generating" {
+			c.JSON(http.StatusConflict, gin.H{"error": "Cannot delete a module that is currently generating"})
+			return
+		}
+	}
+
+	// Items are ON DELETE SET NULL on module_id, so we have to delete them
+	// explicitly to actually purge content. Both deletes run in one tx.
+	tx, err := h.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	txQueries := h.Queries.WithTx(tx)
+
+	if err := txQueries.DeleteCourseItemsByModules(c.Request.Context(), ids); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete module items"})
+		return
+	}
+	if err := txQueries.DeleteModules(c.Request.Context(), courseID, ids); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete modules"})
+		return
+	}
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit deletion"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "module_ids": ids})
+}
+
 // ---- Learning path generation ----
 
 // learningPathGenPrompt instructs the LLM to act as a curriculum designer
@@ -1661,6 +1835,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/courses/:id/modules/:moduleId/generate", middlewares.WrapRequireRole(h.GenerateModule, "content creator"))
 	r.PUT("/courses/:id/modules/:moduleId", middlewares.WrapRequireRole(h.UpdateModuleHandler, "content creator"))
 	r.DELETE("/courses/:id/modules/:moduleId", middlewares.WrapRequireRole(h.DeleteModuleHandler, "content creator"))
+	r.DELETE("/courses/:id/modules", middlewares.WrapRequireRole(h.DeleteModulesHandler, "content creator"))
 
 	r.POST("/items/:itemId/ai-edit", middlewares.WrapRequireRole(h.AiEditItem, "content creator"))
 	r.PUT("/items/:itemId", middlewares.WrapRequireRole(h.UpdateItemData, "content creator"))

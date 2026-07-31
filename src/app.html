@@ -16,6 +16,21 @@
 		<meta name="theme-color" content="#0a1828" media="(prefers-color-scheme: dark)" />
 		<meta name="apple-mobile-web-app-title" content="FGB Academy" />
 		<meta name="application-name" content="FGB Academy" />
+		<script>
+			(function () {
+				try {
+					var raw = localStorage.getItem("fgb.prefs.v1");
+					var prefs = raw ? JSON.parse(raw) : {};
+					var dark = prefs.theme === "dark" ||
+						(prefs.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+					var root = document.documentElement;
+					root.classList.toggle("dark", dark);
+					root.style.colorScheme = dark ? "dark" : "light";
+					if (prefs.reducedMotion) root.dataset.reducedMotion = "true";
+					if (prefs.highContrast) root.dataset.contrast = "high";
+				} catch (_) {}
+			})();
+		</script>
 
 		<meta property="og:type" content="website" />
 		<meta property="og:title" content="FGB Academy" />

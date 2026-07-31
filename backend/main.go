@@ -296,6 +296,20 @@ func runMigrations(dbpool *pgxpool.Pool) {
 		`alter table course_generation_jobs add column if not exists stage text not null default 'full'
 			check (stage in ('full', 'outline', 'module'))`,
 		`alter table course_generation_jobs add column if not exists module_id bigint references modules(id) on delete set null`,
+
+		// Adaptive learning by question type: items that test the SAME concept
+		// but in different formats (mc/tf/fb/...) share a question_group_id so
+		// the adaptive engine can serve each learner their preferred/best type
+		// for a given concept instead of always the same format.
+		`alter table course_items add column if not exists question_group_id text`,
+		`create index if not exists course_items_group_idx on course_items (course_id, question_group_id)`,
+
+		// Per-type performance tracking so "responds better to a certain type"
+		// is data-driven, not just a static preference. type_stats is a JSONB
+		// map of item_type -> {answered, correct}. preferred_type is an explicit
+		// override the learner (or admin) can set.
+		`alter table learning_preferences add column if not exists preferred_type text`,
+		`alter table learning_preferences add column if not exists type_stats jsonb not null default '{}'`,
 	}
 
 	for _, m := range migrations {

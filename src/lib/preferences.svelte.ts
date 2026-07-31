@@ -67,17 +67,33 @@ function applySideEffects(p: Prefs) {
 	else root.removeAttribute("data-reduced-motion");
 	if (p.highContrast) root.setAttribute("data-contrast", "high");
 	else root.removeAttribute("data-contrast");
-	if (p.theme === "dark") root.classList.add("dark");
-	else if (p.theme === "light") root.classList.remove("dark");
-	else {
-		// system — match prefers-color-scheme
-		const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-		root.classList.toggle("dark", dark);
-	}
+	const dark =
+		p.theme === "dark" ||
+		(p.theme === "system" &&
+			window.matchMedia("(prefers-color-scheme: dark)").matches);
+	root.classList.toggle("dark", dark);
+	root.style.colorScheme = dark ? "dark" : "light";
+	document
+		.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')
+		.forEach((meta) => {
+			meta.content = dark ? "#071625" : "#f2f5f7";
+		});
+	window.dispatchEvent(
+		new CustomEvent("fgb:themechange", {
+			detail: { theme: p.theme, resolvedTheme: dark ? "dark" : "light" },
+		}),
+	);
 }
 
 const state = $state<Prefs>(readStorage());
 applySideEffects(state);
+
+if (typeof window !== "undefined") {
+	const media = window.matchMedia("(prefers-color-scheme: dark)");
+	media.addEventListener("change", () => {
+		if (state.theme === "system") applySideEffects(state);
+	});
+}
 
 export const prefs = state;
 

@@ -6,6 +6,8 @@
         FileText,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
+    import { onMount } from "svelte";
+    import { page } from "$app/state";
     import {
         GiaAvatar,
         GiaTip,
@@ -28,8 +30,13 @@
 
     let approvedDocs = $state<any[]>([]);
 
-    $effect(() => {
+    onMount(() => {
         loadDocs();
+        const query = page.url.searchParams.get("q")?.trim();
+        if (query) {
+            input = query;
+            send();
+        }
     });
 
     async function loadDocs() {
@@ -168,6 +175,9 @@
         <div
             class="relative flex-1 overflow-y-auto rounded-2xl border border-border bg-card p-4 mb-4"
             bind:this={chatContainer}
+            aria-live="polite"
+            aria-busy={loading}
+            aria-label="Conversation with Gia"
         >
             <Spotlight class="h-full w-full" opacity={0.12} />
             {#if messages.length === 0}
@@ -277,6 +287,7 @@
         <div class="flex gap-2 shrink-0">
             <textarea
                 bind:value={input}
+                aria-label="Message Gia"
                 rows={2}
                 placeholder="Ask Gia about your documents..."
                 onkeydown={handleKeydown}
@@ -288,6 +299,7 @@
                 class="size-10 shrink-0 self-end"
                 disabled={loading || !input.trim()}
                 onclick={send}
+                aria-label="Send message to Gia"
             >
                 <Send class="size-4" />
             </Button.Root>

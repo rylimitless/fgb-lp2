@@ -43,6 +43,7 @@ export { default as SelectableTable } from "./SelectableTable.svelte";
 export { default as Spotlight } from "./Spotlight.svelte";
 export { default as StatCard } from "./StatCard.svelte";
 export { default as StreakFlame } from "./StreakFlame.svelte";
+export { default as ThemeToggle } from "./ThemeToggle.svelte";
 export { default as ToastViewport } from "./ToastViewport.svelte";
 export { default as WordRotate } from "./WordRotate.svelte";
 export { default as XpRing } from "./XpRing.svelte";

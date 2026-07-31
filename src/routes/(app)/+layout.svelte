@@ -28,12 +28,14 @@
         Building2,
         Layers,
         Award,
+        ChevronDown,
+        UserRound,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
     import { onMount } from "svelte";
     import BrandLogo from "$lib/components/brand/BrandLogo.svelte";
-    import GiaAvatar from "$lib/components/brand/GiaAvatar.svelte";
+    import ThemeToggle from "$lib/components/brand/ThemeToggle.svelte";
     import CommandPalette from "$lib/components/brand/CommandPalette.svelte";
     import MobileDock from "$lib/components/brand/MobileDock.svelte";
     import ToastViewport from "$lib/components/brand/ToastViewport.svelte";
@@ -336,19 +338,27 @@
     // Gamification values from server
     let xpPoints = $derived((data as any)?.gamification?.totalScore ?? 0);
     let streakDays = $derived((data as any)?.gamification?.streakDays ?? 0);
+    let userInitials = $derived(
+        ((data?.user?.name ?? "FGB User") as string)
+            .split(/\s+/)
+            .slice(0, 2)
+            .map((part) => part[0])
+            .join("")
+            .toUpperCase(),
+    );
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
-<div class="relative min-h-svh bg-surface-2">
+<div class="relative min-h-svh bg-background">
     <!-- ===== FLOATING SIDEBAR ===== -->
     <aside
-        class="fixed inset-y-0 left-0 z-40 w-64 p-3 transition-transform duration-300 lg:translate-x-0 {mobileNavOpen
+        class="fixed inset-y-0 left-0 z-40 w-[236px] transition-transform duration-300 lg:w-[clamp(148px,14.5vw,236px)] lg:translate-x-0 {mobileNavOpen
             ? 'translate-x-0'
             : '-translate-x-full'}"
     >
         <div
-            class="relative flex h-full flex-col overflow-hidden rounded-3xl brand-gradient text-primary-foreground shadow-lg"
+            class="sidebar-shell relative flex h-full flex-col overflow-hidden border-r border-accent/25 brand-gradient text-primary-foreground shadow-lg"
         >
             <div
                 class="pointer-events-none absolute -top-16 -left-10 size-48 rounded-full bg-accent/20 blur-3xl"
@@ -356,12 +366,12 @@
 
             <!-- brand -->
             <div
-                class="relative z-10 flex items-center justify-between px-5 pt-5 pb-3"
+                class="relative z-10 flex min-h-12 items-center justify-between px-4 py-2 xl:min-h-16 xl:px-5 xl:py-3"
             >
                 <a href="/" class="flex items-center" aria-label="FGB Academy">
                     <BrandLogo
                         variant="lockup"
-                        size={26}
+                        size={24}
                         class="text-primary-foreground"
                     />
                 </a>
@@ -376,13 +386,13 @@
 
             <!-- nav -->
             <nav
-                class="sidebar-nav relative z-10 flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1"
+                class="sidebar-nav relative z-10 flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-1 xl:px-3 xl:py-2"
                 aria-label="Primary"
             >
                 {#each visibleGroups as group, gi (group.label)}
-                    <div class="flex flex-col gap-0.5" class:mt-3={gi > 0}>
+                    <div class="flex flex-col gap-0 {gi > 0 ? 'mt-1.5 xl:mt-3' : ''}">
                         <span
-                            class="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-foreground/45"
+                            class="px-2 py-0.5 text-[7px] font-semibold uppercase tracking-[0.18em] text-primary-foreground/45 xl:px-3 xl:py-1 xl:text-[10px]"
                             id={"nav-group-" + group.label.toLowerCase()}
                         >
                             {group.label}
@@ -401,7 +411,7 @@
                                         aria-current={active
                                             ? "page"
                                             : undefined}
-                                        class="group relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-all press {active
+                                        class="focus-premium group relative flex min-h-5 w-full items-center gap-2 rounded-md px-2 py-0.5 text-[8px] font-medium transition-all press xl:min-h-9 xl:gap-3 xl:rounded-lg xl:px-3 xl:py-2 xl:text-sm {active
                                             ? 'bg-accent text-accent-foreground shadow-glow'
                                             : 'text-primary-foreground/75 hover:bg-primary-foreground/10 hover:text-primary-foreground'}"
                                     >
@@ -410,7 +420,7 @@
                                                 class="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-accent-foreground/40"
                                             ></span>
                                         {/if}
-                                        <item.icon class="size-4 shrink-0" />
+                                        <item.icon class="size-3 shrink-0 xl:size-4" />
                                         <span class="truncate">
                                             {item.label}
                                         </span>
@@ -424,22 +434,22 @@
 
             <!-- footer -->
             <div
-                class="relative z-10 border-t border-primary-foreground/10 px-3 py-3 flex flex-col gap-0.5"
+                class="relative z-10 flex flex-col gap-0.5 border-t border-primary-foreground/10 px-2 py-2 xl:px-3 xl:py-3"
             >
                 <button
-                    class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-primary-foreground/70 hover:bg-primary-foreground/10 hover:text-primary-foreground transition-colors press"
+                    class="focus-premium flex min-h-5 items-center gap-2 rounded-md px-2 py-0.5 text-[8px] font-medium text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground xl:min-h-9 xl:gap-3 xl:rounded-lg xl:px-3 xl:py-2 xl:text-sm"
                     onclick={() => goto("/help")}
                 >
                     <LifeBuoy class="size-4" /> Help &amp; support
                 </button>
                 <button
-                    class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-primary-foreground/70 hover:bg-primary-foreground/10 hover:text-primary-foreground transition-colors press"
+                    class="focus-premium flex min-h-5 items-center gap-2 rounded-md px-2 py-0.5 text-[8px] font-medium text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground xl:min-h-9 xl:gap-3 xl:rounded-lg xl:px-3 xl:py-2 xl:text-sm"
                     onclick={() => goto("/settings")}
                 >
                     <Settings class="size-4" /> Settings
                 </button>
                 <button
-                    class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-primary-foreground/70 hover:bg-primary-foreground/10 hover:text-primary-foreground transition-colors press"
+                    class="focus-premium flex min-h-5 items-center gap-2 rounded-md px-2 py-0.5 text-[8px] font-medium text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground disabled:opacity-50 xl:min-h-9 xl:gap-3 xl:rounded-lg xl:px-3 xl:py-2 xl:text-sm"
                     onclick={handleLogout}
                     disabled={loggingOut}
                 >
@@ -460,10 +470,10 @@
     {/if}
 
     <!-- ===== MAIN COLUMN ===== -->
-    <div class="lg:pl-64 flex min-h-svh flex-col">
+    <div class="flex min-h-svh flex-col lg:pl-[clamp(148px,14.5vw,236px)]">
         <!-- top bar -->
         <header
-            class="sticky top-0 z-20 flex h-16 items-center gap-3 px-4 md:px-6 bg-surface-2/80 backdrop-blur supports-[backdrop-filter]:bg-surface-2/60"
+            class="sticky top-0 z-20 flex h-12 items-center gap-2 border-b border-border bg-background/88 px-3 backdrop-blur-md supports-[backdrop-filter]:bg-background/76 md:px-4 xl:h-14 xl:gap-3"
         >
             <button
                 class="lg:hidden text-muted-foreground hover:text-foreground"
@@ -476,7 +486,7 @@
             <!-- search — live input. Typing straight in opens the palette
                  with the query pre-seeded; clicking opens with empty state.
                  Ctrl/Cmd K still works from anywhere via the global listener. -->
-            <div class="relative flex-1 max-w-md">
+            <div class="relative max-w-[420px] flex-1">
                 <Search
                     class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 />
@@ -488,7 +498,7 @@
                     value={headerQuery}
                     placeholder="Search courses, documents, people…"
                     aria-label="Search FGB Academy"
-                    class="h-9 w-full rounded-full border border-border-strong bg-card pl-9 pr-14 text-sm text-foreground placeholder:text-muted-foreground outline-none transition-colors hover:border-primary/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                    class="h-8 w-full rounded-lg border border-border bg-surface-1 pl-9 pr-14 text-xs text-foreground shadow-inner placeholder:text-muted-foreground outline-none transition-colors hover:border-border-strong focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 xl:h-9 xl:text-sm"
                     onfocus={() => (commandOpen = true)}
                     onkeydown={(e) => {
                         if (e.key === "Enter" || /^[a-zA-Z0-9]$/.test(e.key)) {
@@ -508,21 +518,21 @@
                 </kbd>
             </div>
 
-            <div class="ml-auto flex items-center gap-2 md:gap-3">
+            <div class="ml-auto flex items-center gap-1.5 xl:gap-2">
                 <!-- XP (compact on mobile, full pill on ≥sm) -->
                 <button
                     type="button"
                     onclick={() => goto("/settings")}
                     aria-label={`${xpPoints.toLocaleString()} XP earned`}
-                    class="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent-soft px-2 py-1 sm:px-3 sm:py-1.5 press hover:border-accent/60 transition-colors"
+                    class="focus-premium flex h-8 items-center gap-1.5 rounded-lg border border-success/25 bg-success/8 px-2 transition-colors hover:border-success/50 xl:px-2.5"
                 >
-                    <Trophy class="size-3.5 text-accent-foreground" />
+                    <Trophy class="size-3.5 text-success" />
                     <span
-                        class="text-xs font-bold text-accent-foreground tabular"
+                        class="text-xs font-bold text-success tabular"
                         >{xpPoints.toLocaleString()}</span
                     >
                     <span
-                        class="hidden sm:inline text-[10px] uppercase tracking-wider text-accent-foreground/70"
+                        class="hidden sm:inline text-[10px] uppercase tracking-wider text-success/70"
                         >XP</span
                     >
                 </button>
@@ -531,7 +541,7 @@
                     type="button"
                     onclick={() => goto("/")}
                     aria-label={`${streakDays} day learning streak`}
-                    class="flex items-center gap-1.5 rounded-full border border-streak/30 bg-streak/10 px-2 py-1 sm:px-3 sm:py-1.5 press hover:border-streak/60 transition-colors"
+                    class="focus-premium flex h-8 items-center gap-1.5 rounded-lg border border-streak/25 bg-streak/8 px-2 transition-colors hover:border-streak/50 xl:px-2.5"
                 >
                     <Flame class="size-3.5 text-streak fill-streak/40" />
                     <span class="text-xs font-bold text-streak tabular"
@@ -542,6 +552,8 @@
                         >day</span
                     >
                 </button>
+
+                <ThemeToggle />
 
                 <!-- notifications -->
                 <DropdownMenu.Root
@@ -557,7 +569,7 @@
                                 {...props}
                                 variant="ghost"
                                 size="icon"
-                                class="relative size-9 rounded-full"
+                                class="relative size-9 rounded-lg"
                             >
                                 <Bell class="size-4" />
                                 {#if unreadCount > 0}
@@ -656,25 +668,45 @@
                 </DropdownMenu.Root>
 
                 <!-- profile -->
-                <div class="flex items-center gap-2 pl-1">
-                    <GiaAvatar size={34} />
-                    {#if data?.user?.name}
-                        <div class="hidden md:flex flex-col leading-tight">
-                            <span class="text-xs font-semibold text-foreground"
-                                >{data.user.name}</span
+                <div class="hidden sm:block">
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger>
+                        {#snippet child({ props })}
+                            <button
+                                {...props}
+                                class="focus-premium flex min-h-9 items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-muted"
+                                aria-label="Open account menu"
                             >
-                            <span
-                                class="text-[10px] uppercase tracking-wider text-muted-foreground"
-                                >{data.user.role}</span
-                            >
-                        </div>
-                    {/if}
+                                <span class="flex size-8 items-center justify-center rounded-full border border-accent/45 bg-primary text-[10px] font-bold text-primary-foreground">
+                                    {userInitials}
+                                </span>
+                                {#if data?.user?.name}
+                                    <span class="hidden max-w-28 flex-col leading-tight md:flex">
+                                        <span class="truncate text-[11px] font-semibold text-foreground">{data.user.name}</span>
+                                        <span class="truncate text-[9px] uppercase tracking-wider text-muted-foreground">{data.user.role}</span>
+                                    </span>
+                                {/if}
+                                <ChevronDown class="hidden size-3 text-muted-foreground md:block" />
+                            </button>
+                        {/snippet}
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content class="w-52" align="end">
+                        <DropdownMenu.Label>{data?.user?.name ?? "Account"}</DropdownMenu.Label>
+                        <DropdownMenu.Separator />
+                        <DropdownMenu.Item onclick={() => goto("/settings")}>
+                            <UserRound class="size-4" /> Profile &amp; settings
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item onclick={handleLogout} disabled={loggingOut}>
+                            <LogOut class="size-4" /> {loggingOut ? "Signing out…" : "Sign out"}
+                        </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Root>
                 </div>
             </div>
         </header>
 
         <!-- content -->
-        <main class="flex flex-1 p-4 pb-24 md:p-6 lg:pb-6">
+        <main class="flex flex-1 p-3 pb-24 md:p-4 lg:pb-4 xl:p-5">
             {@render children()}
         </main>
     </div>
@@ -714,5 +746,8 @@
     }
     :global(.sidebar-nav:hover::-webkit-scrollbar-thumb) {
         background-color: rgba(255, 255, 255, 0.28);
+    }
+    :global(.sidebar-shell) {
+        --primary-foreground: oklch(0.94 0.014 225);
     }
 </style>

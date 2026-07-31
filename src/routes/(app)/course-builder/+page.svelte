@@ -37,6 +37,9 @@
     let title = $state("");
     let description = $state("");
     let selectedDocIds = $state<number[]>([]);
+    // Optional HARD cap on the number of unique questions the course may
+    // contain. Blank = no cap. Enforced per module as ceil(total/modules).
+    let maxQuestions = $state<number | null>(null);
     let generating = $state(false);
     let genError = $state("");
     let activeJobId = $state<string | null>(null);
@@ -118,6 +121,7 @@
                     title: title.trim() || "Untitled Course",
                     description: description.trim(),
                     source_doc_ids: selectedDocIds,
+                    max_questions: maxQuestions && maxQuestions > 0 ? maxQuestions : undefined,
                 }),
             });
             if (!enqueue.ok) {
@@ -414,6 +418,22 @@
                             placeholder="Describe the topic, paste paper text, or list learning goals. The AI will propose an outline you can edit before any content is generated."
                             class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                         ></textarea>
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label for="ol-maxq" class="text-xs font-medium text-muted-foreground">
+                            Max unique questions <span class="text-muted-foreground/60 font-normal">(optional)</span>
+                        </label>
+                        <input
+                            id="ol-maxq"
+                            type="number"
+                            min="1"
+                            bind:value={maxQuestions}
+                            placeholder="No cap — e.g. 20 for a hard limit"
+                            class="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                        <p class="text-[11px] text-muted-foreground/70">
+                            Sets a hard cap on distinct questions across the course. Each concept counts once regardless of how many question-type variants it has. Left blank = generate as many as fit the material.
+                        </p>
                     </div>
 
                     {#if genError}

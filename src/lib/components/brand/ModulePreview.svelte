@@ -18,6 +18,7 @@
         FileText,
         Hash,
         MessageSquare,
+        Layers,
     } from "@lucide/svelte";
     import * as Button from "$lib/components/ui/button";
     import Markdown from "$lib/components/brand/Markdown.svelte";
@@ -25,16 +26,25 @@
     import QuestionMatching from "$lib/components/brand/QuestionMatching.svelte";
     import QuestionOrdering from "$lib/components/brand/QuestionOrdering.svelte";
     import QuestionHotspot from "$lib/components/brand/QuestionHotspot.svelte";
+    import { groupByConcept, uniqueConceptCount } from "$lib/concepts";
+    import { Chart, registerables } from "chart.js";
+
+    Chart.register(...registerables);
 
     let {
         module = $bindable(),
         courseTitle = "",
         allModules = [],
+        courseSources = [],
         onClose,
     }: {
         module: any;
         courseTitle?: string;
         allModules?: any[];
+        // Source refs (chunk excerpts) used to build the course — drives the
+        // "chunking system" side of the AI-vs-retrieval radar. Optional: when
+        // absent the retrieval axes read as zero.
+        courseSources?: any[];
         onClose: () => void;
     } = $props();
 
@@ -118,10 +128,35 @@
         return stripped.length > 60 ? stripped.slice(0, 60) + "…" : stripped;
     }
 
+    // A representative label for a concept block — the stem shared by its
+    // variants (prefer the clearest field across the variants we have).
+    function conceptStem(blockItems: any[]): string {
+        for (const it of blockItems) {
+            const d = it.data ?? {};
+            const text = d.question ?? d.statement ?? d.text ?? "";
+            if (text) return String(text);
+        }
+        return "Untitled concept";
+    }
+
+    // Unique question count for a single module (deduped by concept), for the
+    // sidebar/mini-map so it doesn't overstate the size of a module.
+    function moduleQuestionCount(mod: any): number {
+        return uniqueConceptCount(
+            (mod.items ?? []).filter((it: any) => it.item_type !== "content"),
+        );
+    }
+
     // Pre-computed for the metrics panel (can't use {@const} in template divs).
     let maxTypeCount = $derived(typeDistribution[0]?.count ?? 1);
     let contentPct = $derived(allItems.length ? allContentItems.length / allItems.length * 100 : 0);
     let questionPct = $derived(allItems.length ? allQuestionItems.length / allItems.length * 100 : 0);
+
+    // Unique assessable concepts across the whole course. Many question items
+    // are just type-variants of the same concept (they share a
+    // question_group_id), so the raw item count overstates how much is being
+    // taught. This is the number to surface in metrics.
+    let uniqueQuestions = $derived(uniqueConceptCount(allQuestionItems));
 
     // When the user switches modules via the mini-map, update the bound
     // `module` prop so the parent tracks the change too. Also reset the
@@ -133,6 +168,7 @@
         checked = {};
         revealed = {};
         currentIndex = 0;
+        walkVariantIndex = {};
         itemCache = new Map();
     }
 
@@ -160,6 +196,44 @@
         items.filter((i: any) => i.item_type !== "content"),
     );
 
+    // Items grouped into concept blocks. The walk-through steps through
+    // BLOCKS (one concept at a time), so a learner doesn't answer the same
+    // concept 5 times just because it has 5 type-variants. Inside a
+    // multi-variant block they can flip between the variants without advancing.
+    let conceptBlocks = $derived(groupByConcept(items));
+    // Singleton blocks (content, ungrouped questions) render as-is.
+    let walkBlocks = $derived(conceptBlocks);
+
+    // Which variant-set blocks are expanded. Collapsed by default to keep the
+    // preview scannable; click a concept header to reveal all its type
+    // variants. Singleton blocks ignore this (always shown).
+    let expandedConcepts = $state<Record<string, boolean>>({});
+    // Within a multi-variant walk block, which variant is shown. Defaults to 0
+    // (the representative). Changing this does NOT advance the walk.
+    let walkVariantIndex = $state<Record<string, number>>({});
+
+    function toggleConcept(key: string) {
+        expandedConcepts[key] = !expandedConcepts[key];
+    }
+
+    function setWalkVariant(key: string, idx: number) {
+        walkVariantIndex[key] = idx;
+    }
+
+    function collapseAllConcepts() {
+        expandedConcepts = {};
+    }
+
+    function expandAllConcepts() {
+        const all: Record<string, boolean> = {};
+        for (const b of conceptBlocks) if (b.isVariantSet) all[b.key] = true;
+        expandedConcepts = all;
+    }
+
+    let anyConceptExpanded = $derived(
+        Object.values(expandedConcepts).some((v) => v),
+    );
+
     let score = $derived.by(() => {
         let correct = 0;
         let total = assessableItems.length;
@@ -171,7 +245,15 @@
         return { correct, total };
     });
 
-    let currentItem = $derived(walkMode ? items[currentIndex] : null);
+    let currentBlock = $derived(walkMode ? walkBlocks[currentIndex] : null);
+    // The variant currently displayed within the walk block: the user's pick
+    // if they've flipped through a multi-variant concept, else the first.
+    let currentWalkItem = $derived.by(() => {
+        if (!currentBlock || currentBlock.items.length === 0) return null;
+        const idx = walkVariantIndex[currentBlock.key] ?? 0;
+        return currentBlock.items[Math.min(idx, currentBlock.items.length - 1)];
+    });
+    let currentItem = $derived(currentWalkItem);
 
     function setAnswer(itemId: number, answer: any) {
         answers[itemId] = answer;
@@ -196,7 +278,7 @@
     }
 
     function next() {
-        if (currentIndex < items.length - 1) {
+        if (currentIndex < walkBlocks.length - 1) {
             currentIndex++;
         }
     }
@@ -212,6 +294,7 @@
         checked = {};
         revealed = {};
         currentIndex = 0;
+        walkVariantIndex = {};
     }
 
     function isCorrect(item: any, answer: any): boolean {
@@ -373,17 +456,19 @@
         }
     }
 
-    let progressPct = $derived(
-        assessableItems.length === 0
-            ? 0
-            : Math.round(
-                  (assessableItems.filter(
-                      (i: any) => checked[i.id] !== undefined,
-                  ).length /
-                      assessableItems.length) *
-                      100,
-              ),
-    );
+    // Progress across the walk, measured in CONCEPTS (not raw variants), so
+    // it reflects how many distinct ideas the learner has worked through.
+    // A concept counts once any of its variants has been checked.
+    let progressPct = $derived.by(() => {
+        const blocks = walkBlocks.filter(
+            (b) => b.items.some((it: any) => it.item_type !== "content"),
+        );
+        if (blocks.length === 0) return 0;
+        const done = blocks.filter((b) =>
+            b.items.some((it: any) => checked[it.id] !== undefined),
+        ).length;
+        return Math.round((done / blocks.length) * 100);
+    });
 
     // Handle Escape key to close
     function handleKeydown(e: KeyboardEvent) {
@@ -395,6 +480,101 @@
             prev();
         }
     }
+
+    // ---- AI vs Chunking radar ----
+    // Breaks the course build down by where the work came from: the LLM (AI)
+    // vs the retrieval/chunking system (source docs → embedded chunks →
+    // per-module retrieval). Each axis is a build facet; both series are
+    // normalized to their own max so the two polygons render comparably and
+    // the SHAPE shows where each system carries the load.
+    //
+    // These values are derived from the actual generated course, not logged
+    // telemetry: counts of modules/concepts/variants/content, and the source
+    // refs the worker recorded in settings.sources.
+    let aiVsChunkRadar = $derived.by(() => {
+        const modules = (allModules ?? []).length;
+        const contentChars = allContentItems.reduce(
+            (n: number, it: any) => n + ((it.data?.body ?? "").length || 0),
+            0,
+        );
+        const concepts = uniqueQuestions;
+        const variants = allQuestionItems.length;
+        const srcDocs = new Set(
+            (courseSources ?? [])
+                .map((s: any) => s.document_id)
+                .filter((id: any) => id != null),
+        ).size;
+        const chunks = (courseSources ?? []).length;
+
+        const ai = [modules, Math.round(contentChars / 1000), concepts, variants, 0, 0];
+        const retrieval = [srcDocs, chunks, 0, 0, chunks, srcDocs];
+        const norm = (arr: number[]) => {
+            const mx = Math.max(1, ...arr);
+            return arr.map((v) => Math.round((v / mx) * 100));
+        };
+        return { ai: norm(ai), retrieval: norm(retrieval), hasData: modules + variants + chunks > 0 };
+    });
+
+    let radarCanvas = $state<HTMLCanvasElement>();
+    let radarChart: Chart | null = null;
+    const radarPalette = {
+        ai: "#00548e",        // navy = AI/LLM
+        aiSoft: "#00548e33",
+        retrieval: "#3fa46a", // success/green = chunking/retrieval
+        retrievalSoft: "#3fa46a33",
+    };
+
+    $effect(() => {
+        // Only mount while the metrics panel is open and there's something to show.
+        if (!metricsOpen || !radarCanvas || !aiVsChunkRadar.hasData) {
+            if (radarChart) { radarChart.destroy(); radarChart = null; }
+            return;
+        }
+        const cfg: any = {
+            type: "radar",
+            data: {
+                labels: ["Planning", "Content", "Concepts", "Questions", "Retrieval", "Coverage"],
+                datasets: [
+                    {
+                        label: "AI / LLM",
+                        data: aiVsChunkRadar.ai,
+                        backgroundColor: radarPalette.aiSoft,
+                        borderColor: radarPalette.ai,
+                        borderWidth: 2,
+                        pointBackgroundColor: radarPalette.ai,
+                    },
+                    {
+                        label: "Chunking / Retrieval",
+                        data: aiVsChunkRadar.retrieval,
+                        backgroundColor: radarPalette.retrievalSoft,
+                        borderColor: radarPalette.retrieval,
+                        borderWidth: 2,
+                        pointBackgroundColor: radarPalette.retrieval,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true, position: "bottom", labels: { boxWidth: 10, font: { size: 10 } } },
+                    tooltip: { callbacks: { label: (ctx: any) => `${ctx.dataset.label}: ${ctx.formattedValue}/100` } },
+                },
+                scales: {
+                    r: {
+                        min: 0,
+                        max: 100,
+                        ticks: { display: false, stepSize: 25 },
+                        pointLabels: { font: { size: 10 } },
+                        grid: { color: "rgba(127,127,127,0.2)" },
+                    },
+                },
+            },
+        };
+        if (radarChart) radarChart.destroy();
+        radarChart = new Chart(radarCanvas, cfg);
+        return () => { if (radarChart) { radarChart.destroy(); radarChart = null; } };
+    });
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -505,6 +685,7 @@
                             {@const status = moduleStatusIcon(mod)}
                             {@const isExpanded = expandedSidebarModules[mod.id]}
                             {@const modItems = moduleItems(mod)}
+                            {@const qc = moduleQuestionCount(mod)}
                             <div>
                                 <button
                                     class="flex items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors w-full {mod.id === module?.id ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
@@ -533,7 +714,7 @@
                                             {mod.title}
                                         </p>
                                         <p class="text-[10px] text-muted-foreground/70 mt-0.5">
-                                            {modItems.length} items
+                                            {qc} question{qc === 1 ? "" : "s"}
                                         </p>
                                     </div>
                                 </button>
@@ -573,7 +754,30 @@
                 </div>
             {:else if walkMode && currentItem}
                 {@const item = normalize(currentItem)}
+                {@const block = currentBlock}
+                {@const blockVariants = block?.isVariantSet ? block.items : []}
+                {@const activeVariant = block ? (walkVariantIndex[block.key] ?? 0) : 0}
                 <div class="motion-rise-in">
+                    {#if block?.isVariantSet}
+                        <!-- Concept identifier: marks this question as part of a
+                             set, and lets the reviewer view every type-variant of
+                             the same concept without leaving the walk. -->
+                        <div class="rounded-xl border border-primary/30 bg-primary/5 px-4 py-2.5 mb-3 flex items-center gap-2 flex-wrap">
+                            <Layers class="size-3.5 text-primary shrink-0" />
+                            <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">
+                                Concept {currentIndex + 1} · {block.items.length} variants
+                            </span>
+                            <div class="flex items-center gap-1 ml-auto flex-wrap">
+                                {#each block.items as v, vi (v.id)}
+                                    <button
+                                        class="text-[10px] px-2 py-0.5 rounded border transition-colors {vi === activeVariant ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground hover:border-muted-foreground/40'}"
+                                        onclick={() => setWalkVariant(block.key, vi)}
+                                        title="View this variant of the same concept"
+                                    >{questionTypeLabel(v.item_type)}</button>
+                                {/each}
+                            </div>
+                        </div>
+                    {/if}
                     {#if item.item_type === "content"}
                         <article class="rounded-2xl border border-border bg-card p-6 md:p-8">
                             <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
@@ -589,9 +793,9 @@
                                 Previous
                             </Button.Root>
                             <span class="text-xs text-muted-foreground">
-                                {currentIndex + 1} / {items.length}
+                                {currentIndex + 1} / {walkBlocks.length}
                             </span>
-                            {#if currentIndex < items.length - 1}
+                            {#if currentIndex < walkBlocks.length - 1}
                                 <Button.Root size="sm" onclick={next}>
                                     Next
                                     <ChevronRight class="size-4 ml-1" />
@@ -605,15 +809,20 @@
                     {:else}
                         <!-- Question rendering (shared with all-at-once mode below) -->
                         {@render questionCard(item, true)}
+                        {#if blockVariants.length > 1}
+                            <p class="text-[11px] text-muted-foreground text-center mt-2">
+                                Variant {activeVariant + 1} of {blockVariants.length} — same concept, different format. Use the chips above to switch.
+                            </p>
+                        {/if}
                         <div class="flex items-center justify-between mt-4">
                             <Button.Root variant="outline" size="sm" disabled={currentIndex === 0} onclick={prev}>
                                 <ChevronLeft class="size-4 mr-1" />
                                 Previous
                             </Button.Root>
                             <span class="text-xs text-muted-foreground">
-                                {currentIndex + 1} / {items.length}
+                                {currentIndex + 1} / {walkBlocks.length}
                             </span>
-                            <Button.Root size="sm" onclick={next} disabled={currentIndex >= items.length - 1}>
+                            <Button.Root size="sm" onclick={next} disabled={currentIndex >= walkBlocks.length - 1}>
                                 Next
                                 <ChevronRight class="size-4 ml-1" />
                             </Button.Root>
@@ -621,21 +830,76 @@
                     {/if}
                 </div>
             {:else}
-                <!-- All-at-once mode: render every item -->
+                <!-- All-at-once mode: items grouped into concept blocks.
+                     Variant sets (one concept rendered in several question
+                     types) collapse into a single expandable block so a
+                     reviewer can step through concepts as units rather than
+                     N near-duplicate questions per concept. -->
+                {#if conceptBlocks.some((b) => b.isVariantSet)}
+                    <div class="flex items-center justify-end gap-2 mb-1">
+                        <button
+                            class="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                            onclick={anyConceptExpanded ? collapseAllConcepts : expandAllConcepts}
+                        >
+                            {anyConceptExpanded ? "Collapse all concepts" : "Expand all concepts"}
+                        </button>
+                    </div>
+                {/if}
                 <div class="flex flex-col gap-4">
-                    {#each items as rawItem, ii (rawItem.id)}
-                        {@const item = normalize(rawItem)}
-                        {#if item.item_type === "content"}
-                            <article class="rounded-2xl border border-border bg-card p-6 md:p-8 motion-rise-in" style="animation-delay: {Math.min(ii * 30, 200)}ms">
-                                <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                                    Learning material
-                                </span>
-                                {#if item.data?.body}
-                                    <Markdown source={item.data.body} />
-                                {/if}
-                            </article>
+                    {#each conceptBlocks as block, ii (block.key)}
+                        {#if !block.isVariantSet}
+                            {@const item = normalize(block.items[0])}
+                            {#if item.item_type === "content"}
+                                <article class="rounded-2xl border border-border bg-card p-6 md:p-8 motion-rise-in" style="animation-delay: {Math.min(ii * 30, 200)}ms">
+                                    <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                                        Learning material
+                                    </span>
+                                    {#if item.data?.body}
+                                        <Markdown source={item.data.body} />
+                                    {/if}
+                                </article>
+                            {:else}
+                                {@render questionCard(item, false)}
+                            {/if}
                         {:else}
-                            {@render questionCard(item, false)}
+                            {@const isOpen = !!expandedConcepts[block.key]}
+                            {@const rep = normalize(block.items[0])}
+                            {@const stem = conceptStem(block.items)}
+                            <section class="rounded-xl border border-border bg-card overflow-hidden motion-rise-in" style="animation-delay: {Math.min(ii * 30, 200)}ms">
+                                <button
+                                    class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/30 transition-colors"
+                                    onclick={() => toggleConcept(block.key)}
+                                    aria-expanded={isOpen}
+                                >
+                                    <ChevronDown class="size-4 text-muted-foreground shrink-0 transition-transform {isOpen ? 'rotate-0' : '-rotate-90'}" />
+                                    <Layers class="size-4 text-primary shrink-0" />
+                                    <div class="flex-1 min-w-0">
+                                        <p class="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                                            Concept · {block.items.length} variants
+                                        </p>
+                                        <p class="text-sm font-medium text-foreground truncate">{stem}</p>
+                                    </div>
+                                    <div class="flex items-center gap-1 shrink-0">
+                                        {#each block.items as v}
+                                            <span class="text-[9px] px-1.5 py-0.5 rounded border border-border bg-muted/40 text-muted-foreground uppercase tracking-wide">{questionTypeLabel(v.item_type)}</span>
+                                        {/each}
+                                    </div>
+                                </button>
+                                {#if isOpen}
+                                    <div class="border-t border-border p-4 flex flex-col gap-4">
+                                        {#each block.items as v (v.id)}
+                                            {@render questionCard(normalize(v), false)}
+                                        {/each}
+                                    </div>
+                                {:else}
+                                    <div class="border-t border-border p-4">
+                                        {@render questionCard(rep, false)}
+                                        <p class="text-[11px] text-muted-foreground mt-3 text-center">
+                                            + {block.items.length - 1} more variant{block.items.length - 1 === 1 ? "" : "s"} — click to expand
+                                        </p>
+                                    </div>
+                                {/if}
+                            </section>
                         {/if}
                     {/each}
                 </div>
@@ -681,15 +945,20 @@
                                 <span class="text-lg font-semibold text-foreground">{allContentItems.length}</span>
                                 <p class="text-[10px] text-muted-foreground">Content blocks</p>
                             </div>
+                            <div class="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-center">
+                                <span class="text-lg font-semibold text-primary">{uniqueQuestions}</span>
+                                <p class="text-[10px] text-muted-foreground">Unique questions</p>
+                            </div>
                             <div class="rounded-lg border border-border bg-background px-3 py-2 text-center">
                                 <span class="text-lg font-semibold text-foreground">{allQuestionItems.length}</span>
-                                <p class="text-[10px] text-muted-foreground">Questions</p>
-                            </div>
-                            <div class="rounded-lg border border-border bg-background px-3 py-2 text-center">
-                                <span class="text-lg font-semibold text-foreground">{allItems.length}</span>
-                                <p class="text-[10px] text-muted-foreground">Total items</p>
+                                <p class="text-[10px] text-muted-foreground">Question variants</p>
                             </div>
                         </div>
+                        {#if allQuestionItems.length > uniqueQuestions}
+                            <p class="text-[10px] text-muted-foreground/80">
+                                {allQuestionItems.length} variants across {uniqueQuestions} concepts — each concept is rendered in multiple question types for adaptive learning.
+                            </p>
+                        {/if}
                     </div>
 
                     <!-- Module statuses -->
@@ -740,6 +1009,19 @@
                             <div class="flex items-center gap-3 text-xs text-muted-foreground">
                                 <div class="flex items-center gap-1"><span class="size-2 rounded-full bg-success"></span> Content ({contentPct.toFixed(0)}%)</div>
                                 <div class="flex items-center gap-1"><span class="size-2 rounded-full bg-primary"></span> Questions ({questionPct.toFixed(0)}%)</div>
+                            </div>
+                        </div>
+                    {/if}
+
+                    <!-- AI vs Chunking breakdown radar -->
+                    {#if aiVsChunkRadar.hasData}
+                        <div class="flex flex-col gap-1.5">
+                            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">AI vs Chunking system</p>
+                            <p class="text-[10px] text-muted-foreground/80 -mt-0.5">
+                                Where the build came from across facets (normalized 0–100).
+                            </p>
+                            <div class="h-56">
+                                <canvas bind:this={radarCanvas}></canvas>
                             </div>
                         </div>
                     {/if}

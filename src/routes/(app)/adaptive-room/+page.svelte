@@ -30,7 +30,26 @@
     let lastResult = $state<{ correct: boolean; delta: number; prob: number } | null>(null);
     let sessionDone = $state(false);
 
-    $effect(() => { loadCourses(); });
+    // Adaptive-by-type: the learner can pin a preferred question type, or let
+    // the engine infer it from their accuracy. preferredType is the type the
+    // engine is currently favoring (explicit override, else learned best).
+    let preferredType = $state<string>("");
+    let inferredBestType = $state<string>("");
+    let typeStats = $state<Record<string, { answered: number; correct: number }>>({});
+    let savingPref = $state(false);
+
+    // Human-readable labels + the full menu of selectable types.
+    const typeLabels: Record<string, string> = {
+        mc: "Multiple choice",
+        ma: "Multiple answer",
+        tf: "True / false",
+        fb: "Fill-in-the-blank",
+        sa: "Short answer",
+        matching: "Matching",
+        drag_sort: "Drag and sort",
+    };
+
+    $effect(() => { loadCourses(); loadPreferences(); });
 
     async function loadCourses() {
         loadingCourses = true;
@@ -39,6 +58,35 @@
             if (res.ok) courses = (await res.json()).filter((c: any) => c.status === "published" && c.approved);
         } catch { /* ignore */ }
         loadingCourses = false;
+    }
+
+    async function loadPreferences() {
+        try {
+            const res = await fetch("/api/adaptive/preferences", { credentials: "include" });
+            if (res.ok) {
+                const data = await res.json();
+                preferredType = data.preferred_type ?? "";
+                inferredBestType = data.inferred_best_type ?? "";
+                typeStats = data.type_stats ?? {};
+            }
+        } catch { /* ignore */ }
+    }
+
+    async function savePreferredType(type: string) {
+        savingPref = true;
+        try {
+            const res = await fetch("/api/adaptive/preferences", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ preferred_type: type }),
+            });
+            if (res.ok) {
+                preferredType = type;
+                await loadPreferences();
+            }
+        } catch { /* ignore */ }
+        savingPref = false;
     }
 
     async function startSession(courseId: number) {
@@ -56,6 +104,7 @@
                 theta = data.theta;
                 currentItem = data.item;
                 total = data.total;
+                preferredType = data.preferred_type ?? preferredType;
             }
         } catch { /* ignore */ }
         sessionLoading = false;
@@ -143,6 +192,9 @@
                 answered++;
                 currentItem = data.next_item;
                 answer = undefined;
+                preferredType = data.preferred_type ?? preferredType;
+                // Refresh learned stats so the type-accuracy readout stays live.
+                loadPreferences();
                 if (!data.next_item) sessionDone = true;
             }
         } catch { /* ignore */ }
@@ -278,6 +330,41 @@
                     </span>
                 {/if}
             </div>
+        </div>
+
+        <!-- Preferred question format (adaptive-by-type) -->
+        <div class="rounded-xl border border-border bg-card p-4 flex flex-col gap-2">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+                <div class="flex items-center gap-2">
+                    <Target class="size-4 text-primary" />
+                    <span class="text-sm font-medium text-foreground">Preferred format</span>
+                </div>
+                {#if !preferredType && inferredBestType}
+                    <span class="text-xs text-muted-foreground">
+                        Auto — you respond best to <span class="font-medium text-foreground">{typeLabels[inferredBestType] ?? inferredBestType}</span>
+                    </span>
+                {:else if !preferredType}
+                    <span class="text-xs text-muted-foreground">Auto — keep practicing to learn your best format</span>
+                {/if}
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+                <button
+                    class="rounded-full border px-3 py-1 text-xs transition-colors {!preferredType ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-muted-foreground/40'}"
+                    onclick={() => savePreferredType("")}
+                    disabled={savingPref}
+                >Auto</button>
+                {#each Object.entries(typeLabels) as [key, label]}
+                    <button
+                        class="rounded-full border px-3 py-1 text-xs transition-colors {preferredType === key ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-muted-foreground/40'}"
+                        onclick={() => savePreferredType(key)}
+                        disabled={savingPref}
+                        title={typeStats[key] ? `${typeStats[key].correct}/${typeStats[key].answered} correct` : "No attempts yet"}
+                    >{label}{#if typeStats[key]} <span class="tabular text-muted-foreground/70">{Math.round((typeStats[key].correct / typeStats[key].answered) * 100)}%</span>{/if}</button>
+                {/each}
+            </div>
+            <p class="text-[11px] text-muted-foreground/80">
+                Pinning a format serves every concept in that type when available. Auto picks the type you score highest on.
+            </p>
         </div>
 
         <!-- Question -->
