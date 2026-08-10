@@ -8,12 +8,13 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-func MakeTokens() string {
+func MakeTokens() (string, error) {
 	bytes := make([]byte, 15)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
 	sessionId := base32.StdEncoding.EncodeToString(bytes)
-	return sessionId
-
+	return sessionId, nil
 }
 
 func MakeHash(password string) string {

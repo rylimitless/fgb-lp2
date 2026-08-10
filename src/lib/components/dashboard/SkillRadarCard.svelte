@@ -35,8 +35,8 @@
 						borderWidth: 2,
 						pointBackgroundColor: styles.getPropertyValue("--accent").trim(),
 						pointBorderColor: teal,
-						pointRadius: 3,
-						pointHoverRadius: 4,
+						pointRadius: 4,
+						pointHoverRadius: 5,
 					}],
 				},
 				options: {
@@ -52,7 +52,7 @@
 							ticks: { display: false, stepSize: 20 },
 							grid: { color: border },
 							angleLines: { color: border },
-							pointLabels: { color: muted || foreground, font: { size: 8.5, family: "Inter Variable" } },
+							pointLabels: { color: muted || foreground, font: { size: 11, family: "Inter Variable" } },
 						},
 					},
 				},
@@ -72,14 +72,14 @@
 
 <DashboardCard title="Skill profile" class="h-full">
 	{#snippet action()}
-		<span class="inline-flex items-center gap-1 text-[8px] text-muted-foreground"><BarChart3 class="size-3" /> Live profile</span>
+		<span class="inline-flex items-center gap-1 text-xs text-muted-foreground"><BarChart3 class="size-4" /> Live profile</span>
 	{/snippet}
-	<div class="relative h-[118px] px-2 pb-1">
+	<div class="relative h-[170px] px-3 pb-2">
 		{#if labels.length}
 			<canvas bind:this={canvas} aria-label={`Skill profile. ${summary}`}></canvas>
 			<p class="sr-only">{summary}</p>
 		{:else}
-			<div class="flex h-full items-center justify-center text-[10px] text-muted-foreground">Complete learning activities to build your skill profile.</div>
+			<div class="flex h-full items-center justify-center text-sm text-muted-foreground">Complete learning activities to build your skill profile.</div>
 		{/if}
 	</div>
 </DashboardCard>

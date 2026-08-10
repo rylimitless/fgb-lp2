@@ -53,7 +53,8 @@ INSERT INTO permissions (name) VALUES
   ('content:delete'),
   ('content:approve'),
   ('reports:view'),
-  ('settings:manage');
+  ('settings:manage')
+ON CONFLICT (name) DO NOTHING;
 
 -- Admin gets everything
 INSERT INTO role_permissions (role, permission_id)
@@ -66,7 +67,7 @@ create table documents (
   title text not null,
   file_path text not null,
   status text not null default 'uploaded'
-    check (status in ('uploaded', 'processing', 'ready', 'failed')),
+    check (status in ('uploaded', 'processing', 'ready', 'failed', 'rejected')),
   uploaded_by bigint references users(id),
   total_chunks int not null default 0,
   chunks_done int not null default 0,
@@ -95,6 +96,11 @@ create table document_chunks (
 
   unique(document_id, chunk_index)
 );
+
+-- Approximate nearest-neighbour index for embedding retrieval (coach queries,
+-- AI course generation). Without it every retrieval is a linear scan.
+create index if not exists document_chunks_embedding_hnsw
+  on document_chunks using hnsw (embedding vector_cosine_ops);
 
 -- Content Studio: courses generated from documents
 create table courses (
@@ -300,6 +306,31 @@ create table if not exists coach_queries (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_coach_queries_created_at on coach_queries(created_at);
+
+-- LLM token usage: every chat completion is logged here with the provider's
+-- own accounting (prompt/completion/total tokens). Powers the developer-tools
+-- "mock course" spend dashboard. label groups calls within a single job
+-- (e.g. 'outline', 'module-3:section-2:questions'); source distinguishes the
+-- origin pipeline ('mock_course', 'course_builder', 'coach', 'discovery').
+create table if not exists llm_token_usage (
+  id bigserial primary key,
+  model text not null,
+  source text not null default 'unknown',
+  label text not null default '',
+  prompt_tokens bigint not null default 0,
+  completion_tokens bigint not null default 0,
+  total_tokens bigint not null default 0,
+  cached_prompt_tokens bigint not null default 0,
+  reasoning_tokens bigint not null default 0,
+  course_id bigint references courses(id) on delete set null,
+  user_id bigint references users(id) on delete set null,
+  job_ref text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_llm_token_usage_created_at on llm_token_usage(created_at desc);
+create index if not exists idx_llm_token_usage_source on llm_token_usage(source);
+create index if not exists idx_llm_token_usage_job_ref on llm_token_usage(job_ref);
+create index if not exists idx_llm_token_usage_course_id on llm_token_usage(course_id);
 
 -- Audit log: single table capturing all significant actions for admin review
 create table if not exists audit_log (

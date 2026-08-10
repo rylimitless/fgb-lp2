@@ -2,6 +2,7 @@ package embeddings
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,12 +43,19 @@ type embedResponse struct {
 // Embed generates embeddings for a batch of text chunks.
 // Returns one 384-dim float64 slice per input, in input order.
 func (c *Client) Embed(inputs []string) ([][]float64, error) {
+	return c.EmbedCtx(context.Background(), inputs)
+}
+
+// EmbedCtx is the context-aware variant. Passing the worker's per-document
+// deadline context lets a hung embeddings service be interrupted instead of
+// blocking until the HTTP client's own 60s timeout (audit item H11).
+func (c *Client) EmbedCtx(ctx context.Context, inputs []string) ([][]float64, error) {
 	bodyBytes, err := json.Marshal(embedRequest{Input: inputs})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.url, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

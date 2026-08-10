@@ -34,13 +34,13 @@
 			{greeting()}, {firstName}
 			<span aria-hidden="true" class="hero-wave ml-1 inline-block text-xl">👋</span>
 		</h1>
-		<p class="mt-1 text-[11px] text-[#dce7ec]/78">Let's continue your learning journey.</p>
+		<p class="mt-1 text-sm text-[#dce7ec]/78">Let's continue your learning journey.</p>
 		<div class="mt-4 flex flex-wrap gap-2">
-			<button class="focus-premium inline-flex h-8 items-center gap-2 rounded-md bg-accent px-3 text-[11px] font-semibold text-accent-foreground shadow-[var(--glow-gold)] transition-colors hover:bg-accent/90" onclick={() => goto("/gia-coach")}>
-				<MessageSquare class="size-3.5" /> Chat with Gia
+			<button class="focus-premium inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-[var(--glow-gold)] transition-colors hover:bg-accent/90" onclick={() => goto("/gia-coach")}>
+				<MessageSquare class="size-4" /> Chat with Gia
 			</button>
-			<button class="focus-premium inline-flex h-8 items-center gap-2 rounded-md border border-white/25 bg-[#061523]/55 px-3 text-[11px] font-medium text-[#edf2f2] hover:bg-[#102c46]" onclick={() => goto(resumeHref)}>
-				Resume learning <ArrowRight class="size-3.5" />
+			<button class="focus-premium inline-flex h-9 items-center gap-2 rounded-md border border-white/25 bg-[#061523]/55 px-3 text-sm font-medium text-[#edf2f2] hover:bg-[#102c46]" onclick={() => goto(resumeHref)}>
+				Resume learning <ArrowRight class="size-4" />
 			</button>
 		</div>
 	</div>

@@ -103,10 +103,10 @@
 	<meta name="description" content="Your FGB Academy learning dashboard." />
 </svelte:head>
 
-<div class="mx-auto flex w-full max-w-[1600px] flex-col gap-1.5">
-	<div class="grid grid-cols-1 gap-1.5 lg:grid-cols-[minmax(0,2.1fr)_minmax(280px,.95fr)]">
+<div class="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2.1fr)_minmax(280px,.95fr)]">
 		<HeroLearningCard {firstName} {resumeHref} />
-		<div class="flex min-w-0 flex-col gap-1.5">
+		<div class="flex min-w-0 flex-col gap-4">
 			<GiaCoachCard />
 			<DeadlineCard deadline={deadlines[0]} />
 		</div>
@@ -114,13 +114,13 @@
 
 	<LearningPathTimeline steps={dashboard.learning_path ?? []} />
 
-	<div class="grid grid-cols-1 gap-1.5 md:grid-cols-2 lg:grid-cols-[1.05fr_1.05fr_1.15fr]">
+	<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-[1.05fr_1.05fr_1.15fr]">
 		<AchievementPanel {achievements} />
 		<SkillRadarCard labels={skillLabels} values={skillValues} />
 		<RecommendationList items={dashboard.recommended ?? []} />
 	</div>
 
-	<div class="grid grid-cols-1 gap-1.5 lg:grid-cols-[1.05fr_1.3fr]">
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[1.05fr_1.3fr]">
 		<LeaderboardCard rows={leaderboard} loading={leaderboardLoading} />
 		<LatestNewsCard items={news} />
 	</div>

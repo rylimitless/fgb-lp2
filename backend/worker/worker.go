@@ -25,6 +25,11 @@ const (
 	chunkOverlap = 100 // overlap between chunks
 	batchSize    = 20  // number of chunks per embedding API call
 	pollInterval = 2 * time.Second
+	// maxDocProcessingTime caps how long a single document may spend in the
+	// worker (extraction + embedding). Without it a stuck embedding service or
+	// a pathological PDF can hold the worker indefinitely, starving every
+	// other document behind it (addresses audit item H11's timeout portion).
+	maxDocProcessingTime = 15 * time.Minute
 )
 
 type Worker struct {
@@ -75,7 +80,9 @@ func (w *Worker) poll(ctx context.Context) {
 		}
 		log.Printf("[worker] processing document %d: %s", claimed.ID, claimed.Title)
 
-		if err := w.processDocument(ctx, claimed); err != nil {
+		// Per-document deadline so one bad upload can't block the queue forever.
+		docCtx, cancel := context.WithTimeout(ctx, maxDocProcessingTime)
+		if err := w.processDocument(docCtx, claimed); err != nil {
 			errMsg := err.Error()
 			log.Printf("[worker] failed to process doc %d: %v", claimed.ID, err)
 			w.queries.UpdateDocumentStatus(ctx, database.UpdateDocumentStatusParams{
@@ -84,6 +91,7 @@ func (w *Worker) poll(ctx context.Context) {
 				ErrorMessage: pgtype.Text{String: truncateStr(errMsg, 500), Valid: true},
 			})
 		}
+		cancel()
 	}
 }
 
@@ -124,7 +132,7 @@ func (w *Worker) processDocument(ctx context.Context, doc database.Document) err
 		}
 		batch := chunks[i:end]
 
-		vectors, err := w.embClient.Embed(batch)
+		vectors, err := w.embClient.EmbedCtx(ctx, batch)
 		if err != nil {
 			return fmt.Errorf("embed batch starting at chunk %d: %w", i, err)
 		}

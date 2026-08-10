@@ -16,25 +16,25 @@
 
 <DashboardCard title="Learning path">
 	{#snippet action()}
-		<button class="focus-premium inline-flex items-center gap-1 rounded px-1.5 py-1 text-[9px] font-medium text-foreground hover:bg-muted" onclick={() => goto("/adaptive-room")}>
-			<Map class="size-3" /> View full path <ChevronRight class="size-3" />
+		<button class="focus-premium inline-flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted" onclick={() => goto("/adaptive-room")}>
+			<Map class="size-4" /> View full path <ChevronRight class="size-4" />
 		</button>
 	{/snippet}
-	<div class="overflow-x-auto px-3 py-1.5 [scrollbar-width:thin]">
+	<div class="overflow-x-auto px-4 py-3 [scrollbar-width:thin]">
 		<ol class="flex min-w-[620px] items-start" aria-label="Your learning path">
 			{#each steps as step, index}
 				{@const item = state(step, index)}
 				<li class="relative flex flex-1 flex-col items-center text-center">
 					{#if index < steps.length - 1}
-						<span class="absolute left-1/2 top-3 h-px w-full bg-border" aria-hidden="true">
+						<span class="absolute left-1/2 top-4 h-px w-full bg-border" aria-hidden="true">
 							{#if item.kind === "done"}<span class="block h-full w-full bg-success"></span>{/if}
 						</span>
 					{/if}
-					<span class:item-current={item.kind === "current"} class:item-done={item.kind === "done"} class="relative z-10 flex size-5 items-center justify-center rounded-full border border-border-strong bg-card text-muted-foreground">
-						<item.Icon class="size-3" aria-hidden="true" />
+					<span class:item-current={item.kind === "current"} class:item-done={item.kind === "done"} class="relative z-10 flex size-7 items-center justify-center rounded-full border border-border-strong bg-card text-muted-foreground">
+						<item.Icon class="size-4" aria-hidden="true" />
 					</span>
-					<span class="mt-1 max-w-28 break-words px-1 text-[8px] leading-tight text-foreground">{step.label}</span>
-					<span class="mt-1 text-[7px] uppercase leading-none tracking-wide {item.kind === 'done' ? 'text-success' : item.kind === 'current' ? 'text-accent' : 'text-muted-foreground'}">{item.label}</span>
+					<span class="mt-1.5 max-w-28 break-words px-1.5 text-xs leading-tight text-foreground">{step.label}</span>
+					<span class="mt-1 text-[10px] uppercase leading-none tracking-wide {item.kind === 'done' ? 'text-success' : item.kind === 'current' ? 'text-accent' : 'text-muted-foreground'}">{item.label}</span>
 				</li>
 			{/each}
 		</ol>

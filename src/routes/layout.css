@@ -327,7 +327,7 @@
 		box-shadow: var(--shadow-md);
 	}
 	.academy-kicker {
-		@apply text-[10px] font-semibold uppercase tracking-[0.18em] text-accent;
+		@apply text-[11px] font-semibold uppercase tracking-[0.18em] text-accent;
 	}
 	.academy-heading {
 		font-family: Georgia, "Times New Roman", serif;

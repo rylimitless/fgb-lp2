@@ -495,7 +495,11 @@ func (h *Handler) createUsersFromRows(c *gin.Context, rows []userRow) {
 	created := make([]createdUser, 0, len(rows))
 
 	for _, r := range rows {
-		password := functions.MakeTokens()
+		password, err := functions.MakeTokens()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate password"})
+			return
+		}
 		hash := functions.MakeHash(password)
 
 		user, err := txQueries.CreateUser(c.Request.Context(), database.CreateUserParams{

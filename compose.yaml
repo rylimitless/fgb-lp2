@@ -30,7 +30,7 @@ services:
           "CMD",
           "python",
           "-c",
-          import urllib.request; urllib.request.urlopen('http://localhost:7100/health').read(),
+          "import urllib.request; urllib.request.urlopen('http://localhost:7100/health').read()",
         ]
       interval: 10s
       timeout: 5s
@@ -55,6 +55,12 @@ services:
     volumes:
       - ./backend:/app
       - /app/tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5555/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       db:
         condition: service_healthy

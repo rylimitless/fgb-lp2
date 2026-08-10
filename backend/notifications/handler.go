@@ -51,16 +51,29 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 	})
 }
 
-// MarkRead marks a single notification as read.
+// MarkRead marks a single notification as read. Scoped to the current user
+// so a learner can't suppress someone else's notification by guessing its id
+// (fixes audit item H2).
 func (h *Handler) MarkRead(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
-	_, err = h.Queries.MarkNotificationRead(c.Request.Context(), id)
+	userID, _ := c.Get("user_id")
+	uid := userID.(int64)
+
+	tag, err := h.Pool.Exec(c.Request.Context(),
+		`UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2`,
+		id, uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to mark as read"})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		// Either the notification doesn't exist or it belongs to another user.
+		// Return 404 rather than leaking which.
+		c.JSON(http.StatusNotFound, gin.H{"error": "Notification not found"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})

@@ -176,7 +176,11 @@ func (h *Handler) IssueForCourse(c *gin.Context) {
 		var zero interface{} = int64(0)
 		totalScore = zero
 	}
-	scorePct := 100.0
+	// Default to 0, NOT 100. If there is no course_scores row we have no
+	// evidence the learner earned anything; defaulting to 100 would hand out
+	// unearned gold certificates. Legitimate completions always write a
+	// course_scores row via ScoreCourse before this runs.
+	scorePct := 0.0
 	// Try to get the actual course score
 	var courseScore int32
 	err = h.Pool.QueryRow(c.Request.Context(),

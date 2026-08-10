@@ -17,10 +17,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
 	Queries      *database.Queries
+	Pool         *pgxpool.Pool
 	Certificates *certificates.Handler
 	Badges       *badges.Handler
 	Mailer       mailer.Sender
@@ -36,6 +38,11 @@ type PathProgressNotifier interface {
 
 func NewHandler(queries *database.Queries) *Handler {
 	return &Handler{Queries: queries}
+}
+
+func (h *Handler) WithPool(p *pgxpool.Pool) *Handler {
+	h.Pool = p
+	return h
 }
 
 // WithCertificates sets the certificate issuer for auto-issuing on course completion.
@@ -61,6 +68,47 @@ func (h *Handler) WithMailer(m mailer.Sender) *Handler {
 func (h *Handler) WithPathProgress(p PathProgressNotifier) *Handler {
 	h.PathProgress = p
 	return h
+}
+
+// computeCourseScore derives the learner's score for a course from server-owned
+// data only, matching the lesson player's displayed-items semantics: a concept
+// rendered in multiple question-type variants (shared question_group_id) counts
+// once, not once per variant. Items without a group each count individually,
+// and 'content' items are excluded (they're teaching material, not assessable).
+//
+// The client-reported score_pct is never trusted (fixes audit item H9: a
+// learner could previously POST {completed:true, score_pct:"100"} and get a
+// gold certificate). Returns a 0..100 percentage; a course with no assessable
+// concepts scores 0.
+func (h *Handler) computeCourseScore(ctx context.Context, userID, courseID int64) (float64, error) {
+	if h.Pool == nil {
+		return 0, fmt.Errorf("lessons: pool not configured")
+	}
+	// concept key: question_group_id when set, else a per-item key so ungrouped
+	// questions remain distinct. Mirrors src/lib/concepts.ts conceptKey().
+	const conceptExpr = `coalesce(ci.question_group_id, 'item-' || ci.id::text)`
+	var total, correct int
+	err := h.Pool.QueryRow(ctx, fmt.Sprintf(`
+		WITH assessable AS (
+		  SELECT id, coalesce(question_group_id, 'item-' || id::text) AS concept
+		  FROM course_items
+		  WHERE course_id = $1 AND item_type <> 'content'
+		)
+		SELECT
+		  (SELECT count(DISTINCT concept) FROM assessable) AS total,
+		  (SELECT count(DISTINCT %s) AS correct
+		     FROM item_progress ip
+		     JOIN course_items ci ON ci.id = ip.item_id
+		    WHERE ip.user_id = $2 AND ip.course_id = $1
+		      AND ci.item_type <> 'content' AND ip.is_correct = true) AS correct
+	`, conceptExpr), courseID, userID).Scan(&total, &correct)
+	if err != nil {
+		return 0, err
+	}
+	if total == 0 {
+		return 0, nil
+	}
+	return float64(correct) / float64(total) * 100.0, nil
 }
 
 func (h *Handler) ListPublished(c *gin.Context) {
@@ -337,8 +385,17 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 	// Record streak engagement (silent, best-effort)
 	_ = h.Queries.RecordStreak(c.Request.Context(), userID)
 
+	// Server-authoritative score: never trust the client-reported score_pct.
+	// Derived from assessable course_items vs. the learner's item_progress
+	// (fixes audit item H9). body.ScorePct is intentionally ignored.
+	scoreVal, err := h.computeCourseScore(c.Request.Context(), userID, body.CourseID)
+	if err != nil {
+		log.Printf("[lessons] failed to compute score for user=%d course=%d: %v", userID, body.CourseID, err)
+		scoreVal = 0
+	}
+	scoreStr := fmt.Sprintf("%.2f", scoreVal)
 	pct := pgtype.Numeric{}
-	pct.Scan(body.ScorePct)
+	pct.Scan(scoreStr)
 
 	progress, err := h.Queries.UpsertLessonProgress(c.Request.Context(),
 		database.UpsertLessonProgressParams{
@@ -366,13 +423,10 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 			h.Queries.UpdateEnrollmentStatus(c.Request.Context(),
 				database.UpdateEnrollmentStatusParams{ID: enrollment.ID, Status: "completed"})
 
-			// Auto-issue certificate on course completion (fire-and-forget)
+			// Auto-issue certificate on course completion (fire-and-forget).
+			// Score is server-computed above, so tier reflects real answers.
 			if h.Certificates != nil {
 				go func() {
-					scoreVal := 0.0
-					if body.ScorePct != "" {
-						fmt.Sscanf(body.ScorePct, "%f", &scoreVal)
-					}
 					_, created, err := h.Certificates.IssueCertificate(context.Background(), userID, body.CourseID, scoreVal)
 					if err != nil {
 						log.Printf("[lessons] certificate issuance failed for user=%d course=%d: %v", userID, body.CourseID, err)
@@ -412,10 +466,6 @@ func (h *Handler) SaveProgress(c *gin.Context) {
 					if err != nil {
 						log.Printf("[lessons] failed to get course %d for completion email: %v", body.CourseID, err)
 						return
-					}
-					scoreVal := 0.0
-					if body.ScorePct != "" {
-						fmt.Sscanf(body.ScorePct, "%f", &scoreVal)
 					}
 					// Get certificate code if one was just issued
 					certCode := ""

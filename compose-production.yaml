@@ -44,6 +44,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile.prod
     container_name: fgb-backend
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgres://postgres:password@db:5432/example_db
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
@@ -54,6 +55,12 @@ services:
     volumes:
       - ./backend:/app
       - /app/tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5555/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       db:
         condition: service_healthy

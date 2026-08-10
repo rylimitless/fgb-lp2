@@ -63,7 +63,7 @@ func main() {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3039", "https://fgbacademy.rybuildstuff.dev", "https://fgbguide.rybuildstuff.dev", "https://98fe-173-225-243-241.ngrok-free.app"},
+		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3039", "https://fgbacademy.rybuildstuff.dev", "https://fgbguide.rybuildstuff.dev"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -82,7 +82,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"Status": "Ok"})
 	})
 
-	r.POST("/api/setup", func(c *gin.Context) {
+	r.POST("/api/setup", middlewares.RateLimitByIP(5, 1), func(c *gin.Context) {
 		var body struct {
 			Email    string `json:"email" binding:"required,email"`
 			Password string `json:"password" binding:"required,min=8"`
@@ -103,7 +103,7 @@ func main() {
 		c.JSON(http.StatusCreated, gin.H{"message": "admin created"})
 	})
 
-	r.POST("/api/login", func(c *gin.Context) {
+	r.POST("/api/login", middlewares.RateLimitByIP(10, 5), func(c *gin.Context) {
 		var body struct {
 			Email    string `json:"email" binding:"required,email"`
 			Password string `json:"password" binding:"required"`
@@ -202,6 +202,9 @@ func main() {
 
 	aiHandler := ai.NewHandler(dbpool, queries)
 	aiHandler.RegisterRoutes(protected)
+	// Developer tools: mock-course generator + LLM spend dashboard. Admin only —
+	// these routes create real course rows and incur real model cost.
+	aiHandler.RegisterDevRoutes(adminGroup)
 
 	reviewHandler := review.NewHandler(queries).WithMailer(emailSender)
 	reviewHandler.RegisterRoutes(approverGroup)
@@ -222,6 +225,7 @@ func main() {
 
 	// Lessons handler with certificates + badges + mailer + path-progress for auto-issuing on course completion
 	lessonHandler := lessons.NewHandler(queries).
+		WithPool(dbpool).
 		WithCertificates(certHandler).
 		WithBadges(badgesHandler).
 		WithMailer(emailSender).
@@ -243,7 +247,7 @@ func main() {
 	notifHandler := notifications.NewHandler(queries, dbpool)
 	notifHandler.RegisterRoutes(protected)
 
-	enrollmentHandler := enrollments.NewHandler(queries).WithMailer(emailSender)
+	enrollmentHandler := enrollments.NewHandler(queries).WithPool(dbpool).WithMailer(emailSender)
 	enrollmentHandler.RegisterRoutes(protected)
 	enrollmentHandler.RegisterAdminRoutes(adminManagerGroup)
 
@@ -261,9 +265,12 @@ func main() {
 	analyticsHandler.RegisterRoutes(auditorManagerGroup)        // admin, auditor, manager all get analytics
 	analyticsHandler.RegisterManagerRoutes(auditorManagerGroup) // team-focused analytics
 
-	// Password reset (public routes — no auth required)
+	// Password reset (public routes — no auth required). Rate-limited per IP to
+	// prevent email-bombing via forgot-password (fixes audit item H3).
 	resetHandler := password_reset.NewHandler(dbpool, queries).WithMailer(emailSender)
-	resetHandler.RegisterRoutes(r.Group("/api"))
+	resetRoutes := r.Group("/api")
+	resetRoutes.Use(middlewares.RateLimitByIP(3, 1))
+	resetHandler.RegisterRoutes(resetRoutes)
 
 	wrk := worker.New(queries, uploadDir)
 	go wrk.Start(context.Background())
@@ -272,7 +279,9 @@ func main() {
 }
 
 func setSessionCookie(c *gin.Context, token string, maxAge int) {
-	c.SetCookie("session_token", token, maxAge, "/", "", false, true)
+	secure := os.Getenv("SECURE_COOKIE") == "true"
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("session_token", token, maxAge, "/", "", secure, true)
 }
 
 func runMigrations(dbpool *pgxpool.Pool) {
@@ -310,6 +319,42 @@ func runMigrations(dbpool *pgxpool.Pool) {
 		// override the learner (or admin) can set.
 		`alter table learning_preferences add column if not exists preferred_type text`,
 		`alter table learning_preferences add column if not exists type_stats jsonb not null default '{}'`,
+
+		// pgvector index for semantic retrieval (coach + AI course generation).
+		// HNSW is preferred over IVFFlat: no training step, good recall at small
+		// scale, and works fine as rows are added. Without this every embedding
+		// query does a brute-force linear scan.
+		`create index if not exists document_chunks_embedding_hnsw
+			on document_chunks using hnsw (embedding vector_cosine_ops)`,
+
+		// Allow documents to be marked 'rejected' during review (previously the
+		// approve/reject handler always set status='ready').
+		`alter table documents drop constraint if exists documents_status_check`,
+		`alter table documents add constraint documents_status_check
+			check (status in ('uploaded', 'processing', 'ready', 'failed', 'rejected'))`,
+
+		// Developer tooling: per-call LLM token accounting. Every chat completion
+		// logs one row here so the "mock course" spend dashboard can compute
+		// averages across runs. Safe to run repeatedly (if not exists).
+		`create table if not exists llm_token_usage (
+		   id bigserial primary key,
+		   model text not null,
+		   source text not null default 'unknown',
+		   label text not null default '',
+		   prompt_tokens bigint not null default 0,
+		   completion_tokens bigint not null default 0,
+		   total_tokens bigint not null default 0,
+		   cached_prompt_tokens bigint not null default 0,
+		   reasoning_tokens bigint not null default 0,
+		   course_id bigint references courses(id) on delete set null,
+		   user_id bigint references users(id) on delete set null,
+		   job_ref text,
+		   created_at timestamptz not null default now()
+		)`,
+		`create index if not exists idx_llm_token_usage_created_at on llm_token_usage(created_at desc)`,
+		`create index if not exists idx_llm_token_usage_source on llm_token_usage(source)`,
+		`create index if not exists idx_llm_token_usage_job_ref on llm_token_usage(job_ref)`,
+		`create index if not exists idx_llm_token_usage_course_id on llm_token_usage(course_id)`,
 	}
 
 	for _, m := range migrations {

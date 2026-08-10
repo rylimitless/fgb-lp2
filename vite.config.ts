@@ -19,7 +19,6 @@ export default defineConfig({
     allowedHosts: [
       "fgbacademy.rybuildstuff.dev",
       "fgbguide.rybuildstuff.dev",
-      "98fe-173-225-243-241.ngrok-free.app",
     ],
 
     port: 5173,

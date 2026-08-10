@@ -8,6 +8,7 @@ import (
 	"fgb-lp/mailer"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,7 +48,12 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	token := functions.MakeTokens()
+	token, err := functions.MakeTokens()
+	if err != nil {
+		log.Printf("[password_reset] failed to generate token: %v", err)
+		c.JSON(http.StatusOK, gin.H{"message": "If that email is registered, a reset link has been sent."})
+		return
+	}
 	_, err = h.Queries.CreatePasswordResetToken(c.Request.Context(), database.CreatePasswordResetTokenParams{
 		UserID: user.ID,
 		Token:  token,
@@ -58,10 +64,11 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// Build the reset URL using APP_URL
-	appURL := c.GetHeader("Origin")
+	// Build the reset URL from a server-controlled APP_URL. Never trust the
+	// client Origin header — an attacker could poison the link and steal the
+	// token when the victim clicks it.
+	appURL := os.Getenv("APP_URL")
 	if appURL == "" {
-		// Fallback: try Referer or default
 		appURL = "https://fgbacademy.rybuildstuff.dev"
 	}
 	resetURL := appURL + "/reset-password?token=" + token

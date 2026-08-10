@@ -15,10 +15,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
 	Queries *database.Queries
+	Pool    *pgxpool.Pool
 	Mailer  mailer.Sender
 }
 
@@ -28,6 +30,11 @@ func NewHandler(queries *database.Queries) *Handler {
 
 func (h *Handler) WithMailer(m mailer.Sender) *Handler {
 	h.Mailer = m
+	return h
+}
+
+func (h *Handler) WithPool(p *pgxpool.Pool) *Handler {
+	h.Pool = p
 	return h
 }
 
@@ -132,14 +139,9 @@ func (h *Handler) EnrollSelf(c *gin.Context) {
 		return
 	}
 
-	// Check capacity
-	if course.Capacity.Valid && course.Capacity.Int32 > 0 {
-		activeCount, _ := h.Queries.CountActiveEnrollments(c.Request.Context(), body.CourseID)
-		if activeCount >= int64(course.Capacity.Int32) {
-			c.JSON(http.StatusConflict, gin.H{"error": "Course is at maximum capacity"})
-			return
-		}
-	}
+	// NOTE: the capacity check is performed atomically with the insert below
+	// (inside a transaction with SELECT ... FOR UPDATE on the course row) to
+	// avoid the check-then-insert race that previously let capacity be exceeded.
 
 	// Parse course settings to check for days_to_complete expiry
 	var courseSettings map[string]interface{}
@@ -168,12 +170,58 @@ func (h *Handler) EnrollSelf(c *gin.Context) {
 		}
 	}
 
-	// Create enrollment (or re-activate if previously dropped)
-	enrollment, err := h.Queries.CreateEnrollment(c.Request.Context(),
-		database.CreateEnrollmentParams{UserID: userID, CourseID: body.CourseID})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll"})
-		return
+	// Create enrollment (or re-activate if previously dropped).
+	// When the course has a capacity, the check+insert must be atomic or two
+	// concurrent requests can both pass the capacity check and exceed it
+	// (fixes audit item H10). We lock the course row for the duration of the
+	// transaction and re-check the count inside it.
+	var enrollment database.Enrollment
+	if course.Capacity.Valid && course.Capacity.Int32 > 0 && h.Pool != nil {
+		tx, err := h.Pool.Begin(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll"})
+			return
+		}
+		defer tx.Rollback(c.Request.Context())
+
+		// Lock the course row so concurrent enrollments serialize.
+		if _, err := tx.Exec(c.Request.Context(),
+			`select 1 from courses where id = $1 for update`, body.CourseID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll"})
+			return
+		}
+
+		var activeCount int64
+		if err := tx.QueryRow(c.Request.Context(),
+			`select count(*) from enrollments where course_id = $1 and status = 'active'`,
+			body.CourseID).Scan(&activeCount); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll"})
+			return
+		}
+		if activeCount >= int64(course.Capacity.Int32) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Course is at maximum capacity"})
+			return
+		}
+
+		txQueries := h.Queries.WithTx(tx)
+		enrollment, err = txQueries.CreateEnrollment(c.Request.Context(),
+			database.CreateEnrollmentParams{UserID: userID, CourseID: body.CourseID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll"})
+			return
+		}
+		if err := tx.Commit(c.Request.Context()); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll"})
+			return
+		}
+	} else {
+		var err error
+		enrollment, err = h.Queries.CreateEnrollment(c.Request.Context(),
+			database.CreateEnrollmentParams{UserID: userID, CourseID: body.CourseID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll"})
+			return
+		}
 	}
 
 	// Also create lesson_progress row for backward compatibility

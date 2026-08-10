@@ -144,9 +144,16 @@ func (h *Handler) ApproveDocument(c *gin.Context) {
 		return
 	}
 
+	// Rejected documents must not be marked 'ready' — that would let them be
+	// used for coaching/retrieval. 'rejected' keeps them out of the active set.
+	status := "ready"
+	if !body.Approved {
+		status = "rejected"
+	}
+
 	doc, err := h.Queries.UpdateDocumentStatus(c.Request.Context(), database.UpdateDocumentStatusParams{
 		ID:       id,
-		Status:   "ready",
+		Status:   status,
 		Approved: pgtype.Bool{Bool: body.Approved, Valid: true},
 	})
 	if err != nil {

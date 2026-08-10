@@ -1811,10 +1811,13 @@ Assemble a learning path that achieves the goal using ONLY courses from the cata
 
 // RegisterRoutes adds course generation routes.
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
-	r.POST("/courses/generate", middlewares.WrapRequireRole(h.GenerateCourse, "content creator"))
-	r.POST("courses/discover", middlewares.WrapRequireRole(h.Discover, "content creator"))
-	r.POST("/courses/outline", middlewares.WrapRequireRole(h.GenerateOutline, "content creator"))
-	r.POST("/courses/:id/outline/regenerate", middlewares.WrapRequireRole(h.RegenerateOutline, "content creator"))
+	// Light rate limiting on the LLM-costly generation routes to prevent a
+	// single client from saturating the DeepSeek budget (audit item H3).
+	genLimit := middlewares.RateLimitByIP(10, 5)
+	r.POST("/courses/generate", genLimit, middlewares.WrapRequireRole(h.GenerateCourse, "content creator"))
+	r.POST("courses/discover", genLimit, middlewares.WrapRequireRole(h.Discover, "content creator"))
+	r.POST("/courses/outline", genLimit, middlewares.WrapRequireRole(h.GenerateOutline, "content creator"))
+	r.POST("/courses/:id/outline/regenerate", genLimit, middlewares.WrapRequireRole(h.RegenerateOutline, "content creator"))
 	r.GET("/courses/generate/active", h.ListActiveJobs)
 	r.POST("/courses/generate/:id/cancel", middlewares.WrapRequireRole(h.CancelGeneration, "content creator"))
 	r.GET("/courses/generate/:id", h.GetJobStatus)
