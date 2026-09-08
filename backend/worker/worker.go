@@ -66,6 +66,13 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) poll(ctx context.Context) {
+	// Housekeeping: drop long-expired sessions so the table stays bounded
+	// now that sessions live up to 30 days. Cheap (index-free scan of a
+	// small table) and idempotent.
+	if err := w.queries.DeleteExpiredSessions(ctx); err != nil {
+		log.Printf("[worker] session cleanup: %v", err)
+	}
+
 	pending, err := w.queries.GetPendingDocuments(ctx)
 	if err != nil {
 		log.Printf("[worker] error fetching pending documents: %v", err)

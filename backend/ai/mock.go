@@ -55,6 +55,12 @@ var MockPresets = []MockSizePreset{
 		Description: "6 modules · 4 sections each · 8 items per module. Stress-test pricing.",
 		Modules:     6, SectionsPerMod: 4, ItemsPerMod: 8,
 	},
+	{
+		ID:          "huge",
+		Label:       "Huge",
+		Description: "30 modules · 5 sections each · 5 items per module (~300 items). Maximum-size stress test.",
+		Modules:     30, SectionsPerMod: 5, ItemsPerMod: 5,
+	},
 }
 
 // LookupPreset returns the named preset, or nil if not found.

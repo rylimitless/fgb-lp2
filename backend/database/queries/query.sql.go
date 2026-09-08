@@ -495,7 +495,7 @@ func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswo
 
 const createSession = `-- name: CreateSession :one
 insert into sessions (user_id, token, expires_at)
-values ($1, $2, now() + interval '24 hours')
+values ($1, $2, now() + interval '30 days')
 returning id, user_id, token, expires_at, created_at
 `
 
@@ -642,6 +642,15 @@ delete from sessions where token = $1
 
 func (q *Queries) DeleteSession(ctx context.Context, token string) error {
 	_, err := q.db.Exec(ctx, deleteSession, token)
+	return err
+}
+
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
+delete from sessions where expires_at < now() - interval '7 days'
+`
+
+func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredSessions)
 	return err
 }
 
@@ -2187,6 +2196,18 @@ const getSessionByToken = `-- name: GetSessionByToken :one
 select id, user_id, token, expires_at, created_at from sessions where token = $1 and expires_at > now()
 `
 
+const touchSession = `-- name: TouchSession :exec
+update sessions
+set expires_at = now() + interval '30 days'
+where token = $1
+  and expires_at - now() < interval '6 hours'
+`
+
+func (q *Queries) TouchSession(ctx context.Context, token string) error {
+	_, err := q.db.Exec(ctx, touchSession, token)
+	return err
+}
+
 func (q *Queries) GetSessionByToken(ctx context.Context, token string) (Session, error) {
 	row := q.db.QueryRow(ctx, getSessionByToken, token)
 	var i Session
@@ -2198,6 +2219,88 @@ func (q *Queries) GetSessionByToken(ctx context.Context, token string) (Session,
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getSessionByTokenAnyExpiry = `-- name: GetSessionByTokenAnyExpiry :one
+select id, user_id, token, expires_at, created_at from sessions where token = $1
+`
+
+func (q *Queries) GetSessionByTokenAnyExpiry(ctx context.Context, token string) (Session, error) {
+	row := q.db.QueryRow(ctx, getSessionByTokenAnyExpiry, token)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertAuthTrace = `-- name: InsertAuthTrace :exec
+insert into auth_trace (source, event, user_id, ip, method, path, cookie_prefix, detail)
+values ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertAuthTraceParams struct {
+	Source       string      `json:"source"`
+	Event        string      `json:"event"`
+	UserID       pgtype.Int8 `json:"user_id"`
+	IP           pgtype.Text `json:"ip"`
+	Method       pgtype.Text `json:"method"`
+	Path         pgtype.Text `json:"path"`
+	CookiePrefix pgtype.Text `json:"cookie_prefix"`
+	Detail       []byte      `json:"detail"`
+}
+
+func (q *Queries) InsertAuthTrace(ctx context.Context, arg InsertAuthTraceParams) error {
+	_, err := q.db.Exec(ctx, insertAuthTrace,
+		arg.Source,
+		arg.Event,
+		arg.UserID,
+		arg.IP,
+		arg.Method,
+		arg.Path,
+		arg.CookiePrefix,
+		arg.Detail,
+	)
+	return err
+}
+
+const recentAuthTrace = `-- name: RecentAuthTrace :many
+select id, created_at, source, event, user_id, ip, method, path, cookie_prefix, detail from auth_trace order by created_at desc limit $1
+`
+
+func (q *Queries) RecentAuthTrace(ctx context.Context, limit int32) ([]AuthTrace, error) {
+	rows, err := q.db.Query(ctx, recentAuthTrace, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuthTrace
+	for rows.Next() {
+		var i AuthTrace
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.Source,
+			&i.Event,
+			&i.UserID,
+			&i.IP,
+			&i.Method,
+			&i.Path,
+			&i.CookiePrefix,
+			&i.Detail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getUserBadges = `-- name: GetUserBadges :many

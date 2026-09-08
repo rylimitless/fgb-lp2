@@ -70,6 +70,14 @@
             sections_per_module: 4,
             items_per_module: 8,
         },
+        {
+            id: "huge",
+            label: "Huge",
+            description: "30 modules · 5 sections · 5 items (~300 items)",
+            modules: 30,
+            sections_per_module: 5,
+            items_per_module: 5,
+        },
     ];
 
     let selectedPreset = $state("small");
@@ -364,7 +372,7 @@
         </header>
 
         <!-- Preset picker -->
-        <div class="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div class="mb-4 grid grid-cols-2 gap-2 md:grid-cols-5">
             {#each PRESETS as p (p.id)}
                 <button
                     type="button"

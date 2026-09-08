@@ -6,6 +6,7 @@ import (
 	"fgb-lp/ai"
 	"fgb-lp/analytics"
 	"fgb-lp/app"
+	"fgb-lp/authtrace"
 	"fgb-lp/badges"
 	"fgb-lp/certificates"
 	"fgb-lp/coach"
@@ -71,6 +72,10 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 	r.Use(gin.Logger())
+	// Log every response Set-Cookie that touches session_token so we can trace
+	// exactly which backend response sets/deletes the session cookie. Used to
+	// diagnose the "random logout" problem.
+	r.Use(authtrace.CaptureSetCookieMiddleware(queries))
 
 	r.GET("/api/check-first-user", func(c *gin.Context) {
 		isFirst := app.CheckIfFirstUser()
@@ -99,7 +104,10 @@ func main() {
 			return
 		}
 
-		setSessionCookie(c, token, 86400)
+		setSessionCookie(c, token, 86400*30)
+		authtrace.Log(queries, c, "backend", "session_created", authtrace.Prefix(token), map[string]any{
+			"via": "setup",
+		})
 		c.JSON(http.StatusCreated, gin.H{"message": "admin created"})
 	})
 
@@ -115,11 +123,18 @@ func main() {
 
 		token, err := app.Login(c.Request.Context(), body.Email, body.Password)
 		if err != nil {
+			authtrace.Log(queries, c, "backend", "login_failed", "none", map[string]any{
+				"email": body.Email,
+			})
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid email or password"})
 			return
 		}
 
-		setSessionCookie(c, token, 86400)
+		setSessionCookie(c, token, 86400*30)
+		authtrace.Log(queries, c, "backend", "session_created", authtrace.Prefix(token), map[string]any{
+			"via":   "login",
+			"email": body.Email,
+		})
 		c.JSON(http.StatusOK, gin.H{"message": "logged in"})
 	})
 
@@ -146,10 +161,43 @@ func main() {
 
 	r.POST("/api/logout", func(c *gin.Context) {
 		token, _ := c.Cookie("session_token")
+		if token != "" {
+			authtrace.Log(queries, c, "backend", "logout", authtrace.Prefix(token), nil)
+		}
 		_ = app.Logout(c.Request.Context(), token)
 		setSessionCookie(c, "", -1)
 		c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 	})
+
+	// Debug-only auth event sink + viewer. The report endpoint is UNAUTHENTICATED
+	// (it must be callable exactly when the session is gone, which is what we're
+	// tracing) but rate-limited per IP and constrained to a small event allowlist
+	// so it can't be abused. The viewer is admin-gated.
+	authTraceRoutes := r.Group("/api/_debug", middlewares.RateLimitByIP(60, 30))
+	authTraceRoutes.POST("/auth-event", authtrace.ReportHandler(queries))
+	authTraceRoutes.GET("/session-check", func(c *gin.Context) {
+		token, _ := c.Cookie("session_token")
+		prefix := authtrace.Prefix(token)
+		var status string
+		var userID int64
+		if token != "" {
+			session, err := queries.GetSessionByToken(c.Request.Context(), token)
+			if err != nil {
+				status = "invalid"
+			} else {
+				status = "valid"
+				userID = session.UserID
+			}
+		} else {
+			status = "no_cookie"
+		}
+		authtrace.Log(queries, c, "backend", "session_check", prefix, map[string]any{
+			"status":  status,
+			"user_id": userID,
+		})
+		c.JSON(http.StatusOK, gin.H{"status": status, "cookie_prefix": prefix})
+	})
+	adminGroup.GET("/_debug/auth-trace", authtrace.ViewHandler(queries))
 
 	// Returns the list of available roles and their descriptions for frontend config
 	protected.GET("/roles", func(c *gin.Context) {
@@ -298,6 +346,7 @@ func runMigrations(dbpool *pgxpool.Pool) {
 
 		// Per-module question type allowlist + AI-reported limitations.
 		`alter table modules add column if not exists question_types jsonb`,
+		`alter table modules add column if not exists question_type_targets jsonb not null default '{}'`,
 		`alter table modules add column if not exists limitations jsonb`,
 
 		// Staged course builder: distinguish one-shot 'full' jobs from 'outline'
@@ -355,6 +404,34 @@ func runMigrations(dbpool *pgxpool.Pool) {
 		`create index if not exists idx_llm_token_usage_source on llm_token_usage(source)`,
 		`create index if not exists idx_llm_token_usage_job_ref on llm_token_usage(job_ref)`,
 		`create index if not exists idx_llm_token_usage_course_id on llm_token_usage(course_id)`,
+
+		// Course performance analytics: track accumulated active study time in
+		// the lesson player (seconds), so admins see real time-on-course and
+		// not just calendar days between enroll and completion. The lesson
+		// player posts heartbeats that accumulate onto this column.
+		`alter table lesson_progress add column if not exists seconds_spent bigint not null default 0`,
+
+		// auth_trace: a dedicated, unified log for auth/session events written from
+		// three places — the backend (RequireAuth, login, session renewal), the
+		// SvelteKit SSR layer (hooks.server.ts redirect reasons), and the browser
+		// (client-side session heartbeat + observed 401s). It exists specifically
+		// to diagnose the "randomly logged out" problem: a single timestamped,
+		// queryable timeline across all three layers so we can see exactly which
+		// layer dropped the session and why.
+		`create table if not exists auth_trace (
+		   id bigserial primary key,
+		   created_at timestamptz not null default now(),
+		   source text not null,
+		   event text not null,
+		   user_id bigint references users(id) on delete set null,
+		   ip text,
+		   method text,
+		   path text,
+		   cookie_prefix text,
+		   detail jsonb not null default '{}'::jsonb
+		)`,
+		`create index if not exists auth_trace_created_idx on auth_trace(created_at desc)`,
+		`create index if not exists auth_trace_event_idx on auth_trace(event)`,
 	}
 
 	for _, m := range migrations {

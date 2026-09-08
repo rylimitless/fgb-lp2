@@ -407,6 +407,130 @@ func (h *Handler) GetEnrollmentOverview(c *gin.Context) {
 	})
 }
 
+// courseBreakdownRow is one course in the full per-course performance list.
+// Unlike the top-10 enrollment widget, this covers every course.
+type courseBreakdownRow struct {
+	CourseID       int64   `json:"course_id"`
+	CourseTitle    string  `json:"course_title"`
+	Status         string  `json:"status"`
+	Enrolled       int     `json:"enrolled"`
+	Completed      int     `json:"completed"`
+	CompletionRate float64 `json:"completion_rate"`
+	AvgProgress    float64 `json:"avg_progress"`
+	AvgDays        float64 `json:"avg_days"`
+	Learners       int     `json:"learners"`
+	AvgScore       float64 `json:"avg_score"`
+	AvgSeconds     int64   `json:"avg_seconds"`
+}
+
+// GetCourseBreakdown returns per-course stats for ALL courses: enrollments,
+// completions, completion rate, avg progress, avg days to complete, learners
+// who touched the course, avg score and avg active study time. Data comes from
+// both enrollments and lesson_progress so scores/times appear even for courses
+// played outside an enrollment.
+func (h *Handler) GetCourseBreakdown(c *gin.Context) {
+	rows, err := h.Pool.Query(c.Request.Context(), `
+		select
+			c.id as course_id,
+			c.title as course_title,
+			c.status as status,
+			count(distinct e.id)::int as enrolled,
+			count(distinct e.id) filter (where e.status = 'completed')::int as completed,
+			case when count(distinct e.id) > 0
+				then round(count(distinct e.id) filter (where e.status = 'completed')::numeric / count(distinct e.id)::numeric * 100, 1)
+				else 0 end as completion_rate,
+			coalesce(round(avg(e.progress_pct)::numeric, 1), 0) as avg_progress,
+			coalesce(round(extract(epoch from avg(e.completed_at - e.enrolled_at)) / 86400::numeric, 1), 0) as avg_days,
+			count(distinct lp.user_id)::int as learners,
+			coalesce(round(avg(lp.score_pct)::numeric, 1), 0) as avg_score,
+			coalesce(round(avg(lp.seconds_spent)::numeric, 0), 0)::bigint as avg_seconds
+		from courses c
+		left join enrollments e on e.course_id = c.id
+		left join lesson_progress lp on lp.course_id = c.id
+		group by c.id, c.title, c.status
+		order by enrolled desc, c.title asc
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	results := []courseBreakdownRow{}
+	for rows.Next() {
+		var r courseBreakdownRow
+		if err := rows.Scan(&r.CourseID, &r.CourseTitle, &r.Status, &r.Enrolled, &r.Completed, &r.CompletionRate, &r.AvgProgress, &r.AvgDays, &r.Learners, &r.AvgScore, &r.AvgSeconds); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	c.JSON(http.StatusOK, results)
+}
+
+// courseLearnerRow is one learner's performance inside a single course.
+type courseLearnerRow struct {
+	UserID           int64    `json:"user_id"`
+	UserName         string   `json:"user_name"`
+	UserEmail        string   `json:"user_email"`
+	Department       string   `json:"department"`
+	EnrollmentStatus string   `json:"enrollment_status"`
+	EnrolledAt       string   `json:"enrolled_at"`
+	CompletedAt      string   `json:"completed_at"`
+	DaysToComplete   *float64 `json:"days_to_complete"`
+	ScorePct         float64  `json:"score_pct"`
+	CourseCompleted  bool     `json:"course_completed"`
+	SecondsSpent     int64    `json:"seconds_spent"`
+}
+
+// GetCourseLearners lists every learner in a course with their score, study
+// time and completion info — the per-course drill-down behind the breakdown.
+func (h *Handler) GetCourseLearners(c *gin.Context) {
+	courseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || courseID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course id"})
+		return
+	}
+
+	rows, err := h.Pool.Query(c.Request.Context(), `
+		select
+			u.id as user_id,
+			u.name as user_name,
+			u.email as user_email,
+			coalesce(d.name, 'Unassigned') as department,
+			e.status as enrollment_status,
+			to_char(e.enrolled_at, 'YYYY-MM-DD HH24:MI') as enrolled_at,
+			to_char(e.completed_at, 'YYYY-MM-DD HH24:MI') as completed_at,
+			case when e.completed_at is not null and e.enrolled_at is not null
+				then round(extract(epoch from (e.completed_at - e.enrolled_at)) / 86400::numeric, 1)
+				else null end as days_to_complete,
+			coalesce(lp.score_pct, 0) as score_pct,
+			coalesce(lp.completed, false) as course_completed,
+			coalesce(lp.seconds_spent, 0) as seconds_spent
+		from enrollments e
+		join users u on u.id = e.user_id
+		left join user_departments ud on ud.user_id = u.id
+		left join departments d on d.id = ud.department_id
+		left join lesson_progress lp on lp.user_id = e.user_id and lp.course_id = e.course_id
+		where e.course_id = $1
+		order by e.completed_at desc nulls last, e.enrolled_at desc
+	`, courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	results := []courseLearnerRow{}
+	for rows.Next() {
+		var r courseLearnerRow
+		if err := rows.Scan(&r.UserID, &r.UserName, &r.UserEmail, &r.Department, &r.EnrollmentStatus, &r.EnrolledAt, &r.CompletedAt, &r.DaysToComplete, &r.ScorePct, &r.CourseCompleted, &r.SecondsSpent); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	c.JSON(http.StatusOK, results)
+}
+
 // enrollmentTimelinePoint is one bucket on the enrollments-over-time chart.
 type enrollmentTimelinePoint struct {
 	Date      string `json:"date"`
@@ -1162,6 +1286,8 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/analytics/enrollments/overview", h.GetEnrollmentOverview)
 	r.GET("/analytics/enrollments/timeline", h.GetEnrollmentTimeline)
 	r.GET("/analytics/enrollments/stalled", h.GetStalledEnrollments)
+	r.GET("/analytics/courses/breakdown", h.GetCourseBreakdown)
+	r.GET("/analytics/courses/:id/learners", h.GetCourseLearners)
 	r.GET("/analytics/credentials/overview", h.GetCredentialOverview)
 	r.GET("/analytics/credentials/timeline", h.GetCredentialTimeline)
 	r.GET("/analytics/users/overview", h.GetUserOverview)

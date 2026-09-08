@@ -31,7 +31,7 @@ func (h *Handler) ListMockPresets(c *gin.Context) {
 //
 // Query params:
 //
-//	preset = tiny | small | medium | large (default: small)
+//	preset = tiny | small | medium | large | huge (default: small)
 //
 // The connection stays open for the duration of the run; the final `done`
 // event carries the MockRunStats aggregate.
@@ -50,7 +50,7 @@ func (h *Handler) GenerateMockCourse(c *gin.Context) {
 	presetID := strings.TrimSpace(c.DefaultQuery("preset", "small"))
 	preset := LookupPreset(presetID)
 	if preset == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown preset; valid: tiny, small, medium, large"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown preset; valid: tiny, small, medium, large, huge"})
 		return
 	}
 
@@ -62,9 +62,16 @@ func (h *Handler) GenerateMockCourse(c *gin.Context) {
 
 	jobRef := fmt.Sprintf("mock-%s-%d", preset.ID, time.Now().UnixNano())
 
-	// Cap the whole run at 8 minutes so a stuck model can't hold an admin's
-	// SSE connection open forever.
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Minute)
+	// Cap the whole run so a stuck model can't hold an admin's SSE connection
+	// open forever. Headroom scales with preset size: budget ~5s per expected
+	// LLM call (DeepSeek can be slow under load) plus a 2-minute buffer,
+	// floored at 8 minutes. The largest preset (~300 calls) gets ~27 minutes.
+	expectedCalls := 1 + preset.Modules*(preset.SectionsPerMod+preset.ItemsPerMod)
+	timeout := 8 * time.Minute
+	if scaled := time.Duration(expectedCalls)*5*time.Second + 2*time.Minute; scaled > timeout {
+		timeout = scaled
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 
 	w.send("step", gin.H{"detail": fmt.Sprintf("Starting mock course (preset=%s)", preset.Label)})

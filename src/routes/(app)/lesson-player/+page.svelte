@@ -68,6 +68,75 @@
     let showResults = $state(false);
     let saving = $state(false);
 
+    // ---- Study time tracking ----
+    // Accumulates active seconds spent in the player and sends heartbeats to
+    // /api/lessons/progress/heartbeat so admins can see real time-on-course
+    // (not just calendar days between enroll and completion).
+    let activeSeconds = $state(0);
+    let timeTimer: ReturnType<typeof setInterval> | null = null;
+    let lastTickAt = Date.now();
+    const TIME_FLUSH_MS = 15000; // flush roughly every 15s of wall time
+
+    function tickTime() {
+        const now = Date.now();
+        if (
+            !previewMode &&
+            enrolledCourse &&
+            !enrolledCourse.blocked &&
+            document.visibilityState === "visible"
+        ) {
+            activeSeconds += Math.max(0, Math.round((now - lastTickAt) / 1000));
+        }
+        lastTickAt = now;
+        if (activeSeconds >= 30) flushTime();
+    }
+
+    async function flushTime() {
+        if (previewMode || !enrolledCourse || enrolledCourse.blocked) return;
+        const secs = activeSeconds;
+        if (secs <= 0) return;
+        activeSeconds = 0;
+        try {
+            await fetch("/api/lessons/progress/heartbeat", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    course_id: enrolledCourse.id,
+                    seconds: secs,
+                }),
+            });
+        } catch {
+            /* ignore */
+        }
+    }
+
+    function onVisibilityChange() {
+        if (document.visibilityState === "hidden") {
+            // Tab hidden: stop counting and push what we have.
+            lastTickAt = Date.now();
+            flushTime();
+        } else {
+            lastTickAt = Date.now();
+        }
+    }
+
+    function startTimeTracking() {
+        stopTimeTracking();
+        lastTickAt = Date.now();
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        timeTimer = setInterval(tickTime, TIME_FLUSH_MS);
+    }
+
+    function stopTimeTracking() {
+        if (timeTimer) {
+            clearInterval(timeTimer);
+            timeTimer = null;
+        }
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        flushTime();
+    }
+
     // Confirmation dialog for skipping unanswered questions
     let skipConfirmOpen = $state(false);
     let pendingNavigation: (() => void) | null = $state(null);
@@ -295,6 +364,8 @@
         if (previewMode || saving || !enrolledCourse) return;
         saving = true;
         try {
+            // Push any pending study time before the progress snapshot.
+            await flushTime();
             const score = computeScore();
             const pct =
                 score.total === 0
@@ -358,6 +429,8 @@
                     // enrolledCourse stays set so the UI can show the blocked message
                     return;
                 }
+                // Start counting active study time once the course is loaded.
+                startTimeTracking();
                 // Restore saved item-level answers
                 if (enrolledCourse.modules) {
                     for (const mod of enrolledCourse.modules) {
@@ -391,6 +464,9 @@
     }
 
     function goHome() {
+        // Stop the clock first so the final seconds are flushed while
+        // enrolledCourse is still set.
+        stopTimeTracking();
         enrolledCourse = null;
         previewMode = false;
         previewId = null;

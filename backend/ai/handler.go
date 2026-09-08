@@ -98,7 +98,7 @@ Apply the feedback faithfully. Keep modules that already work; only change what 
 
 CRITICAL RULES:
 1. Structure your output EXACTLY like the Markdown example below. Do NOT use JSON, and do not write any introductory or concluding conversational filler.
-2. Module count must still be proportional to the source material (see scale below). If the feedback asks for fewer modules, merge related ones rather than deleting content outright. If it asks for more, split overstuffed modules — don't invent material that isn't in the source.
+2. Module count must still be proportional to the source material (see scale below), unless the author gives an explicit target count. When the author says "to N modules", the output MUST contain exactly N total modules; merge or split modules as needed to reach that total. Never interpret "to N modules" as adding N modules or removing N modules. If the feedback asks for fewer modules without an explicit target, merge related ones rather than deleting content outright. If it asks for more without an explicit target, split overstuffed modules — don't invent material that isn't in the source.
    - Under 1,000 chars of source → 1 module
    - 1,000–8,000 chars → 2-3 modules
    - 8,000–30,000 chars → 4-6 modules
@@ -477,7 +477,7 @@ func NewHandler(pool *pgxpool.Pool, queries *database.Queries) *Handler {
 	llm := NewLLMClient()
 	emb := embeddings.NewClient()
 	store := newJobStore(queries)
-	worker := newWorker(store, queries, llm, emb)
+	worker := newWorker(pool, store, queries, llm, emb)
 	return &Handler{
 		Pool:      pool,
 		Queries:   queries,
@@ -533,6 +533,22 @@ type plan struct {
 	Title       string
 	Description string
 	Modules     []planModule
+}
+
+// requestedModuleCount recognizes wording that specifies the final total.
+// Additive requests such as "add 5 modules" intentionally do not match.
+func requestedModuleCount(feedback string) (int, bool) {
+	targetRe := regexp.MustCompile(`(?i)\b(?:to|make\s+it)\s+(\d+)\s+modules?\b`)
+	match := targetRe.FindStringSubmatch(feedback)
+	if len(match) != 2 {
+		return 0, false
+	}
+
+	target, err := strconv.Atoi(match[1])
+	if err != nil || target < 1 || target > 25 {
+		return 0, false
+	}
+	return target, true
 }
 
 // ---- Request types ----
@@ -806,14 +822,15 @@ func (h *Handler) GetCourse(c *gin.Context) {
 			limits = []map[string]any{}
 		}
 		modulesResult = append(modulesResult, gin.H{
-			"id":             m.ID,
-			"title":          m.Title,
-			"description":    m.Description,
-			"sort_order":     m.SortOrder,
-			"status":         m.Status,
-			"question_types": qt,
-			"limitations":    limits,
-			"items":          modItems,
+			"id":                    m.ID,
+			"title":                 m.Title,
+			"description":           m.Description,
+			"sort_order":            m.SortOrder,
+			"status":                m.Status,
+			"question_types":        qt,
+			"question_type_targets": m.QuestionTypeTargets,
+			"limitations":           limits,
+			"items":                 modItems,
 		})
 	}
 
@@ -903,6 +920,7 @@ func (h *Handler) ListActiveJobs(c *gin.Context) {
 		result[i] = gin.H{
 			"id":         job.ID,
 			"status":     job.Status,
+			"stage":      job.Stage,
 			"steps":      job.Steps,
 			"modules":    job.Modules,
 			"created_at": job.CreatedAt,
@@ -1472,7 +1490,8 @@ func (h *Handler) UpdateModuleHandler(c *gin.Context) {
 		SortOrder   *int32  `json:"sort_order,omitempty"`
 		// Pointer-to-slice so we can distinguish "omitted" (nil → leave
 		// unchanged) from "explicitly cleared" (non-nil empty slice → all types).
-		QuestionTypes *[]string `json:"question_types,omitempty"`
+		QuestionTypes       *[]string       `json:"question_types,omitempty"`
+		QuestionTypeTargets *map[string]int `json:"question_type_targets,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1517,6 +1536,37 @@ func (h *Handler) UpdateModuleHandler(c *gin.Context) {
 		}
 		questionTypesJSON, _ = json.Marshal(clean)
 	}
+	if body.QuestionTypeTargets != nil {
+		known := map[string]bool{"mc": true, "ma": true, "tf": true, "fb": true, "sa": true, "matching": true, "drag_sort": true, "hotspot": true}
+		allowed := make(map[string]bool)
+		if body.QuestionTypes != nil {
+			for _, questionType := range *body.QuestionTypes {
+				allowed[strings.ToLower(strings.TrimSpace(questionType))] = true
+			}
+		} else {
+			for _, questionType := range mod.QuestionTypes {
+				allowed[questionType] = true
+			}
+		}
+		cleanTargets := make(map[string]int)
+		for questionType, target := range *body.QuestionTypeTargets {
+			questionType = strings.ToLower(strings.TrimSpace(questionType))
+			if !known[questionType] || (len(allowed) > 0 && !allowed[questionType]) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "question type target must be for an allowed question type"})
+				return
+			}
+			if target < 1 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "question type targets must be positive"})
+				return
+			}
+			cleanTargets[questionType] = target
+		}
+		targetsJSON, _ := json.Marshal(cleanTargets)
+		if err := h.Queries.UpdateModuleQuestionTypeTargets(c.Request.Context(), moduleID, targetsJSON); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save question type targets"})
+			return
+		}
+	}
 
 	if err := h.Queries.UpdateModuleMeta(c.Request.Context(), moduleID, title, desc, order, questionTypesJSON); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update module"})
@@ -1527,17 +1577,20 @@ func (h *Handler) UpdateModuleHandler(c *gin.Context) {
 	// have been pruned of unknown types above).
 	updated, _ := h.Queries.GetModule(c.Request.Context(), moduleID)
 	respTypes := body.QuestionTypes
+	respTargets := mod.QuestionTypeTargets
 	if updated != nil {
 		respTypes = &updated.QuestionTypes
+		respTargets = updated.QuestionTypeTargets
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":             moduleID,
-		"course_id":      courseID,
-		"title":          title,
-		"description":    desc,
-		"sort_order":     order,
-		"status":         mod.Status,
-		"question_types": respTypes,
+		"id":                    moduleID,
+		"course_id":             courseID,
+		"title":                 title,
+		"description":           desc,
+		"sort_order":            order,
+		"status":                mod.Status,
+		"question_types":        respTypes,
+		"question_type_targets": respTargets,
 	})
 }
 

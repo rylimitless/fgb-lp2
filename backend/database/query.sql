@@ -21,7 +21,7 @@ select * from users where id = $1;
 
 -- name: CreateSession :one
 insert into sessions (user_id, token, expires_at)
-values ($1, $2, now() + interval '24 hours')
+values ($1, $2, now() + interval '30 days')
 returning *;
 
 -- name: GetSessionByToken :one
@@ -29,6 +29,33 @@ select * from sessions where token = $1 and expires_at > now();
 
 -- name: DeleteSession :exec
 delete from sessions where token = $1;
+
+-- name: TouchSession :exec
+-- Sliding renewal: extend a session only when it is within 6 hours of
+-- expiring, so an active user is never cut off mid-task but the DB is
+-- not written on every request.
+update sessions
+set expires_at = now() + interval '30 days'
+where token = $1
+  and expires_at - now() < interval '6 hours';
+
+-- name: DeleteExpiredSessions :exec
+-- Housekeeping: drop sessions that expired more than 7 days ago so the
+-- table cannot grow unboundedly now that sessions live up to 30 days.
+delete from sessions where expires_at < now() - interval '7 days';
+
+-- name: GetSessionByTokenAnyExpiry :one
+-- Lookup a session row by token WITHOUT the expiry filter. Used only on the
+-- auth-failure path so the auth_trace log can distinguish "expired" from
+-- "never existed" (GetSessionByToken collapses both into one error).
+select * from sessions where token = $1;
+
+-- name: InsertAuthTrace :exec
+insert into auth_trace (source, event, user_id, ip, method, path, cookie_prefix, detail)
+values ($1, $2, $3, $4, $5, $6, $7, $8);
+
+-- name: RecentAuthTrace :many
+select * from auth_trace order by created_at desc limit $1;
 
 -- name: GetAllUsers :many
 select * from users order by created_at desc;

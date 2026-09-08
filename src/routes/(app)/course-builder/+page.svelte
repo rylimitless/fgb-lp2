@@ -105,6 +105,10 @@
         }
     }
 
+    function clearSelectedDocs() {
+        selectedDocIds = [];
+    }
+
     async function handleOutline() {
         if (!description.trim()) return;
         genError = "";
@@ -222,31 +226,44 @@
     }
 </script>
 
-<div class="flex w-full max-w-6xl mx-auto flex-col gap-6">
+<div class="flex w-full max-w-7xl mx-auto flex-col gap-5">
     <PageHeader
         eyebrow="Staged builder"
         title="Course Builder"
-        description="Generate an outline first, then build each module one at a time. Approve modules as you go."
+        description="Start with a focused outline, then build and review modules at your own pace."
     >
         {#snippet icon()}
             <Wand2 class="size-6 text-primary" />
         {/snippet}
     </PageHeader>
 
-    <div class="flex flex-col md:flex-row gap-6">
-        <!-- Outline starter -->
-        <section class="md:w-[440px] shrink-0 flex flex-col gap-4">
+    <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <!-- Primary creation flow -->
+        <section class="flex min-w-0 flex-col gap-4">
             <!-- Shared source document picker (used by both discovery + outline) -->
             {#if approvedDocs.length > 0 || processingDocs.length > 0}
-                <div class="rounded-xl border border-border bg-card p-5">
-                    <p class="text-xs font-medium text-muted-foreground mb-2">
-                        Source documents
+                <div class="order-1 rounded-lg border border-border bg-card p-4">
+                    <div class="mb-2 flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-sm font-semibold text-foreground">Source documents</p>
+                            <p class="text-xs text-muted-foreground">
+                                {#if selectedDocIds.length > 0}
+                                    Using {selectedDocIds.length} selected document{selectedDocIds.length === 1 ? "" : "s"}.
+                                {:else}
+                                    All approved documents will be used.
+                                {/if}
+                            </p>
+                        </div>
                         {#if selectedDocIds.length > 0}
-                            <span class="text-primary">({selectedDocIds.length} selected)</span>
-                        {:else}
-                            <span class="text-muted-foreground/60">(optional — all approved docs used by default)</span>
+                            <button
+                                type="button"
+                                class="text-xs font-medium text-primary hover:underline"
+                                onclick={clearSelectedDocs}
+                            >
+                                Use all
+                            </button>
                         {/if}
-                    </p>
+                    </div>
                     <div class="flex flex-col gap-1 max-h-48 overflow-y-auto rounded-lg border border-border bg-background/40 p-1">
                         {#each approvedDocs as doc}
                             <button
@@ -293,13 +310,13 @@
             {/if}
 
             <!-- Step 1: Discovery -->
-            <div class="rounded-xl border border-primary/30 bg-primary/5 p-5">
+            <div class="order-3 rounded-lg border border-primary/30 bg-primary/5 p-5">
                 <h2 class="text-sm font-semibold text-foreground flex items-center gap-2 mb-1">
                     <Compass class="size-4 text-primary" />
                     Step 1: Explore sources
                 </h2>
                 <p class="text-xs text-muted-foreground mb-3">
-                    Let the AI read your documents and suggest what kind of course they could support. Optional — you can skip straight to the outline below.
+                    Use this when you need help finding a viable course topic from the selected material.
                 </p>
                 <div class="flex flex-col gap-3">
                     <input
@@ -389,11 +406,17 @@
             </div>
 
             <!-- Step 2: Outline form -->
-            <div id="outline-form" class="rounded-xl border border-border bg-card p-6 scroll-mt-4">
-                <h2 class="text-sm font-semibold text-foreground flex items-center gap-2 mb-4">
-                    <Sparkles class="size-4 text-primary" />
-                    Step 2: Generate outline
-                </h2>
+            <div id="outline-form" class="order-2 rounded-lg border border-border bg-card p-5 scroll-mt-4">
+                <div class="mb-5 flex items-start justify-between gap-4">
+                    <div>
+                        <h2 class="text-sm font-semibold text-foreground flex items-center gap-2">
+                            <Sparkles class="size-4 text-primary" />
+                            Step 1: Define the outline
+                        </h2>
+                        <p class="mt-1 text-xs text-muted-foreground">Describe the learning outcome and generate an editable module plan.</p>
+                    </div>
+                    <span class="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Draft</span>
+                </div>
                 <div class="flex flex-col gap-4">
                     <div class="flex flex-col gap-1.5">
                         <label for="ol-title" class="text-xs font-medium text-muted-foreground">
@@ -474,13 +497,16 @@
             </div>
         </section>
 
-        <!-- Draft course list -->
-        <section class="flex-1 min-w-0">
-            <div class="rounded-xl border border-border bg-card p-6">
-                <h2 class="text-sm font-semibold text-foreground flex items-center gap-2 mb-3">
+        <!-- Draft resumption sidebar -->
+        <section class="min-w-0 xl:sticky xl:top-4">
+            <div class="rounded-lg border border-border bg-card p-4">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                    <h2 class="text-sm font-semibold text-foreground flex items-center gap-2">
                     <BookOpen class="size-4 text-muted-foreground" />
-                    Draft courses ({data.drafts.length})
-                </h2>
+                    Continue a draft
+                    </h2>
+                    <span class="rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">{data.drafts.length}</span>
+                </div>
 
                 {#if data.drafts.length === 0}
                     <div class="rounded-lg border border-dashed border-border bg-muted/20 px-6 py-10 text-center">
@@ -490,10 +516,10 @@
                         </p>
                     </div>
                 {:else}
-                    <div class="flex flex-col gap-2">
+                    <div class="flex max-h-[calc(100vh-14rem)] flex-col gap-2 overflow-y-auto pr-1">
                         {#each data.drafts as course (course.id)}
                             <button
-                                class="flex items-center gap-3 rounded-lg border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-muted/40"
+                                class="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-primary/30 hover:bg-muted/40"
                                 onclick={() => goto(`/course-builder/${course.id}`)}
                             >
                                 <BookOpen class="size-4 text-muted-foreground shrink-0" />
@@ -517,12 +543,6 @@
                 {/if}
             </div>
 
-            {#if data.drafts.length > 0}
-                <p class="text-xs text-muted-foreground mt-3 text-center">
-                    <Plus class="size-3 inline mr-1" />
-                    Use the form on the left to start a new outline.
-                </p>
-            {/if}
         </section>
     </div>
 </div>

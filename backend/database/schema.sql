@@ -156,6 +156,8 @@ create table if not exists modules (
   -- Per-module question type allowlist (null/empty = allow all types).
   -- Set by the user during outline review before generation.
   question_types jsonb,
+  -- Optional hard cap for each generated question type, e.g. {"mc": 10}.
+  question_type_targets jsonb not null default '{}',
   -- AI-reported limitations captured during generation: which requested
   -- question types were skipped because the section material didn't fit
   -- them, and why. Surfaced to the user as warnings after generation.
@@ -244,8 +246,13 @@ create table if not exists lesson_progress (
   score_pct numeric(5,2) not null default 0,
   started_at timestamptz not null default now(),
   completed_at timestamptz,
+  -- Accumulated active study time in the lesson player (seconds).
+  seconds_spent bigint not null default 0,
   unique(user_id, course_id)
 );
+
+-- Idempotent migration for existing databases created before seconds_spent.
+alter table lesson_progress add column if not exists seconds_spent bigint not null default 0;
 
 -- Guided Lesson Player: per-user per-item answers and correctness
 create table if not exists item_progress (

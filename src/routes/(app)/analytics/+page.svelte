@@ -25,6 +25,8 @@
         FileWarning,
         Calendar,
         Download,
+        ChevronDown,
+        ChevronUp,
     } from "@lucide/svelte";
     import { Chart, registerables } from "chart.js";
     import { goto } from "$app/navigation";
@@ -81,6 +83,49 @@
     // Enrollment dashboard (#1)
     let enrollmentOverview = $derived(data.enrollmentOverview ?? null);
     let stalledEnrollments = $derived(data.stalledEnrollments ?? []);
+
+    // Full per-course breakdown (#1b): every course, expandable to per-learner
+    // rows (scores + study time + completion) fetched lazily from the client.
+    let courseBreakdown = $derived(data.courseBreakdown ?? []);
+    let expandedCourseId = $state<number | null>(null);
+    let courseLearners = $state<any[]>([]);
+    let learnersLoading = $state(false);
+    let learnersError = $state("");
+
+    async function toggleCourseLearners(courseId: number) {
+        if (expandedCourseId === courseId) {
+            expandedCourseId = null;
+            courseLearners = [];
+            return;
+        }
+        expandedCourseId = courseId;
+        courseLearners = [];
+        learnersLoading = true;
+        learnersError = "";
+        try {
+            const res = await fetch(
+                `/api/analytics/courses/${courseId}/learners`,
+                { credentials: "include" },
+            );
+            if (!res.ok) throw new Error("Failed to load learners");
+            courseLearners = await res.json();
+        } catch (e: any) {
+            learnersError = e.message || "Network error";
+        } finally {
+            learnersLoading = false;
+        }
+    }
+
+    function formatDuration(seconds: number): string {
+        if (!seconds || seconds <= 0) return "—";
+        const h = Math.floor(seconds / 3600);
+        const m = Math.round((seconds % 3600) / 60);
+        return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+
+    function fmtDate(v: string | null | undefined): string {
+        return v ? String(v) : "—";
+    }
 
     // Credentials dashboard (#2)
     let credentialOverview = $derived(data.credentialOverview ?? null);
@@ -948,6 +993,303 @@
                             </div>
                         {/if}
                     </div>
+                </div>
+
+                <!-- Course performance: all courses with per-learner drill-down -->
+                <div
+                    class="rounded-2xl border border-border bg-card overflow-hidden lift"
+                >
+                    <div
+                        class="px-5 py-4 border-b border-border flex items-center justify-between"
+                    >
+                        <h3
+                            class="text-sm font-semibold text-foreground"
+                        >
+                            Course performance
+                            <span
+                                class="text-muted-foreground font-normal"
+                            >
+                                (all courses)
+                            </span>
+                        </h3>
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                            title="Export CSV"
+                            onclick={() => exportCSV('course-performance.csv', courseBreakdown)}
+                        >
+                            <Download class="size-3.5" />
+                            CSV
+                        </button>
+                    </div>
+                    {#if courseBreakdown.length === 0}
+                        <p
+                            class="text-sm text-muted-foreground py-8 text-center"
+                        >
+                            No courses yet.
+                        </p>
+                    {:else}
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead
+                                    class="text-left text-xs text-muted-foreground sticky top-0 bg-card"
+                                >
+                                    <tr class="border-b border-border">
+                                        <th
+                                            class="px-5 py-3 font-medium"
+                                        >
+                                            Course
+                                        </th>
+                                        <th
+                                            class="px-3 py-3 font-medium text-right"
+                                        >
+                                            Enrolled
+                                        </th>
+                                        <th
+                                            class="px-3 py-3 font-medium text-right"
+                                        >
+                                            Completed
+                                        </th>
+                                        <th
+                                            class="px-3 py-3 font-medium text-right"
+                                        >
+                                            Completion
+                                        </th>
+                                        <th
+                                            class="px-3 py-3 font-medium text-right"
+                                        >
+                                            Avg score
+                                        </th>
+                                        <th
+                                            class="px-3 py-3 font-medium text-right"
+                                        >
+                                            Avg study time
+                                        </th>
+                                        <th
+                                            class="px-3 py-3 font-medium text-right"
+                                        >
+                                            Avg days
+                                        </th>
+                                        <th
+                                            class="px-5 py-3 font-medium text-right"
+                                        ></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {#each courseBreakdown as cb}
+                                        <tr
+                                            class="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
+                                            onclick={() => toggleCourseLearners(cb.course_id)}
+                                        >
+                                            <td class="px-5 py-3">
+                                                <div class="flex flex-col">
+                                                    <span
+                                                        class="font-medium text-foreground"
+                                                    >
+                                                        {truncate(cb.course_title || "Untitled", 40)}
+                                                    </span>
+                                                    <span
+                                                        class="text-xs text-muted-foreground capitalize"
+                                                    >
+                                                        {cb.status}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td
+                                                class="px-3 py-3 text-right text-muted-foreground tabular-nums"
+                                            >
+                                                {cb.enrolled}
+                                            </td>
+                                            <td
+                                                class="px-3 py-3 text-right text-muted-foreground tabular-nums"
+                                            >
+                                                {cb.completed}
+                                            </td>
+                                            <td
+                                                class="px-3 py-3 text-right tabular-nums"
+                                            >
+                                                <span
+                                                    class="text-xs font-medium {cb.completion_rate >= 70 ? 'text-success' : cb.completion_rate >= 40 ? 'text-warning' : 'text-destructive'}"
+                                                >
+                                                    {cb.completion_rate}%
+                                                </span>
+                                            </td>
+                                            <td
+                                                class="px-3 py-3 text-right text-muted-foreground tabular-nums"
+                                            >
+                                                {cb.avg_score}%
+                                            </td>
+                                            <td
+                                                class="px-3 py-3 text-right text-muted-foreground tabular-nums"
+                                            >
+                                                {formatDuration(cb.avg_seconds)}
+                                            </td>
+                                            <td
+                                                class="px-3 py-3 text-right text-muted-foreground tabular-nums"
+                                            >
+                                                {cb.avg_days}d
+                                            </td>
+                                            <td
+                                                class="px-5 py-3 text-right"
+                                            >
+                                                {#if expandedCourseId === cb.course_id}
+                                                    <ChevronUp
+                                                        class="size-4 text-muted-foreground inline"
+                                                    />
+                                                {:else}
+                                                    <ChevronDown
+                                                        class="size-4 text-muted-foreground inline"
+                                                    />
+                                                {/if}
+                                            </td>
+                                        </tr>
+                                        {#if expandedCourseId === cb.course_id}
+                                            <tr class="bg-muted/20">
+                                                <td
+                                                    colspan="8"
+                                                    class="px-5 py-4"
+                                                >
+                                                    {#if learnersLoading}
+                                                        <p
+                                                            class="text-sm text-muted-foreground py-4 text-center"
+                                                        >
+                                                            Loading learners…
+                                                        </p>
+                                                    {:else if learnersError}
+                                                        <p
+                                                            class="text-sm text-destructive py-4 text-center"
+                                                        >
+                                                            {learnersError}
+                                                        </p>
+                                                    {:else if courseLearners.length === 0}
+                                                        <p
+                                                            class="text-sm text-muted-foreground py-4 text-center"
+                                                        >
+                                                            No learners enrolled yet.
+                                                        </p>
+                                                    {:else}
+                                                        <div
+                                                            class="overflow-x-auto"
+                                                        >
+                                                            <table
+                                                                class="w-full text-sm"
+                                                            >
+                                                                <thead
+                                                                    class="text-left text-xs text-muted-foreground"
+                                                                >
+                                                                    <tr
+                                                                        class="border-b border-border"
+                                                                    >
+                                                                        <th
+                                                                            class="px-3 py-2 font-medium"
+                                                                        >
+                                                                            Learner
+                                                                        </th>
+                                                                        <th
+                                                                            class="px-3 py-2 font-medium"
+                                                                        >
+                                                                            Department
+                                                                        </th>
+                                                                        <th
+                                                                            class="px-3 py-2 font-medium text-right"
+                                                                        >
+                                                                            Status
+                                                                        </th>
+                                                                        <th
+                                                                            class="px-3 py-2 font-medium text-right"
+                                                                        >
+                                                                            Score
+                                                                        </th>
+                                                                        <th
+                                                                            class="px-3 py-2 font-medium text-right"
+                                                                        >
+                                                                            Study time
+                                                                        </th>
+                                                                        <th
+                                                                            class="px-3 py-2 font-medium text-right"
+                                                                        >
+                                                                            Days
+                                                                        </th>
+                                                                        <th
+                                                                            class="px-3 py-2 font-medium text-right"
+                                                                        >
+                                                                            Completed at
+                                                                        </th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {#each courseLearners as cl}
+                                                                        <tr
+                                                                            class="border-b border-border/50"
+                                                                        >
+                                                                            <td
+                                                                                class="px-3 py-2"
+                                                                            >
+                                                                                <div
+                                                                                    class="flex flex-col"
+                                                                                >
+                                                                                    <span
+                                                                                        class="font-medium text-foreground"
+                                                                                    >
+                                                                                        {cl.user_name}
+                                                                                    </span>
+                                                                                    <span
+                                                                                        class="text-xs text-muted-foreground"
+                                                                                    >
+                                                                                        {cl.user_email}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td
+                                                                                class="px-3 py-2 text-muted-foreground"
+                                                                            >
+                                                                                {cl.department}
+                                                                            </td>
+                                                                            <td
+                                                                                class="px-3 py-2 text-right"
+                                                                            >
+                                                                                <span
+                                                                                    class="text-xs font-medium {cl.course_completed ? 'text-success' : 'text-warning'}"
+                                                                                >
+                                                                                    {cl.enrollment_status}
+                                                                                </span>
+                                                                            </td>
+                                                                            <td
+                                                                                class="px-3 py-2 text-right text-muted-foreground tabular-nums"
+                                                                            >
+                                                                                {cl.score_pct}%
+                                                                            </td>
+                                                                            <td
+                                                                                class="px-3 py-2 text-right text-muted-foreground tabular-nums"
+                                                                            >
+                                                                                {formatDuration(cl.seconds_spent)}
+                                                                            </td>
+                                                                            <td
+                                                                                class="px-3 py-2 text-right text-muted-foreground tabular-nums"
+                                                                            >
+                                                                                {cl.days_to_complete != null
+                                                                                    ? cl.days_to_complete + "d"
+                                                                                    : "—"}
+                                                                            </td>
+                                                                            <td
+                                                                                class="px-3 py-2 text-right text-xs text-muted-foreground tabular-nums"
+                                                                            >
+                                                                                {fmtDate(cl.completed_at)}
+                                                                            </td>
+                                                                        </tr>
+                                                                    {/each}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    {/if}
+                                                </td>
+                                            </tr>
+                                        {/if}
+                                    {/each}
+                                </tbody>
+                            </table>
+                        </div>
+                    {/if}
                 </div>
 
                 <!-- Stalled enrollments -->

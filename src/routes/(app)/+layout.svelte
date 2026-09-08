@@ -225,6 +225,57 @@
     let notifLoading = $state(false);
     let pollInterval: ReturnType<typeof setInterval>;
 
+    // ---- Auth session heartbeat (traces the "random logout" problem) ----
+    // The backend logs every 401, but the open question is WHEN the browser's
+    // session cookie disappears — sometimes with no server traffic at all. This
+    // heartbeat pings /api/_debug/session-check every 20s and on tab focus, and
+    // records every status CHANGE to the auth_trace table + the console. That
+    // gives a continuous browser-side timeline we can line up against backend
+    // events to find the exact moment (and surrounding context) the cookie died.
+    let sessionCheckInterval: ReturnType<typeof setInterval>;
+    let lastSessionStatus: string | null = null; // "valid" | "no_cookie" | "invalid"
+
+    async function checkSessionHeartbeat(reason: string) {
+        try {
+            const res = await fetch("/api/_debug/session-check", {
+                credentials: "include",
+            });
+            if (!res.ok) return;
+            const d = await res.json();
+            const status = d.status as string;
+            const prefix = d.cookie_prefix as string;
+            // Only log/report transitions so the trace stays readable, and log
+            // the FIRST reading so we know the starting state.
+            if (status !== lastSessionStatus) {
+                const at = new Date().toISOString();
+                const was = lastSessionStatus ?? "(initial)";
+                lastSessionStatus = status;
+                // eslint-disable-next-line no-console
+                console.warn(
+                    `[auth] session ${status} (cookie=${prefix}) @ ${at} — was ${was}, trigger=${reason}, path=${location.pathname}`,
+                );
+                // Persist the transition server-side.
+                fetch("/api/_debug/auth-event", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({
+                        source: "browser",
+                        event: "client_observed",
+                        path: location.pathname,
+                        cookie_prefix: prefix,
+                        detail: { reason, was, status, at },
+                    }),
+                    keepalive: true,
+                }).catch(() => {
+                    /* ignore */
+                });
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+
     async function fetchUnreadCount() {
         try {
             const res = await fetch("/api/notifications/unread-count", {
@@ -308,6 +359,22 @@
     onMount(() => {
         fetchUnreadCount();
         pollInterval = setInterval(fetchUnreadCount, 30000);
+
+        // Start the session heartbeat. Also re-check on tab focus / visibility
+        // change, because the cookie sometimes vanishes while the tab is idle —
+        // catching the transition right when the user returns is high-signal.
+        checkSessionHeartbeat("mount");
+        sessionCheckInterval = setInterval(
+            () => checkSessionHeartbeat("interval"),
+            20000,
+        );
+        const onVisibility = () => {
+            if (!document.hidden) checkSessionHeartbeat("visible");
+        };
+        const onFocus = () => checkSessionHeartbeat("focus");
+        document.addEventListener("visibilitychange", onVisibility);
+        window.addEventListener("focus", onFocus);
+
         const onKey = (event: KeyboardEvent) => {
             if (
                 (event.ctrlKey || event.metaKey) &&
@@ -320,6 +387,9 @@
         window.addEventListener("keydown", onKey);
         return () => {
             clearInterval(pollInterval);
+            clearInterval(sessionCheckInterval);
+            document.removeEventListener("visibilitychange", onVisibility);
+            window.removeEventListener("focus", onFocus);
             window.removeEventListener("keydown", onKey);
         };
     });

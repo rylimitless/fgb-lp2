@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 // ModuleWithStatus mirrors Module but is updated by hand to include the
@@ -13,15 +14,16 @@ import (
 // because they were added via ALTER TABLE in runMigrations rather than in
 // the parsed schema at codegen time.
 type ModuleWithStatus struct {
-	ID            int64
-	CourseID      int64
-	Title         string
-	Description   string
-	SortOrder     int32
-	Status        string
-	QuestionTypes []string         // nil/empty = allow all types
-	Limitations   []map[string]any // AI-reported skips: {type, reason, section}
-	CreatedAt     string           // timestamptz as text
+	ID                  int64
+	CourseID            int64
+	Title               string
+	Description         string
+	SortOrder           int32
+	Status              string
+	QuestionTypes       []string // nil/empty = allow all types
+	QuestionTypeTargets map[string]int
+	Limitations         []map[string]any // AI-reported skips: {type, reason, section}
+	CreatedAt           string           // timestamptz as text
 }
 
 // scanModule scans a module row whose SELECT projects the staged-builder
@@ -30,18 +32,25 @@ func scanModule(scanner interface {
 	Scan(dest ...any) error
 }) (ModuleWithStatus, error) {
 	var (
-		m             ModuleWithStatus
-		questionTypes []byte
-		limitations   []byte
+		m                   ModuleWithStatus
+		questionTypes       []byte
+		questionTypeTargets []byte
+		limitations         []byte
 	)
 	if err := scanner.Scan(
 		&m.ID, &m.CourseID, &m.Title, &m.Description, &m.SortOrder,
-		&m.Status, &questionTypes, &limitations, &m.CreatedAt,
+		&m.Status, &questionTypes, &questionTypeTargets, &limitations, &m.CreatedAt,
 	); err != nil {
 		return ModuleWithStatus{}, err
 	}
 	if len(questionTypes) > 0 {
 		_ = json.Unmarshal(questionTypes, &m.QuestionTypes)
+	}
+	if len(questionTypeTargets) > 0 {
+		_ = json.Unmarshal(questionTypeTargets, &m.QuestionTypeTargets)
+	}
+	if m.QuestionTypeTargets == nil {
+		m.QuestionTypeTargets = map[string]int{}
 	}
 	if len(limitations) > 0 {
 		_ = json.Unmarshal(limitations, &m.Limitations)
@@ -57,6 +66,7 @@ func scanModule(scanner interface {
 const moduleSelectCols = `id, course_id, title, description, sort_order,
        COALESCE(status, 'pending'),
        question_types::text,
+	       COALESCE(question_type_targets::text, '{}'),
        COALESCE(limitations::text, 'null'),
        created_at::text`
 
@@ -95,6 +105,47 @@ func (q *Queries) GetModulesByCourseWithStatus(ctx context.Context, courseID int
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+func (q *Queries) SearchDocumentChunksByIDs(ctx context.Context, embedding pgvector.Vector, documentIDs []int64, limit int32) ([]SearchDocumentChunksRow, error) {
+	rows, err := q.db.Query(ctx,
+		`SELECT dc.id, dc.document_id, dc.chunk_index, dc.content, dc.page_number,
+		        dc.source_label, dc.embedding, dc.created_at, d.title AS document_title
+		   FROM document_chunks dc
+		   JOIN documents d ON d.id = dc.document_id
+		  WHERE d.approved = true
+		    AND dc.embedding IS NOT NULL
+		    AND dc.document_id = ANY($2::bigint[])
+		  ORDER BY dc.embedding <=> $1
+		  LIMIT $3`,
+		embedding, documentIDs, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []SearchDocumentChunksRow
+	for rows.Next() {
+		var chunk SearchDocumentChunksRow
+		if err := rows.Scan(
+			&chunk.ID, &chunk.DocumentID, &chunk.ChunkIndex, &chunk.Content,
+			&chunk.PageNumber, &chunk.SourceLabel, &chunk.Embedding, &chunk.CreatedAt,
+			&chunk.DocumentTitle,
+		); err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, rows.Err()
+}
+
+func (q *Queries) UpdateModuleQuestionTypeTargets(ctx context.Context, id int64, targets []byte) error {
+	_, err := q.db.Exec(ctx,
+		`UPDATE modules SET question_type_targets = $2::jsonb WHERE id = $1`,
+		id, targets,
+	)
+	return err
 }
 
 // UpdateModuleStatus sets the generation status for a single module row.

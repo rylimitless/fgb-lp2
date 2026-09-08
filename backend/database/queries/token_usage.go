@@ -10,19 +10,19 @@ import (
 // these so the developer-tools spend dashboard can aggregate over them. The
 // provider's own accounting is stored verbatim — no estimation.
 type LLMTokenUsageRow struct {
-	ID                 int64
-	Model              string
-	Source             string // mock_course | course_builder | coach | discovery | ...
-	Label              string // free-form, e.g. "outline" or "module-3:section-1:questions"
-	PromptTokens       int64
-	CompletionTokens   int64
-	TotalTokens        int64
-	CachedPromptTokens int64
-	ReasoningTokens    int64
-	CourseID           *int64
-	UserID             *int64
-	JobRef             *string
-	CreatedAt          time.Time
+	ID                 int64     `json:"id"`
+	Model              string    `json:"model"`
+	Source             string    `json:"source"` // mock_course | course_builder | coach | discovery | ...
+	Label              string    `json:"label"`  // free-form, e.g. "outline" or "module-3:section-1:questions"
+	PromptTokens       int64     `json:"prompt_tokens"`
+	CompletionTokens   int64     `json:"completion_tokens"`
+	TotalTokens        int64     `json:"total_tokens"`
+	CachedPromptTokens int64     `json:"cached_prompt_tokens"`
+	ReasoningTokens    int64     `json:"reasoning_tokens"`
+	CourseID           *int64    `json:"course_id"`
+	UserID             *int64    `json:"user_id"`
+	JobRef             *string   `json:"job_ref"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // LogLLMTokenUsageParams is the payload for LogLLMTokenUsage.

@@ -1,4 +1,4 @@
-import { redirect, type Handle } from "@sveltejs/kit";
+import { redirect, type Handle, type RequestEvent } from "@sveltejs/kit";
 import { apiFetch } from "$lib/server/api";
 
 // Public routes need no session. /welcome is the immersive marketing landing.
@@ -18,6 +18,42 @@ type User = {
   role: string;
   roles: string[];
 };
+
+// Cookie prefix (first 6 chars) for the auth_trace log. Mirrors the backend's
+// authtrace.Prefix so SSR and backend rows can be correlated on the same key.
+function cookiePrefix(token: string | undefined): string {
+  if (!token) return "none";
+  return token.length <= 6 ? token : token.slice(0, 6);
+}
+
+// Report an auth event (why we are about to redirect to /login) into the
+// backend's auth_trace table via the unauthenticated debug endpoint. Best-
+// effort: never blocks or fails the request. Runs server-side (SSR) so it has
+// the browser's actual cookie and reports the SSR layer's perspective.
+function reportTrace(
+  event: RequestEvent,
+  traceEvent: string,
+  detail: Record<string, unknown>,
+  path: string,
+): void {
+  const token = event.cookies.get("session_token");
+  const body = {
+    source: "ssr",
+    event: traceEvent,
+    path,
+    cookie_prefix: cookiePrefix(token),
+    detail,
+  };
+  // Fire-and-forget. Use the internal backend URL via apiFetch so this works
+  // even though the session may already be invalid.
+  apiFetch(event, "/api/_debug/auth-event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {
+    /* ignore — tracing must never break the request */
+  });
+}
 
 // Route-prefix -> roles allowed to view it. Mirrors the nav `roles` arrays in
 // (app)/+layout.svelte so the sidebar and the server-side guard agree. An empty
@@ -64,24 +100,53 @@ export const handle: Handle = async ({ event, resolve }) => {
   // Resolve the current user once per request (only when there's a session).
   // The result is stashed on locals.user so +layout.server.ts can reuse it
   // instead of re-fetching /api/me.
+  //
+  // A single transient backend failure (5xx, connection reset during an Air
+  // reload, etc.) must NOT count as "logged out" — doing so bounces a still-
+  // valid session to /login and, combined with the login page's cookie cleanup,
+  // permanently destroys a good session. So we retry once before falling back
+  // to the redirect below; only an explicit 401 is a definitive logout.
+  //
+  // `logoutReason` records WHY user ended up null so we can report it to the
+  // auth_trace log when we redirect — this is the key signal for diagnosing the
+  // "random logout" problem from the SSR layer's perspective.
   let user: User | null = null;
+  let logoutReason: string | null = null;
   if (sessionToken) {
-    try {
-      const res = await apiFetch(event, "/api/me");
-      if (res.ok) {
-        const data = await res.json();
-        const role = data.role as string;
-        user = {
-          id: data.id as number,
-          email: data.email as string,
-          name: data.name as string,
-          role,
-          roles: (data.roles ?? [role]) as string[],
-        };
+    const resolveUser = async (): Promise<Response | null> => {
+      try {
+        return await apiFetch(event, "/api/me");
+      } catch {
+        return null; // network error — backend unreachable
       }
-    } catch {
-      // Backend unreachable / invalid session — treat as logged out below.
+    };
+
+    let res = await resolveUser();
+    if (res && !res.ok && res.status !== 401) {
+      // Transient failure (5xx, proxy hiccup): wait briefly and retry once.
+      await new Promise((r) => setTimeout(r, 500));
+      res = await resolveUser();
     }
+
+    if (res?.ok) {
+      const data = await res.json();
+      const role = data.role as string;
+      user = {
+        id: data.id as number,
+        email: data.email as string,
+        name: data.name as string,
+        role,
+        roles: (data.roles ?? [role]) as string[],
+      };
+    } else if (!res) {
+      logoutReason = "network_error"; // backend unreachable after retry
+    } else if (res.status === 401) {
+      logoutReason = "session_invalid_401"; // explicit 401 from /api/me
+    } else {
+      logoutReason = `http_${res.status}`; // persistent 5xx after retry
+    }
+  } else {
+    logoutReason = "no_session_cookie";
   }
   event.locals.user = user;
 
@@ -90,6 +155,19 @@ export const handle: Handle = async ({ event, resolve }) => {
   //  - any deeper protected route → keep the direct login flow (preserves
   //    deep-link intent and the existing behaviour)
   if (!user && !isPublicRoute) {
+    // Record WHY this redirect happened so we can trace random logouts. The
+    // detail includes the reason, the route the user was trying to reach, and
+    // the referrer (which tab/origin) when available.
+    reportTrace(
+      event,
+      "ssr_redirect",
+      {
+        reason: logoutReason ?? "unknown",
+        target: pathname === "/" ? "/welcome" : "/login",
+        referrer: event.request.headers.get("referer") ?? null,
+      },
+      pathname,
+    );
     throw redirect(307, pathname === "/" ? "/welcome" : "/login");
   }
 
@@ -103,5 +181,28 @@ export const handle: Handle = async ({ event, resolve }) => {
     }
   }
 
-  return resolve(event);
+  const response = await resolve(event);
+
+  // Capture any Set-Cookie the SSR layer is about to send that touches
+  // session_token. If SvelteKit (or any load function) mutated event.cookies,
+  // it surfaces here — this is how we'd catch an SSR-originated cookie deletion.
+  const setCookies = response.headers.getSetCookie?.() ?? [];
+  for (const sc of setCookies) {
+    if (sc.includes("session_token")) {
+      const category =
+        sc.includes("Max-Age=0") ||
+        sc.includes("Max-Age=-1") ||
+        sc.includes("session_token=;")
+          ? "delete"
+          : "set";
+      reportTrace(
+        event,
+        "ssr_set_cookie",
+        { category, header: sc },
+        pathname,
+      );
+    }
+  }
+
+  return response;
 };

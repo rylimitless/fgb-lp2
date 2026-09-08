@@ -27,6 +27,7 @@ export const load: PageServerLoad = async (event) => {
     learningPathOverviewRes,
     contentOverviewRes,
     engagementOverviewRes,
+    courseBreakdownRes,
   ] = await Promise.all([
     apiFetch(event, "/api/analytics/overview"),
     apiFetch(event, "/api/analytics/most-failed"),
@@ -46,6 +47,7 @@ export const load: PageServerLoad = async (event) => {
     apiFetch(event, "/api/analytics/learning-paths/overview"),
     apiFetch(event, "/api/analytics/content/overview"),
     apiFetch(event, "/api/analytics/engagement/overview"),
+    apiFetch(event, "/api/analytics/courses/breakdown"),
   ]);
 
   const overview = overviewRes.ok ? await overviewRes.json() : null;
@@ -66,6 +68,7 @@ export const load: PageServerLoad = async (event) => {
   const learningPathOverview = learningPathOverviewRes.ok ? await learningPathOverviewRes.json() : null;
   const contentOverview = contentOverviewRes.ok ? await contentOverviewRes.json() : null;
   const engagementOverview = engagementOverviewRes.ok ? await engagementOverviewRes.json() : null;
+  const courseBreakdown = courseBreakdownRes.ok ? await courseBreakdownRes.json() : [];
 
   return {
     overview,
@@ -86,6 +89,7 @@ export const load: PageServerLoad = async (event) => {
     learningPathOverview,
     contentOverview,
     engagementOverview,
+    courseBreakdown,
     days,
   };
 };

@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"golang.org/x/sync/errgroup"
 )
@@ -42,6 +43,36 @@ func maxQuestionsFromSettings(settings []byte) int {
 		return 0
 	}
 	return n
+}
+
+func moduleQuestionBudget(total, moduleIndex, moduleCount int) int {
+	if total <= 0 || moduleCount <= 0 || moduleIndex < 0 || moduleIndex >= moduleCount {
+		return 0
+	}
+	budget := total / moduleCount
+	if moduleIndex < total%moduleCount {
+		budget++
+	}
+	return budget
+}
+
+func generatedConceptCount(items []database.CourseItemWithGroup) int {
+	groups := make(map[string]struct{})
+	count := 0
+	for _, item := range items {
+		if item.ItemType == "content" {
+			continue
+		}
+		if item.QuestionGroupID.Valid {
+			if _, seen := groups[item.QuestionGroupID.String]; !seen {
+				groups[item.QuestionGroupID.String] = struct{}{}
+				count++
+			}
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 // ---- Job types ----
@@ -305,6 +336,7 @@ func dbRowToJob(row *database.GenerationJobRow, db *database.Queries) *Generatio
 // ---- Worker ----
 
 type Worker struct {
+	pool    *pgxpool.Pool
 	store   *JobStore
 	queries *database.Queries
 	llm     *LLMClient
@@ -312,8 +344,9 @@ type Worker struct {
 	queue   chan *GenerationJob
 }
 
-func newWorker(store *JobStore, queries *database.Queries, llm *LLMClient, emb *embeddings.Client) *Worker {
+func newWorker(pool *pgxpool.Pool, store *JobStore, queries *database.Queries, llm *LLMClient, emb *embeddings.Client) *Worker {
 	w := &Worker{
+		pool:    pool,
 		store:   store,
 		queries: queries,
 		llm:     llm,
@@ -452,12 +485,18 @@ func (w *Worker) runOutlinePipeline(job *GenerationJob, req GenerateCourseReques
 	}
 	promptVec := pgvector.NewVector(float64ToFloat32(embeddings[0]))
 
-	// --- Broad retrieval so the outline sees the document's full scope ---
+	// Search only author-selected documents; no selection retains the existing
+	// approved-corpus behavior.
 	job.addStep("searching", "Searching approved documents for relevant content...")
-	chunks, err := w.queries.SearchDocumentChunks(context.Background(), database.SearchDocumentChunksParams{
-		Embedding: promptVec,
-		Limit:     outlineChunkLimit,
-	})
+	var chunks []database.SearchDocumentChunksRow
+	if len(req.SourceDocIDs) > 0 {
+		chunks, err = w.queries.SearchDocumentChunksByIDs(job.ctx, promptVec, req.SourceDocIDs, outlineChunkLimit)
+	} else {
+		chunks, err = w.queries.SearchDocumentChunks(job.ctx, database.SearchDocumentChunksParams{
+			Embedding: promptVec,
+			Limit:     outlineChunkLimit,
+		})
+	}
 	if err != nil {
 		log.Printf("[worker] search: %v", err)
 		w.failJob(job, "Failed to search documents")
@@ -493,6 +532,10 @@ func (w *Worker) runOutlinePipeline(job *GenerationJob, req GenerateCourseReques
 		// Build a compact rendering of the current outline so the LLM can see
 		// what it's revising rather than starting from scratch.
 		currentOutline := w.renderCurrentOutline(job.ctx, req.CourseID)
+		targetCountInstruction := "No exact module count was requested; use the source-material scale."
+		if targetCount, ok := requestedModuleCount(req.Feedback); ok {
+			targetCountInstruction = fmt.Sprintf("HARD REQUIREMENT: the revised outline must contain exactly %d total modules. Treat this as a target total, not a number to add or remove.", targetCount)
+		}
 		planPrompt = fmt.Sprintf(`Current course title: %s
 Current course description: %s
 
@@ -502,13 +545,16 @@ CURRENT OUTLINE:
 AUTHOR FEEDBACK:
 %s
 
+MODULE COUNT REQUIREMENT:
+%s
+
 Source material statistics: %d total characters across %d chunks.
 
 Source material:
 %s
 
 Revise the outline per the author feedback. Output the full revised outline in the Markdown format.`,
-			req.Title, embedText, currentOutline, strings.TrimSpace(req.Feedback),
+			req.Title, embedText, currentOutline, strings.TrimSpace(req.Feedback), targetCountInstruction,
 			sourceCharCount, chunkCount, sourceContext)
 	} else {
 		promptTemplate = coursePlanSystemPrompt
@@ -535,6 +581,23 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 	if len(coursePlan.Modules) == 0 {
 		w.failJob(job, "Step 1 failed: no modules found")
 		return 0, plan{}, nil, false
+	}
+
+	if targetCount, ok := requestedModuleCount(req.Feedback); ok && len(coursePlan.Modules) != targetCount {
+		log.Printf("[worker] job %s step1: model returned %d modules, requested exactly %d; retrying", job.ID, len(coursePlan.Modules), targetCount)
+		correctionPrompt := planPrompt + fmt.Sprintf(`
+
+The previous response contained %d modules. It did not satisfy the hard requirement. Rewrite the FULL outline now with exactly %d total module headings. Do not add or remove that number from the existing outline; the final output itself must have %d modules.`, len(coursePlan.Modules), targetCount, targetCount)
+		planResp, err = w.llm.Chat(promptTemplate, correctionPrompt)
+		if err != nil {
+			w.failJob(job, "Step 1 failed: outline revision error")
+			return 0, plan{}, nil, false
+		}
+		coursePlan = parsePlanMarkdown(planResp)
+		if len(coursePlan.Modules) != targetCount {
+			w.failJob(job, fmt.Sprintf("Step 1 failed: outline must contain exactly %d modules", targetCount))
+			return 0, plan{}, nil, false
+		}
 	}
 
 	// Hard cap to prevent runaway generation from an overly ambitious LLM plan.
@@ -568,35 +631,6 @@ Generate a Markdown course plan PROPORTIONAL to the source material size shown a
 
 	// --- Persist the course row (create or update) ---
 	if isRevision {
-		job.addStep("saving", fmt.Sprintf("Replacing outline: %s (%d modules)...",
-			coursePlan.Title, len(coursePlan.Modules)))
-		// Wipe the old structure. course_items.module_id is ON DELETE SET NULL,
-		// so we have to delete items explicitly to actually purge generated
-		// content — otherwise it would be orphaned on the course with no module.
-		if err := w.queries.DeleteCourseItems(job.ctx, req.CourseID); err != nil {
-			log.Printf("[worker] revision: delete items: %v", err)
-		}
-		if err := w.queries.DeleteCourseModules(job.ctx, req.CourseID); err != nil {
-			log.Printf("[worker] revision: delete modules: %v", err)
-		}
-		// Update the course meta (title/description). source_doc_ids and
-		// settings are preserved on the existing row; we only refresh settings
-		// here to capture the latest source refs from this retrieval pass.
-		if _, err := w.queries.UpdateCourseSettings(job.ctx, database.UpdateCourseSettingsParams{
-			ID:       req.CourseID,
-			Settings: settingsJSON,
-		}); err != nil {
-			log.Printf("[worker] revision: update settings: %v", err)
-		}
-		if _, err := w.queries.UpdateCourseMeta(job.ctx, database.UpdateCourseMetaParams{
-			ID:          req.CourseID,
-			Title:       coursePlan.Title,
-			Description: coursePlan.Description,
-		}); err != nil {
-			log.Printf("[worker] revision: update meta: %v", err)
-			w.failJob(job, "Failed to update course")
-			return 0, plan{}, nil, false
-		}
 		return req.CourseID, coursePlan, sourceRefs, true
 	}
 
@@ -707,6 +741,23 @@ func (w *Worker) runFullJob(job *GenerationJob, req GenerateCourseRequest) {
 		w.failJob(job, "Cancelled")
 		return
 	}
+	if req.CourseID != 0 && strings.TrimSpace(req.Feedback) != "" {
+		modules, ok := w.replaceCourseOutline(job, req, courseID, coursePlan, sourceRefs)
+		if !ok {
+			return
+		}
+		w.completeJob(job, gin.H{
+			"id":             courseID,
+			"title":          coursePlan.Title,
+			"description":    coursePlan.Description,
+			"status":         "draft",
+			"source_doc_ids": req.SourceDocIDs,
+			"sources":        sourceRefs,
+			"modules":        modules,
+			"stage":          "outline",
+		}, courseID)
+		return
+	}
 
 	// STEP 2/3: Generate each module IN PARALLEL.
 	// Each module retrieves its OWN source chunks (per-module retrieval), so
@@ -716,19 +767,14 @@ func (w *Worker) runFullJob(job *GenerationJob, req GenerateCourseRequest) {
 	totalModules := len(coursePlan.Modules)
 	modulesResult := make([]gin.H, totalModules)
 
-	// Distribute the optional question cap evenly (ceil) across modules.
-	maxConcepts := 0
-	if req.MaxQuestions > 0 && totalModules > 0 {
-		maxConcepts = (req.MaxQuestions + totalModules - 1) / totalModules
-	}
-
 	g, gctx := errgroup.WithContext(job.ctx)
 	g.SetLimit(moduleConcurrency)
 
 	for mi, modPlan := range coursePlan.Modules {
 		mi, modPlan := mi, modPlan
 		g.Go(func() error {
-			modResult, err := w.generateModule(gctx, job, courseID, coursePlan, mi, modPlan, totalModules, req.QuestionTypes, maxConcepts, nil)
+			maxConcepts := moduleQuestionBudget(req.MaxQuestions, mi, totalModules)
+			modResult, err := w.generateModule(gctx, job, courseID, coursePlan, req.SourceDocIDs, mi, modPlan, totalModules, req.QuestionTypes, nil, maxConcepts, nil)
 			if err != nil {
 				return err
 			}
@@ -751,6 +797,67 @@ func (w *Worker) runFullJob(job *GenerationJob, req GenerateCourseRequest) {
 		"modules":        modulesResult,
 	}
 	w.completeJob(job, result, courseID)
+}
+
+func (w *Worker) replaceCourseOutline(job *GenerationJob, req GenerateCourseRequest, courseID int64, coursePlan plan, sourceRefs []gin.H) ([]gin.H, bool) {
+	job.addStep("saving", fmt.Sprintf("Replacing outline: %s (%d modules)...", coursePlan.Title, len(coursePlan.Modules)))
+	tx, err := w.pool.Begin(job.ctx)
+	if err != nil {
+		log.Printf("[worker] revision: begin transaction: %v", err)
+		w.failJob(job, "Failed to prepare course revision")
+		return nil, false
+	}
+	defer tx.Rollback(context.Background())
+	queries := w.queries.WithTx(tx)
+
+	settings := map[string]interface{}{"sources": sourceRefs}
+	if req.MaxQuestions > 0 {
+		settings["max_questions"] = req.MaxQuestions
+	}
+	settingsJSON, _ := json.Marshal(settings)
+	if err := queries.DeleteCourseItems(job.ctx, courseID); err != nil {
+		log.Printf("[worker] revision: delete items: %v", err)
+		w.failJob(job, "Failed to replace course outline")
+		return nil, false
+	}
+	if err := queries.DeleteCourseModules(job.ctx, courseID); err != nil {
+		log.Printf("[worker] revision: delete modules: %v", err)
+		w.failJob(job, "Failed to replace course outline")
+		return nil, false
+	}
+	if _, err := queries.UpdateCourseSettings(job.ctx, database.UpdateCourseSettingsParams{ID: courseID, Settings: settingsJSON}); err != nil {
+		log.Printf("[worker] revision: update settings: %v", err)
+		w.failJob(job, "Failed to replace course outline")
+		return nil, false
+	}
+	if _, err := queries.UpdateCourseMeta(job.ctx, database.UpdateCourseMetaParams{ID: courseID, Title: coursePlan.Title, Description: coursePlan.Description}); err != nil {
+		log.Printf("[worker] revision: update metadata: %v", err)
+		w.failJob(job, "Failed to replace course outline")
+		return nil, false
+	}
+
+	modules := make([]gin.H, 0, len(coursePlan.Modules))
+	for index, modulePlan := range coursePlan.Modules {
+		if job.isCancelled() {
+			w.failJob(job, "Cancelled")
+			return nil, false
+		}
+		module, err := queries.CreateModule(job.ctx, database.CreateModuleParams{
+			CourseID: courseID, Title: modulePlan.Title, Description: modulePlan.Description, SortOrder: int32(index),
+		})
+		if err != nil {
+			log.Printf("[worker] revision: create module %d: %v", index+1, err)
+			w.failJob(job, "Failed to replace course outline")
+			return nil, false
+		}
+		modules = append(modules, gin.H{"id": module.ID, "title": modulePlan.Title, "description": modulePlan.Description, "sort_order": int32(index), "status": "pending", "items": []gin.H{}})
+	}
+	if err := tx.Commit(job.ctx); err != nil {
+		log.Printf("[worker] revision: commit transaction: %v", err)
+		w.failJob(job, "Failed to replace course outline")
+		return nil, false
+	}
+	return modules, true
 }
 
 // runOutlineJob runs the outline pipeline and then creates one modules row
@@ -877,10 +984,6 @@ func (w *Worker) runModuleJob(job *GenerationJob, req GenerateCourseRequest) {
 		questionTypes = module.QuestionTypes
 	}
 
-	// Distribute the optional course-wide question cap across modules. We use
-	// the total module count so a course capped at e.g. 20 questions with 5
-	// modules gives each module a budget of 4 concepts. ceil() so remainder
-	// concepts aren't lost.
 	maxConcepts := 0
 	if total := maxQuestionsFromSettings(course.Settings); total > 0 {
 		mods, _ := w.queries.GetModulesByCourseWithStatus(job.ctx, req.CourseID)
@@ -888,10 +991,20 @@ func (w *Worker) runModuleJob(job *GenerationJob, req GenerateCourseRequest) {
 		if n < 1 {
 			n = 1
 		}
-		maxConcepts = (total + n - 1) / n // ceil division
+		maxConcepts = moduleQuestionBudget(total, int(module.SortOrder), n)
+		items, err := w.queries.GetCourseItemsByCourseWithGroup(job.ctx, req.CourseID)
+		if err != nil {
+			log.Printf("[worker] module job: count existing concepts: %v", err)
+			w.failJob(job, "Failed to enforce course question limit")
+			return
+		}
+		remaining := total - generatedConceptCount(items)
+		if remaining < maxConcepts {
+			maxConcepts = max(remaining, 0)
+		}
 	}
 
-	modResult, err := w.generateModule(job.ctx, job, req.CourseID, coursePlan, int(module.SortOrder), modPlan, 1, questionTypes, maxConcepts, module)
+	modResult, err := w.generateModule(job.ctx, job, req.CourseID, coursePlan, course.SourceDocIds, int(module.SortOrder), modPlan, 1, questionTypes, module.QuestionTypeTargets, maxConcepts, module)
 	if err != nil {
 		// Mark the module as failed but report the error on the job too.
 		_ = w.queries.UpdateModuleStatus(context.Background(), module.ID, "failed")
@@ -940,7 +1053,7 @@ func buildChunkContext(chunks []database.SearchDocumentChunksRow) string {
 //
 // If `existing` is non-nil, the module row is reused (StageModule path); otherwise a
 // new modules row is created (legacy StageFull path).
-func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, mi int, modPlan planModule, totalModules int, questionTypes []string, maxConcepts int, existing *database.ModuleWithStatus) (gin.H, error) {
+func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseID int64, coursePlan plan, sourceDocIDs []int64, mi int, modPlan planModule, totalModules int, questionTypes []string, questionTypeTargets map[string]int, maxConcepts int, existing *database.ModuleWithStatus) (gin.H, error) {
 	moduleLabel := fmt.Sprintf("%d/%d", mi+1, totalModules)
 
 	// --- Per-module retrieval ---
@@ -952,10 +1065,15 @@ func (w *Worker) generateModule(ctx context.Context, job *GenerationJob, courseI
 	}
 	modVec := pgvector.NewVector(float64ToFloat32(modEmb[0]))
 
-	modChunks, err := w.queries.SearchDocumentChunks(ctx, database.SearchDocumentChunksParams{
-		Embedding: modVec,
-		Limit:     moduleChunkLimit,
-	})
+	var modChunks []database.SearchDocumentChunksRow
+	if len(sourceDocIDs) > 0 {
+		modChunks, err = w.queries.SearchDocumentChunksByIDs(ctx, modVec, sourceDocIDs, moduleChunkLimit)
+	} else {
+		modChunks, err = w.queries.SearchDocumentChunks(ctx, database.SearchDocumentChunksParams{
+			Embedding: modVec,
+			Limit:     moduleChunkLimit,
+		})
+	}
 	if err != nil {
 		log.Printf("[worker] module %s search: %v", moduleLabel, err)
 		return nil, fmt.Errorf("Failed to retrieve material for module %d", mi+1)
@@ -1035,6 +1153,14 @@ List 3-5 key sections that comprehensively break down this module's content.`,
 			}
 		}
 	}
+	typeTargets := make(map[string]int)
+	for questionType, target := range questionTypeTargets {
+		questionType = strings.ToLower(strings.TrimSpace(questionType))
+		if allowedTypes[questionType] && target > 0 {
+			typeTargets[questionType] = target
+		}
+	}
+	typeCounts := make(map[string]int)
 
 	// Accumulate AI-reported skips across all sections of this module.
 	// Persisted to modules.limitations at the end so the UI can surface them
@@ -1145,13 +1271,25 @@ Write exhaustive, faithful teaching content for this section.`,
 			remaining := maxConcepts - conceptsCreated
 			capRestriction = fmt.Sprintf("\n\nCRITICAL: Produce AT MOST %d distinct concept(s) for this section. Fewer is fine; never exceed this number.", remaining)
 		}
+		var targetRestriction string
+		if len(typeTargets) > 0 {
+			remainingTargets := make([]string, 0, len(typeTargets))
+			for questionType, target := range typeTargets {
+				if remaining := target - typeCounts[questionType]; remaining > 0 {
+					remainingTargets = append(remainingTargets, fmt.Sprintf("%s: %d", questionType, remaining))
+				}
+			}
+			if len(remainingTargets) > 0 {
+				targetRestriction = fmt.Sprintf("\n\nQUESTION-TYPE TARGETS FOR THE REMAINDER OF THIS MODULE: %s. Produce as many valid variants as possible toward these targets, without exceeding any target.", strings.Join(remainingTargets, ", "))
+			}
+		}
 
 		questionPrompt := fmt.Sprintf(`Section: "%s"
 
 Content:
 %s
 
-Identify the distinct concepts in this section and render each one in every question type that fits it.%s%s`, secTitle, contentSummary, typeRestriction, capRestriction)
+Identify the distinct concepts in this section and render each one in every question type that fits it.%s%s%s`, secTitle, contentSummary, typeRestriction, capRestriction, targetRestriction)
 
 		questionResp, err := w.llm.Chat(conceptVariantPrompt, questionPrompt)
 		if err != nil {
@@ -1202,8 +1340,12 @@ Identify the distinct concepts in this section and render each one in every ques
 		createVariant := func(q genItem, groupID string) {
 			qType := strings.ToLower(strings.TrimSpace(q.Type))
 			if !allowedTypes[qType] {
-				log.Printf("[worker] unknown item_type %q (m%d s%d) — defaulting to mc", q.Type, mi+1, si+1)
-				qType = "mc"
+				log.Printf("[worker] disallowed item_type %q (m%d s%d) — skipping", q.Type, mi+1, si+1)
+				limitations = append(limitations, gin.H{"type": q.Type, "reason": "The generated type was outside the module's allowed question types.", "section": secTitle})
+				return
+			}
+			if target, limited := typeTargets[qType]; limited && typeCounts[qType] >= target {
+				return
 			}
 			itemData := ensureIRTParams(q.Data, qType)
 			ci, err := w.queries.CreateCourseItemWithGroup(ctx, database.CreateCourseItemWithGroupParams{
@@ -1224,6 +1366,7 @@ Identify the distinct concepts in this section and render each one in every ques
 				"data":              json.RawMessage(itemData),
 			}
 			itemsResult = append(itemsResult, questionItem)
+			typeCounts[qType]++
 			job.broadcast(SSEEvent{Event: "item", Data: gin.H{
 				"module_id": moduleID,
 				"section":   secTitle,
@@ -1264,6 +1407,14 @@ Identify the distinct concepts in this section and render each one in every ques
 				createVariant(q, "")
 				conceptsCreated++
 			}
+		}
+	}
+	for questionType, target := range typeTargets {
+		if generated := typeCounts[questionType]; generated < target {
+			limitations = append(limitations, gin.H{
+				"type":   questionType,
+				"reason": fmt.Sprintf("Generated %d of %d requested items from the available source material.", generated, target),
+			})
 		}
 	}
 

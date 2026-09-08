@@ -168,7 +168,8 @@
         title: string;
         description: string;
         questionTypes: string[];
-    }>({ title: "", description: "", questionTypes: [] });
+        questionTypeTargets: Record<string, number>;
+    }>({ title: "", description: "", questionTypes: [], questionTypeTargets: {} });
     let savingModule = $state(false);
 
     // ---- Add-module form ----
@@ -579,6 +580,7 @@
             questionTypes: Array.isArray(mod.question_types)
                 ? [...mod.question_types]
                 : [],
+            questionTypeTargets: { ...(mod.question_type_targets ?? {}) },
         };
     }
 
@@ -588,6 +590,7 @@
             title: "",
             description: "",
             questionTypes: [],
+            questionTypeTargets: {},
         };
     }
 
@@ -612,6 +615,13 @@
                         // "empty = all types" from "field omitted = leave
                         // unchanged". UpdateModuleHandler prunes unknowns.
                         question_types: editBuf.questionTypes,
+                        question_type_targets: Object.fromEntries(
+                            Object.entries(editBuf.questionTypeTargets).filter(
+                                ([type, target]) =>
+                                    editBuf.questionTypes.includes(type) &&
+                                    Number.isInteger(target) && target > 0,
+                            ),
+                        ),
                     }),
                 },
             );
@@ -717,6 +727,8 @@
     }
 
     // ---- Outline revision handlers ----
+    let reviseJobId: string | null = null;
+
     // Asks the AI to revise the whole outline based on free-text feedback.
     // Streams progress via SSE, then refreshes the course state. Destructive:
     // generated modules + items are wiped and replaced.
@@ -759,6 +771,7 @@
                 return;
             }
             const { job_id } = await enqueue.json();
+            reviseJobId = job_id;
             await streamReviseJob(job_id, reviseAbort.signal);
         } catch (e: any) {
             if (e?.name === "AbortError") {
@@ -769,30 +782,21 @@
         } finally {
             revisingOutline = false;
             reviseAbort = null;
+            reviseJobId = null;
         }
     }
 
     async function cancelReviseOutline() {
         if (reviseAbort) reviseAbort.abort();
-        // The job runs server-side; best-effort cancel so the worker stops
-        // early instead of finishing a revision the user no longer wants.
-        try {
-            const activeRes = await fetch("/api/courses/generate/active", {
-                credentials: "include",
-            });
-            if (activeRes.ok) {
-                const jobs = await activeRes.json();
-                for (const j of jobs) {
-                    if (j.stage === "outline") {
-                        await fetch(
-                            `/api/courses/generate/${j.id}/cancel`,
-                            { method: "POST", credentials: "include" },
-                        );
-                    }
-                }
+        if (reviseJobId) {
+            try {
+                await fetch(`/api/courses/generate/${reviseJobId}/cancel`, {
+                    method: "POST",
+                    credentials: "include",
+                });
+            } catch {
+                /* best-effort */
             }
-        } catch {
-            /* best-effort */
         }
         revisingOutline = false;
     }
@@ -1510,17 +1514,17 @@
             {@const job = moduleJobs[mod.id]}
             <div class="rounded-xl border border-border bg-card overflow-hidden">
                 <!-- Header row -->
-                <div class="flex items-center gap-3 px-5 py-4 hover:bg-muted/30 transition-colors">
+                <div class="flex gap-3 px-5 py-4 {editingModuleId === mod.id ? 'items-start' : 'items-center hover:bg-muted/30 transition-colors'}">
                     <input
                         type="checkbox"
-                        class="size-4 cursor-pointer rounded border-input text-primary accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
+                        class="size-4 cursor-pointer rounded border-input text-primary accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0 {editingModuleId === mod.id ? 'hidden' : ''}"
                         checked={!!selectedModules[mod.id]}
                         onchange={() => toggleSelect(mod.id)}
                         title={selectedModules[mod.id] ? "Remove from selection" : "Select for bulk delete"}
                         aria-label="Select module {mod.title}"
                     />
                     <button
-                        class="shrink-0"
+                        class="shrink-0 {editingModuleId === mod.id ? 'hidden' : ''}"
                         onclick={() => toggleModule(mod.id)}
                         title={expandedModules[mod.id] ? "Collapse" : "Expand"}
                     >
@@ -1533,34 +1537,42 @@
 
                     <div class="flex-1 min-w-0">
                         {#if editingModuleId === mod.id}
-                            <!-- Inline edit -->
-                            <div class="flex flex-col gap-2">
-                                <input
-                                    type="text"
-                                    bind:value={editBuf.title}
-                                    class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                                    placeholder="Module title"
-                                />
-                                <textarea
-                                    bind:value={editBuf.description}
-                                    rows={2}
-                                    class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-                                    placeholder="What this module covers..."
-                                ></textarea>
-                                <!-- Per-module question type allowlist.
-                                     Empty selection = allow all types. The
-                                     backend normalises & prunes unknowns. -->
-                                <div class="flex flex-col gap-1">
-                                    <span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                                        Question types
-                                        {#if editBuf.questionTypes.length === 0}
-                                            <span class="text-muted-foreground/60 font-normal normal-case tracking-normal">(all types)</span>
-                                        {:else}
-                                            <span class="text-primary font-normal normal-case tracking-normal">({editBuf.questionTypes.length} selected)</span>
-                                        {/if}
-                                    </span>
+                            <div class="rounded-lg border border-primary/25 bg-primary/5 p-4">
+                                <div class="mb-4 flex items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-sm font-semibold text-foreground">Edit module</p>
+                                        <p class="mt-0.5 text-xs text-muted-foreground">Set the scope and assessment mix before generating content.</p>
+                                    </div>
+                                    <span class="rounded-full border border-primary/20 bg-background px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">Module {mi + 1}</span>
+                                </div>
+                                <div class="flex flex-col gap-4">
+                                    <label class="flex flex-col gap-1.5">
+                                        <span class="text-xs font-medium text-muted-foreground">Module title</span>
+                                        <input
+                                            type="text"
+                                            bind:value={editBuf.title}
+                                            class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                            placeholder="Module title"
+                                        />
+                                    </label>
+                                    <label class="flex flex-col gap-1.5">
+                                        <span class="text-xs font-medium text-muted-foreground">What learners should understand</span>
+                                        <textarea
+                                            bind:value={editBuf.description}
+                                            rows={3}
+                                            class="min-h-24 resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                            placeholder="Describe the learning outcome and source focus..."
+                                        ></textarea>
+                                    </label>
+                                    <div class="border-t border-primary/15 pt-4">
+                                        <div class="mb-2 flex items-center justify-between gap-3">
+                                            <span class="text-xs font-semibold text-foreground">Assessment settings</span>
+                                            <span class="text-[10px] text-muted-foreground">
+                                                {editBuf.questionTypes.length === 0 ? "All types available" : `${editBuf.questionTypes.length} type${editBuf.questionTypes.length === 1 ? "" : "s"} selected`}
+                                            </span>
+                                        </div>
                                     <DropdownMenu>
-                                        <DropdownMenuTrigger class="flex items-center justify-between rounded-lg border border-input bg-background px-3 py-1.5 text-xs text-foreground hover:bg-muted/50 transition-colors">
+                                        <DropdownMenuTrigger class="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground hover:bg-muted/50 transition-colors">
                                             {#if editBuf.questionTypes.length === 0}
                                                 <span class="text-muted-foreground">All question types</span>
                                             {:else}
@@ -1583,12 +1595,28 @@
                                         </DropdownMenuContent>
                                     </DropdownMenu>
                                     {#if editBuf.questionTypes.length > 0}
+                                        <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                                            {#each editBuf.questionTypes as questionType}
+                                                <label class="flex items-center gap-3 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                                                    <span class="min-w-0 flex-1 truncate font-medium text-foreground">{questionType.replaceAll("_", " ")}</span>
+                                                    <input
+                                                        type="number"
+                                                        min="1"
+                                                        placeholder="Target"
+                                                        aria-label={`Target count for ${questionType.replaceAll("_", " ")}`}
+                                                        bind:value={editBuf.questionTypeTargets[questionType]}
+                                                        class="w-20 rounded border border-input bg-muted/30 px-2 py-1 text-right text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                                    />
+                                                </label>
+                                            {/each}
+                                        </div>
                                         <p class="text-[10px] text-muted-foreground/70">
-                                            The AI will skip any type it can't produce faithfully for this module's content and tell you why.
+                                            Set a target to request that many of a type. The AI reports any shortfall it cannot produce faithfully.
                                         </p>
                                     {/if}
+                                    </div>
                                 </div>
-                                <div class="flex gap-2">
+                                <div class="mt-4 flex justify-end gap-2 border-t border-primary/15 pt-3">
                                     <Button.Root size="sm" onclick={saveEditModule} disabled={savingModule}>
                                         {#if savingModule}
                                             <LoaderCircle class="size-3.5 mr-1 animate-spin" />
@@ -1639,6 +1667,14 @@
                                     {#each mod.question_types as qt}
                                         <span class="text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted/40 text-muted-foreground">
                                             {qt.replace("_", " ")}
+                                        </span>
+                                    {/each}
+                                {/if}
+                                {#if Object.keys(mod.question_type_targets ?? {}).length > 0}
+                                    <span class="text-[10px] text-muted-foreground">Targets:</span>
+                                    {#each Object.entries(mod.question_type_targets) as [questionType, target]}
+                                        <span class="text-[10px] px-1.5 py-0.5 rounded border border-primary/30 bg-primary/5 text-primary">
+                                            {questionType.replace("_", " ")} {target}
                                         </span>
                                     {/each}
                                 {/if}

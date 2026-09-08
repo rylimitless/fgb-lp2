@@ -13,13 +13,13 @@ export const load: PageServerLoad = async (event) => {
     throw redirect(307, "/");
   }
 
-  // If the session is invalid/expired, clear the stale cookie so the browser
-  // doesn't keep sending it on every request (which would make every hit to
-  // a public route needlessly try /api/me).
-  const token = event.cookies.get("session_token");
-  if (token) {
-    event.cookies.delete("session_token", { path: "/" });
-  }
+  // Deliberately do NOT delete a lingering session_token cookie here. When
+  // hooks.server.ts fails to resolve the user due to a TRANSIENT backend
+  // problem (5xx, restart, network blip) rather than a genuinely invalid
+  // session, deleting the cookie would destroy a still-valid session and turn
+  // a one-off hiccup into a real logout. A stale cookie is harmless — it is
+  // overwritten on the next successful login — and costs one extra /api/me
+  // call per visit to the login page.
 
   try {
     const res = await apiFetch(event, "/api/check-first-user");

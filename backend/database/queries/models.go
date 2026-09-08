@@ -268,6 +268,19 @@ type Session struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type AuthTrace struct {
+	ID           int64              `json:"id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Source       string             `json:"source"`
+	Event        string             `json:"event"`
+	UserID       pgtype.Int8        `json:"user_id"`
+	IP           pgtype.Text        `json:"ip"`
+	Method       pgtype.Text        `json:"method"`
+	Path         pgtype.Text        `json:"path"`
+	CookiePrefix pgtype.Text        `json:"cookie_prefix"`
+	Detail       []byte             `json:"detail"`
+}
+
 type User struct {
 	ID           int64              `json:"id"`
 	Email        string             `json:"email"`

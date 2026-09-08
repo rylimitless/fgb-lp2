@@ -524,9 +524,44 @@ func (h *Handler) SaveItemProgress(c *gin.Context) {
 	c.JSON(http.StatusOK, prog)
 }
 
+// SaveProgressTime accumulates active study time for a course. The lesson
+// player sends periodic heartbeats with the seconds spent since the last
+// heartbeat, and we add them to lesson_progress.seconds_spent so admins can
+// see real time-on-course, not just calendar days between enroll/completion.
+func (h *Handler) SaveProgressTime(c *gin.Context) {
+	var body struct {
+		CourseID int64 `json:"course_id"`
+		Seconds  int64 `json:"seconds"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.Seconds <= 0 {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "added": 0})
+		return
+	}
+	userID := c.GetInt64("user_id")
+
+	// Upsert: create a progress row on first heartbeat (defaults fine), or
+	// accumulate onto the existing row. Never overwrites score/completion.
+	_, err := h.Pool.Exec(c.Request.Context(), `
+		insert into lesson_progress (user_id, course_id, seconds_spent)
+		values ($1, $2, $3)
+		on conflict (user_id, course_id)
+		do update set seconds_spent = lesson_progress.seconds_spent + excluded.seconds_spent
+	`, userID, body.CourseID, body.Seconds)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "added": body.Seconds})
+}
+
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/courses/published", h.ListPublished)
 	r.GET("/courses/:id/play", h.GetCourseForPlay)
 	r.POST("/lessons/progress", h.SaveProgress)
 	r.POST("/lessons/item-progress", h.SaveItemProgress)
+	r.POST("/lessons/progress/heartbeat", h.SaveProgressTime)
 }
